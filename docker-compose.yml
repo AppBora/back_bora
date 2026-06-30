@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: bora
+      POSTGRES_USER: bora
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-bora123}
+    ports: ["5432:5432"]
+    volumes: ["bora_pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bora -d bora"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    build: .
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/bora
+      SPRING_DATASOURCE_USERNAME: bora
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-bora123}
+      BORA_JWT_SECRET: ${BORA_JWT_SECRET:-troque-este-segredo-em-producao-com-no-minimo-32-bytes!!}
+      BORA_BOOTSTRAP_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@bora.app}
+      BORA_BOOTSTRAP_ADMIN_SENHA: ${ADMIN_SENHA:-bora123}
+      BORA_BOOTSTRAP_SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-}
+      BORA_BOOTSTRAP_SUPERADMIN_SENHA: ${SUPERADMIN_SENHA:-}
+    ports: ["8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  bora_pgdata:

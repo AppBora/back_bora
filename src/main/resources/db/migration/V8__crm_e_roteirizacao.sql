@@ -1,0 +1,7 @@
+-- CRM / fidelidade no cliente + entregador no pedido (roteirização)
+ALTER TABLE cliente ADD COLUMN IF NOT EXISTS total_gasto   NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE cliente ADD COLUMN IF NOT EXISTS qtd_pedidos   INTEGER       NOT NULL DEFAULT 0;
+ALTER TABLE cliente ADD COLUMN IF NOT EXISTS cashback      NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE cliente ADD COLUMN IF NOT EXISTS ultimo_pedido TIMESTAMPTZ;
+
+ALTER TABLE pedido ADD COLUMN IF NOT EXISTS entregador VARCHAR(120);

@@ -1,0 +1,2 @@
+create table pedido(id bigserial primary key,loja_id bigint not null,codigo varchar(40),cliente_id bigint,status varchar(40),valor_total numeric(12,2),forma_pagamento varchar(60),origem varchar(60),observacao text,criado_em timestamptz,atualizado_em timestamptz,entregue_em timestamptz,cancelado_em timestamptz,motivo_cancelamento text);
+create table log_status(id bigserial primary key,loja_id bigint not null,pedido_id bigint,status_anterior varchar(40),status_novo varchar(40),usuario_id bigint,data_hora timestamptz);

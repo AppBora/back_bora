@@ -1,0 +1,30 @@
+package br.com.bora.repository;
+
+import br.com.bora.entity.Pedido;
+import br.com.bora.entity.StatusPedido;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Optional;
+
+public interface PedidoRepository extends JpaRepository<Pedido, Long> {
+
+    /** Receita (não cancelada) da loja numa janela — base do termômetro de vendas. */
+    @Query("select coalesce(sum(p.valorTotal), 0) from Pedido p " +
+           "where p.lojaId = :lojaId and p.status <> br.com.bora.entity.StatusPedido.CANCELADO " +
+           "and p.criadoEm >= :inicio and p.criadoEm < :fim")
+    BigDecimal somaReceita(@Param("lojaId") Long lojaId,
+                           @Param("inicio") OffsetDateTime inicio,
+                           @Param("fim") OffsetDateTime fim);
+
+    long countByLojaIdAndStatus(Long lojaId, StatusPedido status);
+    long countByLojaIdAndEntregueEmAfter(Long lojaId, OffsetDateTime dt);
+    List<Pedido> findByLojaIdOrderByCriadoEmDesc(Long lojaId);
+    Optional<Pedido> findByIdAndLojaId(Long id, Long lojaId);
+    long countByLojaIdAndCriadoEmAfter(Long lojaId, OffsetDateTime inicio); // RN09 — limite de pedidos/mês
+    Optional<Pedido> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno); // idempotência webhook
+}
