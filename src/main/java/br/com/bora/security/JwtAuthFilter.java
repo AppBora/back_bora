@@ -19,9 +19,11 @@ import java.util.List;
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwt;
+    private final br.com.bora.repository.UsuarioRepository usuarios;
 
-    public JwtAuthFilter(JwtService jwt) {
+    public JwtAuthFilter(JwtService jwt, br.com.bora.repository.UsuarioRepository usuarios) {
         this.jwt = jwt;
+        this.usuarios = usuarios;
     }
 
     @Override
@@ -31,15 +33,21 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         if (header != null && header.startsWith("Bearer ")) {
             try {
                 Claims c = jwt.validar(header.substring(7)).getPayload();
-                Number loja = c.get("lojaId", Number.class);
-                BoraPrincipal principal = new BoraPrincipal(
-                        Long.valueOf(c.getSubject()),
-                        loja == null ? null : loja.longValue(),
-                        c.get("papel", String.class),
-                        c.get("email", String.class));
-                var auth = new UsernamePasswordAuthenticationToken(
-                        principal, null, List.of(new SimpleGrantedAuthority("ROLE_" + principal.papel())));
-                SecurityContextHolder.getContext().setAuthentication(auth);
+                Long userId = Long.valueOf(c.getSubject());
+                boolean ativo = usuarios.findById(userId).map(u -> Boolean.TRUE.equals(u.getAtivo())).orElse(false);
+                if (ativo) {
+                    Number loja = c.get("lojaId", Number.class);
+                    BoraPrincipal principal = new BoraPrincipal(
+                            userId,
+                            loja == null ? null : loja.longValue(),
+                            c.get("papel", String.class),
+                            c.get("email", String.class));
+                    var auth = new UsernamePasswordAuthenticationToken(
+                            principal, null, List.of(new SimpleGrantedAuthority("ROLE_" + principal.papel())));
+                    SecurityContextHolder.getContext().setAuthentication(auth);
+                } else {
+                    SecurityContextHolder.clearContext(); // usuário desativado: token deixa de valer
+                }
             } catch (Exception e) {
                 SecurityContextHolder.clearContext();
             }

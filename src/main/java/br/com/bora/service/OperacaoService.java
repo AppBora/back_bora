@@ -37,6 +37,7 @@ public class OperacaoService {
     public List<TaxaEntrega> taxas() { return taxas.findByLojaIdOrderByBairroAsc(ctx.lojaId()); }
     public TaxaEntrega salvarTaxa(TaxaEntrega t) {
         Long loja = ctx.lojaId();
+        if (t.bairro == null || t.bairro.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bairro é obrigatório");
         TaxaEntrega alvo = t.id == null ? new TaxaEntrega()
                 : taxas.findByIdAndLojaId(t.id, loja).orElseThrow(() -> naoEncontrado("Taxa"));
         alvo.lojaId = loja; alvo.bairro = t.bairro; alvo.taxa = t.taxa == null ? BigDecimal.ZERO : t.taxa;
@@ -59,6 +60,7 @@ public class OperacaoService {
     }
     public FormaPagamento salvarForma(FormaPagamento f) {
         Long loja = ctx.lojaId();
+        if (f.descricao == null || f.descricao.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Descrição é obrigatória");
         FormaPagamento alvo = f.id == null ? new FormaPagamento()
                 : formas.findByIdAndLojaId(f.id, loja).orElseThrow(() -> naoEncontrado("Forma de pagamento"));
         alvo.lojaId = loja; alvo.descricao = f.descricao; alvo.comTroco = bool(f.comTroco); alvo.online = bool(f.online);
@@ -83,6 +85,7 @@ public class OperacaoService {
         Long loja = ctx.lojaId();
         List<HorarioFuncionamento> atual = horarios.findByLojaIdOrderByDiaAsc(loja);
         for (HorarioFuncionamento e : entrada) {
+            if (e.dia == null || e.dia < 0 || e.dia > 6) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Dia inválido (use 0=domingo a 6=sábado)");
             HorarioFuncionamento alvo = atual.stream().filter(h -> h.dia.equals(e.dia)).findFirst().orElseGet(HorarioFuncionamento::new);
             alvo.lojaId = loja; alvo.dia = e.dia; alvo.abre = e.abre; alvo.fecha = e.fecha; alvo.aberto = bool(e.aberto);
             horarios.save(alvo);
@@ -119,6 +122,7 @@ public class OperacaoService {
     }
     public MotivoCancelamento salvarMotivo(MotivoCancelamento m) {
         Long loja = ctx.lojaId();
+        if (m.descricao == null || m.descricao.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Descrição é obrigatória");
         MotivoCancelamento alvo = m.id == null ? new MotivoCancelamento()
                 : motivos.findByIdAndLojaId(m.id, loja).orElseThrow(() -> naoEncontrado("Motivo"));
         alvo.lojaId = loja; alvo.descricao = m.descricao; alvo.ativo = m.ativo == null || m.ativo;

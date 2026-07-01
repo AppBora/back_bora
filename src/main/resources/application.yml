@@ -13,6 +13,8 @@ spring:
     enabled: true
 server:
   port: ${PORT:8080}
+  error:
+    include-message: always
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

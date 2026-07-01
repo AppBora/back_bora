@@ -10,5 +10,6 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
     Optional<Usuario> findByEmail(String email);
     List<Usuario> findByLojaId(Long lojaId);
     long countByLojaId(Long lojaId);
+    long countByLojaIdAndAtivoTrue(Long lojaId);
     boolean existsByPapel(Papel papel);
 }

@@ -22,4 +22,11 @@ public class PlanoController {
     public Map<String, Object> atual() {
         return planos.resumo(ctx.lojaId());
     }
+
+    /** Troca o plano da loja logada. Corpo: { "plano": "PRO" }. */
+    @PutMapping
+    public Map<String, Object> trocar(@RequestBody Map<String, String> body) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        return planos.trocarPlano(ctx.lojaId(), body == null ? null : body.get("plano"));
+    }
 }

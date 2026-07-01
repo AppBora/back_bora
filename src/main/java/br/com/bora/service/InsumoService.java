@@ -4,6 +4,7 @@ import br.com.bora.entity.Insumo;
 import br.com.bora.entity.ProdutoInsumo;
 import br.com.bora.repository.InsumoRepository;
 import br.com.bora.repository.ProdutoInsumoRepository;
+import br.com.bora.repository.ProdutoRepository;
 import br.com.bora.security.AuthContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -19,11 +20,13 @@ public class InsumoService {
 
     private final InsumoRepository insumos;
     private final ProdutoInsumoRepository fichas;
+    private final ProdutoRepository produtos;
     private final AuthContext ctx;
 
-    public InsumoService(InsumoRepository insumos, ProdutoInsumoRepository fichas, AuthContext ctx) {
+    public InsumoService(InsumoRepository insumos, ProdutoInsumoRepository fichas, ProdutoRepository produtos, AuthContext ctx) {
         this.insumos = insumos;
         this.fichas = fichas;
+        this.produtos = produtos;
         this.ctx = ctx;
     }
 
@@ -64,12 +67,15 @@ public class InsumoService {
     @Transactional
     public List<Map<String, Object>> salvarFicha(Long produtoId, List<Map<String, Object>> itens) {
         Long loja = ctx.lojaId();
+        produtos.findByIdAndLojaId(produtoId, loja).orElseThrow(() -> nf("Produto")); // impede ficha em produto de outra loja
         fichas.deleteByLojaIdAndProdutoId(loja, produtoId);
         if (itens != null) for (Map<String, Object> it : itens) {
             if (it.get("insumoId") == null) continue;
+            Long insumoId = Long.valueOf(String.valueOf(it.get("insumoId")));
+            if (insumos.findByIdAndLojaId(insumoId, loja).isEmpty()) continue; // ignora insumo de outra loja
             ProdutoInsumo pi = new ProdutoInsumo();
             pi.lojaId = loja; pi.produtoId = produtoId;
-            pi.insumoId = Long.valueOf(String.valueOf(it.get("insumoId")));
+            pi.insumoId = insumoId;
             pi.quantidade = new BigDecimal(String.valueOf(it.getOrDefault("quantidade", "0")));
             fichas.save(pi);
         }

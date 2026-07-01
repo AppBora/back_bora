@@ -25,12 +25,16 @@ public class ProdutoService {
     }
 
     public Produto criar(Produto p) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        validarNome(p.nome);
         p.lojaId = ctx.lojaId();
         p.id = null;
         return repo.save(p);
     }
 
     public Produto atualizar(Long id, Produto dados) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        validarNome(dados.nome);
         Produto p = buscar(id);
         p.nome = dados.nome;
         p.categoria = dados.categoria;
@@ -43,7 +47,14 @@ public class ProdutoService {
     }
 
     public void excluir(Long id) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         repo.delete(buscar(id));
+    }
+
+    private void validarNome(String nome) {
+        if (nome == null || nome.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome do produto é obrigatório");
+        }
     }
 
     private Produto buscar(Long id) {

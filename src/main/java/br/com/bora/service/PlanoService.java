@@ -20,11 +20,16 @@ public class PlanoService {
     private final LojaRepository lojas;
     private final UsuarioRepository usuarios;
     private final PedidoRepository pedidos;
+    private final br.com.bora.repository.AssinaturaRepository assinaturas;
+    private final AsaasClient asaas;
 
-    public PlanoService(LojaRepository lojas, UsuarioRepository usuarios, PedidoRepository pedidos) {
+    public PlanoService(LojaRepository lojas, UsuarioRepository usuarios, PedidoRepository pedidos,
+                        br.com.bora.repository.AssinaturaRepository assinaturas, AsaasClient asaas) {
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.pedidos = pedidos;
+        this.assinaturas = assinaturas;
+        this.asaas = asaas;
     }
 
     public Plano plano(Long lojaId) {
@@ -42,17 +47,43 @@ public class PlanoService {
         m.put("plano", p.name());
         m.put("maxUsuarios", p.maxUsuarios);
         m.put("maxPedidosMes", p.maxPedidosMes);
-        m.put("usuariosUsados", usuarios.countByLojaId(lojaId));
+        m.put("usuariosUsados", usuarios.countByLojaIdAndAtivoTrue(lojaId));
         m.put("pedidosMesUsados", pedidos.countByLojaIdAndCriadoEmAfter(lojaId, inicioMes));
         return m;
     }
 
     public void checarLimiteUsuarios(Long lojaId) {
         Plano p = plano(lojaId);
-        if (usuarios.countByLojaId(lojaId) >= p.maxUsuarios) {
+        if (usuarios.countByLojaIdAndAtivoTrue(lojaId) >= p.maxUsuarios) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Limite de usuários do plano " + p + " atingido (" + p.maxUsuarios + "). Faça upgrade.");
         }
+    }
+
+    /** Troca o plano da loja e, se houver assinatura no Asaas, atualiza o valor cobrado. */
+    @org.springframework.transaction.annotation.Transactional
+    public java.util.Map<String, Object> trocarPlano(Long lojaId, String novoPlanoStr) {
+        Plano novo;
+        try {
+            novo = Plano.valueOf(novoPlanoStr == null ? "" : novoPlanoStr.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Plano inválido (use START, PRO ou PREMIUM)");
+        }
+        br.com.bora.entity.Loja loja = lojas.findById(lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        loja.setPlano(novo);
+        lojas.save(loja);
+        assinaturas.findByLojaId(lojaId).ifPresent(a -> {
+            if (a.getAsaasSubscriptionId() != null && asaas.configurado()) {
+                asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), novo.precoMensal,
+                        "Bora " + novo.name() + " - " + loja.getNome());
+            }
+            a.setPlano(novo);
+            a.setValor(java.math.BigDecimal.valueOf(novo.precoMensal));
+            a.setAtualizadoEm(java.time.OffsetDateTime.now());
+            assinaturas.save(a);
+        });
+        return resumo(lojaId);
     }
 
     public void checarLimitePedidosMes(Long lojaId) {

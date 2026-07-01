@@ -127,7 +127,9 @@ public class PedidoService {
         for (ItemPedidoRequest i : req.itens()) {
             Produto prod = produtos.findByIdAndLojaId(i.produtoId(), lojaId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto inválido no pedido"));
-            int qtd = (i.quantidade() == null || i.quantidade() < 1) ? 1 : i.quantidade();
+            if (i.quantidade() != null && i.quantidade() < 1)
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantidade deve ser maior que zero");
+            int qtd = i.quantidade() == null ? 1 : i.quantidade();
             BigDecimal preco = prod.preco != null ? prod.preco : BigDecimal.ZERO;
             BigDecimal subtotal = preco.multiply(BigDecimal.valueOf(qtd));
             total = total.add(subtotal);
@@ -261,6 +263,9 @@ public class PedidoService {
 
     public Pedido alterarStatus(Long id, StatusPedido status, String motivo) {
         Pedido p = buscarDaLoja(id);
+        if (p.status == StatusPedido.ENTREGUE || p.status == StatusPedido.CANCELADO) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pedido " + p.status + " é um estado final e não pode mudar de status");
+        }
         if (status == StatusPedido.CANCELADO && (motivo == null || motivo.isBlank())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Motivo do cancelamento é obrigatório"); // RN05
         }

@@ -67,4 +67,15 @@ public class AsaasClient {
                         "description", descricao))
                 .retrieve().body(Map.class);
     }
+
+    /** Atualiza o valor/descrição de uma assinatura existente (usado ao trocar de plano). */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> atualizarAssinatura(String subscriptionId, double valor, String descricao) {
+        exigirConfig();
+        return http.post().uri("/subscriptions/" + subscriptionId)
+                .header("access_token", apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("value", valor, "description", descricao, "updatePendingPayments", true))
+                .retrieve().body(Map.class);
+    }
 }

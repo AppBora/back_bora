@@ -40,16 +40,16 @@ public class ConfiguracaoLojaService {
             return novo;
         });
 
-        // Disponível em todos os planos
-        c.nomeExibicao = dados.nomeExibicao;
-        c.logoUrl = dados.logoUrl;
-        c.corPrimaria = dados.corPrimaria;
-        c.nomeSistema = dados.nomeSistema;
+        // Disponível em todos os planos — só sobrescreve o que veio preenchido (não apaga ao omitir)
+        if (dados.nomeExibicao != null) c.nomeExibicao = dados.nomeExibicao;
+        if (dados.logoUrl != null)      c.logoUrl = dados.logoUrl;
+        if (dados.corPrimaria != null)  c.corPrimaria = dados.corPrimaria;
+        if (dados.nomeSistema != null)  c.nomeSistema = dados.nomeSistema;
 
         // Liberados conforme o plano
-        if (plano.permiteCoresSecundarias()) c.corSecundaria = dados.corSecundaria;
-        if (plano.permiteBanner())           c.bannerUrl = dados.bannerUrl;
-        if (plano.permiteSubdominio())       c.subdominio = dados.subdominio;
+        if (plano.permiteCoresSecundarias() && dados.corSecundaria != null) c.corSecundaria = dados.corSecundaria;
+        if (plano.permiteBanner() && dados.bannerUrl != null)               c.bannerUrl = dados.bannerUrl;
+        if (plano.permiteSubdominio() && dados.subdominio != null)          c.subdominio = dados.subdominio;
 
         // Marca Bora só pode ser removida no Enterprise (futuro)
         c.mostrarMarcaBora = !plano.permiteRemoverMarca();
