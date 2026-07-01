@@ -35,6 +35,9 @@ public class EntregadorService {
     }
 
     public Entregador atualizar(Long id, Entregador dados) {
+        if (dados.nome == null || dados.nome.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome do entregador é obrigatório");
+        }
         Entregador e = buscar(id);
         e.nome = dados.nome;
         e.telefone = dados.telefone;

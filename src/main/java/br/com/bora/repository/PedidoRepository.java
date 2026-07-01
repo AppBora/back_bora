@@ -24,6 +24,7 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     long countByLojaIdAndStatus(Long lojaId, StatusPedido status);
     long countByLojaIdAndEntregueEmAfter(Long lojaId, OffsetDateTime dt);
     List<Pedido> findByLojaIdOrderByCriadoEmDesc(Long lojaId);
+    List<Pedido> findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(Long lojaId, OffsetDateTime corte);
     Optional<Pedido> findByIdAndLojaId(Long id, Long lojaId);
     long countByLojaIdAndCriadoEmAfter(Long lojaId, OffsetDateTime inicio); // RN09 — limite de pedidos/mês
     Optional<Pedido> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno); // idempotência webhook

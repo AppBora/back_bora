@@ -36,8 +36,7 @@ public class RelatorioService {
         int janela = dias <= 0 ? 30 : Math.min(dias, 365);
         OffsetDateTime corte = OffsetDateTime.now().minusDays(janela);
 
-        List<Pedido> todos = pedidos.findByLojaIdOrderByCriadoEmDesc(lojaId).stream()
-                .filter(p -> p.criadoEm != null && p.criadoEm.isAfter(corte)).toList();
+        List<Pedido> todos = pedidos.findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(lojaId, corte);
         List<Pedido> vendas = todos.stream().filter(p -> p.status != StatusPedido.CANCELADO).toList();
         Set<Long> idsVenda = new HashSet<>(); vendas.forEach(p -> idsVenda.add(p.id));
         Map<Long, Pedido> porId = new HashMap<>(); todos.forEach(p -> porId.put(p.id, p));
@@ -68,8 +67,9 @@ public class RelatorioService {
         // CMV + por produto (via itens dos pedidos de venda)
         BigDecimal cmv = BigDecimal.ZERO;
         Map<String, Map<String, Object>> porProduto = new LinkedHashMap<>();
-        for (PedidoItem it : itens.findByLojaId(lojaId)) {
-            if (!idsVenda.contains(it.getPedidoId())) continue;
+        List<PedidoItem> itensVenda = idsVenda.isEmpty() ? List.of()
+                : itens.findByLojaIdAndPedidoIdIn(lojaId, idsVenda);
+        for (PedidoItem it : itensVenda) {
             int q = it.getQuantidade() == null ? 1 : it.getQuantidade();
             BigDecimal custo = it.getCustoUnitario() == null ? BigDecimal.ZERO : it.getCustoUnitario().multiply(BigDecimal.valueOf(q));
             cmv = cmv.add(custo);

@@ -2,9 +2,9 @@ package br.com.bora.controller;
 
 import br.com.bora.dto.NovoPedidoRequest;
 import br.com.bora.dto.PedidoCard;
+import br.com.bora.dto.PedidoItemView;
 import br.com.bora.entity.LogStatus;
 import br.com.bora.entity.Pedido;
-import br.com.bora.entity.PedidoItem;
 import br.com.bora.entity.StatusPedido;
 import br.com.bora.service.PedidoService;
 import org.springframework.web.bind.annotation.*;
@@ -38,8 +38,8 @@ public class PedidoController {
     }
 
     @GetMapping("/{id}/itens")
-    public List<PedidoItem> itens(@PathVariable Long id) {
-        return service.itens(id);
+    public List<PedidoItemView> itens(@PathVariable Long id) {
+        return service.itens(id).stream().map(PedidoItemView::de).toList();
     }
 
     @PatchMapping("/{id}/status")

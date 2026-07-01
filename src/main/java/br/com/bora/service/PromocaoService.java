@@ -29,6 +29,9 @@ public class PromocaoService {
     }
 
     public Promocao criarManual(Long lojaId, Promocao dados) {
+        if (dados.getDescricao() == null || dados.getDescricao().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Descrição da promoção é obrigatória");
+        }
         // Guarda: não permite duas promoções ativas ao mesmo tempo na loja.
         if (repo.existsByLojaIdAndAtivaTrue(lojaId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -74,6 +77,7 @@ public class PromocaoService {
     }
 
     /** Encerra promoções vencidas (fim < agora). */
+    @org.springframework.transaction.annotation.Transactional
     public int encerrarVencidas() {
         List<Promocao> vencidas = repo.findByAtivaTrueAndFimBefore(OffsetDateTime.now());
         vencidas.forEach(p -> p.setAtiva(false));

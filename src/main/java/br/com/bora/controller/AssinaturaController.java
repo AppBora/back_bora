@@ -1,6 +1,6 @@
 package br.com.bora.controller;
 
-import br.com.bora.entity.Assinatura;
+import br.com.bora.dto.AssinaturaView;
 import br.com.bora.service.AssinaturaService;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,14 +19,14 @@ public class AssinaturaController {
 
     /** Situação atual da assinatura da loja (ou vazio se ainda não assinou). */
     @GetMapping
-    public Assinatura status() {
-        return service.status();
+    public AssinaturaView status() {
+        return AssinaturaView.de(service.status());
     }
 
     /** Cria/atualiza a assinatura da loja no plano atual. Corpo opcional: { "cpfCnpj": "..." }. */
     @PostMapping
-    public Assinatura assinar(@RequestBody(required = false) Map<String, String> body) {
+    public AssinaturaView assinar(@RequestBody(required = false) Map<String, String> body) {
         String cpfCnpj = body == null ? null : body.get("cpfCnpj");
-        return service.assinar(cpfCnpj);
+        return AssinaturaView.de(service.assinar(cpfCnpj));
     }
 }

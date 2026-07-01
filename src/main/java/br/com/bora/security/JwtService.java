@@ -5,6 +5,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -12,6 +13,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
 
+@Slf4j
 @Service
 public class JwtService {
 
@@ -21,6 +23,9 @@ public class JwtService {
     public JwtService(
             @Value("${bora.jwt.secret:troque-este-segredo-em-producao-com-no-minimo-32-bytes!!}") String secret,
             @Value("${bora.jwt.expiration-ms:86400000}") long expMs) {
+        if (secret.startsWith("troque-")) {
+            log.warn("⚠️  BORA_JWT_SECRET não definido — usando o segredo PADRÃO INSEGURO. Defina uma chave forte em produção!");
+        }
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expMs = expMs;
     }

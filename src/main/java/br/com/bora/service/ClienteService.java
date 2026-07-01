@@ -25,6 +25,9 @@ public class ClienteService {
     }
 
     public Cliente criar(Cliente c) {
+        if (c.nome == null || c.nome.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome do cliente é obrigatório");
+        }
         c.lojaId = ctx.lojaId();
         c.id = null;
         return repo.save(c);
