@@ -44,7 +44,7 @@ public class MarketplaceNormalizer {
             itens.add(new InboundOrder.InboundItem(str(i.get("name")), intg(i.get("quantity")), num(i.get("unitPrice"))));
         }
         String endereco = join(str(end.get("streetName")), str(end.get("streetNumber")));
-        return new InboundOrder(str(r.get("id")), str(cliente.get("name")),
+        return new InboundOrder(firstNonBlank(str(r.get("id")), str(r.get("externalId"))), str(cliente.get("name")),
                 firstNonBlank(str(fone.get("number")), str(cliente.get("phone"))),
                 endereco, str(end.get("neighborhood")), pagamentoIfood(r),
                 str(r.get("observations")), firstNum(num(orderAmount.get("value")), num(total.get("value"))), itens);

@@ -29,4 +29,11 @@ public class PromocaoController {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         return service.criarManual(ctx.lojaId(), dados);
     }
+
+    /** Encerra uma promoção ativa (libera a loja para criar outra). */
+    @PatchMapping("/{id}/encerrar")
+    public Promocao encerrar(@PathVariable Long id) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        return service.encerrar(ctx.lojaId(), id);
+    }
 }

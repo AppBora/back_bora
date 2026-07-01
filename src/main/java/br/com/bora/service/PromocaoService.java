@@ -76,6 +76,14 @@ public class PromocaoService {
         return salva;
     }
 
+    /** Encerra manualmente uma promoção da loja (libera a loja para criar outra). */
+    public Promocao encerrar(Long lojaId, Long promoId) {
+        Promocao p = repo.findByIdAndLojaId(promoId, lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Promoção não encontrada"));
+        p.setAtiva(false);
+        return repo.save(p);
+    }
+
     /** Encerra promoções vencidas (fim < agora). */
     @org.springframework.transaction.annotation.Transactional
     public int encerrarVencidas() {

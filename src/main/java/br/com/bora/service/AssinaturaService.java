@@ -49,6 +49,10 @@ public class AssinaturaService {
     public Assinatura assinar(String cpfCnpj) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         Long lojaId = ctx.lojaId();
+        Assinatura jaAtiva = repo.findByLojaId(lojaId).orElse(null);
+        if (jaAtiva != null && jaAtiva.getStatus() == StatusAssinatura.ATIVA) {
+            return jaAtiva; // já há assinatura ativa — não recria nem reverte para PENDENTE
+        }
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
         Plano plano = loja.getPlano() == null ? Plano.START : loja.getPlano();
