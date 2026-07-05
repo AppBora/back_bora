@@ -17,7 +17,7 @@ import java.util.Map;
 
 /**
  * Cadastro self-service de nova loja (público, sem autenticação).
- * Cria a loja no plano START + o usuário administrador dela.
+ * Cria a loja no plano ÚNICO + o usuário administrador dela.
  * URL: POST /public/signup
  */
 @RestController
@@ -54,7 +54,7 @@ public class SignupController {
         Loja loja = new Loja();
         loja.setNome(req.nomeLoja().trim());
         loja.setDocumento(req.documento());
-        loja.setPlano(Plano.START); // self-service começa no START
+        loja.setPlano(Plano.UNICO); // plano único: R$ 299/mês por loja
         loja = lojas.save(loja);
 
         Usuario admin = new Usuario();

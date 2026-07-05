@@ -23,7 +23,7 @@ public class PlanoController {
         return planos.resumo(ctx.lojaId());
     }
 
-    /** Troca o plano da loja logada. Corpo: { "plano": "PRO" }. */
+    /** Troca o plano da loja logada. Corpo: { "plano": "UNICO" } (hoje há um único plano). */
     @PutMapping
     public Map<String, Object> trocar(@RequestBody Map<String, String> body) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");

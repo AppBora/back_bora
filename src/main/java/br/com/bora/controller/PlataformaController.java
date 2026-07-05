@@ -75,11 +75,11 @@ public class PlataformaController {
     }
 
     private Plano parsePlano(String plano) {
-        if (plano == null || plano.isBlank()) return Plano.START;
+        if (plano == null || plano.isBlank()) return Plano.UNICO;
         try {
             return Plano.valueOf(plano.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Plano inválido (use START, PRO ou PREMIUM)");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Plano inválido (use UNICO)");
         }
     }
 }

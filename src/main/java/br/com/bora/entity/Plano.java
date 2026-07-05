@@ -1,14 +1,16 @@
 package br.com.bora.entity;
 
-/** Planos SaaS (PLANOS_SAAS.md) com seus limites e recursos de white-label. */
+/**
+ * Plano SaaS único (decisão 2026-07-05): R$ 299/mês POR LOJA, pedidos ilimitados,
+ * até 15 usuários por loja, todos os recursos de white-label liberados.
+ * maxPedidosMes = 0 significa ilimitado (PlanoService não aplica o limite).
+ */
 public enum Plano {
-    START(2, 300, 69.00),
-    PRO(5, 1000, 129.00),
-    PREMIUM(10, 3000, 249.00);
+    UNICO(15, 0, 299.00);
 
     public final int maxUsuarios;
-    public final int maxPedidosMes;
-    public final double precoMensal; // R$/mês (PLANOS_SAAS.md)
+    public final int maxPedidosMes; // 0 = ilimitado
+    public final double precoMensal; // R$/mês por loja
 
     Plano(int maxUsuarios, int maxPedidosMes, double precoMensal) {
         this.maxUsuarios = maxUsuarios;
@@ -16,9 +18,11 @@ public enum Plano {
         this.precoMensal = precoMensal;
     }
 
-    // White-label permitido por plano (PERSONALIZACAO_WHITE_LABEL.md)
-    public boolean permiteCoresSecundarias() { return this != START; }
-    public boolean permiteBanner()           { return this != START; }
-    public boolean permiteSubdominio()       { return this == PREMIUM; }
+    public boolean pedidosIlimitados() { return maxPedidosMes <= 0; }
+
+    // White-label: tudo liberado no plano único (PERSONALIZACAO_WHITE_LABEL.md)
+    public boolean permiteCoresSecundarias() { return true; }
+    public boolean permiteBanner()           { return true; }
+    public boolean permiteSubdominio()       { return true; }
     public boolean permiteRemoverMarca()     { return false; } // Enterprise futuro
 }

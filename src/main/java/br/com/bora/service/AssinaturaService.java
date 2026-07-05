@@ -55,7 +55,7 @@ public class AssinaturaService {
         }
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
-        Plano plano = loja.getPlano() == null ? Plano.START : loja.getPlano();
+        Plano plano = loja.getPlano() == null ? Plano.UNICO : loja.getPlano();
         String email = usuarios.findByLojaId(lojaId).stream()
                 .filter(u -> u.getPapel() == Papel.ADMINISTRADOR_LOJA)
                 .findFirst().map(Usuario::getEmail).orElse(null);

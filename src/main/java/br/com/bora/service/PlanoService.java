@@ -34,8 +34,8 @@ public class PlanoService {
 
     public Plano plano(Long lojaId) {
         return lojas.findById(lojaId)
-                .map(l -> l.getPlano() == null ? Plano.START : l.getPlano())
-                .orElse(Plano.START);
+                .map(l -> l.getPlano() == null ? Plano.UNICO : l.getPlano())
+                .orElse(Plano.UNICO);
     }
 
     /** Resumo do plano da loja: limites e uso atual (para a tela de Planos). */
@@ -46,7 +46,7 @@ public class PlanoService {
         java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
         m.put("plano", p.name());
         m.put("maxUsuarios", p.maxUsuarios);
-        m.put("maxPedidosMes", p.maxPedidosMes);
+        m.put("maxPedidosMes", p.pedidosIlimitados() ? null : p.maxPedidosMes);
         m.put("usuariosUsados", usuarios.countByLojaIdAndAtivoTrue(lojaId));
         m.put("pedidosMesUsados", pedidos.countByLojaIdAndCriadoEmAfter(lojaId, inicioMes));
         return m;
@@ -67,7 +67,7 @@ public class PlanoService {
         try {
             novo = Plano.valueOf(novoPlanoStr == null ? "" : novoPlanoStr.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Plano inválido (use START, PRO ou PREMIUM)");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Plano inválido (use UNICO)");
         }
         br.com.bora.entity.Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
@@ -88,6 +88,7 @@ public class PlanoService {
 
     public void checarLimitePedidosMes(Long lojaId) {
         Plano p = plano(lojaId);
+        if (p.pedidosIlimitados()) return;
         OffsetDateTime inicioMes = OffsetDateTime.now(ZONE)
                 .withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
         if (pedidos.countByLojaIdAndCriadoEmAfter(lojaId, inicioMes) >= p.maxPedidosMes) {

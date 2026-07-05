@@ -16,5 +16,5 @@ public class Loja {
     public Boolean ativo = true;
 
     @Enumerated(EnumType.STRING)
-    public Plano plano = Plano.START;
+    public Plano plano = Plano.UNICO;
 }
