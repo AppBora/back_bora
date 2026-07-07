@@ -6,7 +6,7 @@ package br.com.bora.entity;
  * maxPedidosMes = 0 significa ilimitado (PlanoService não aplica o limite).
  */
 public enum Plano {
-    UNICO(15, 0, 299.00);
+    UNICO(15, 0, 199.00); // preço de lançamento (decisão 2026-07-07; era 299)
 
     public final int maxUsuarios;
     public final int maxPedidosMes; // 0 = ilimitado

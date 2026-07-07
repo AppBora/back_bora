@@ -27,14 +27,17 @@ public class PlataformaController {
     private final PasswordEncoder encoder;
     private final AuthContext ctx;
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
+    private final br.com.bora.repository.ConfigPlataformaRepository configs;
 
     public PlataformaController(LojaRepository lojas, UsuarioRepository usuarios, PasswordEncoder encoder,
-                                AuthContext ctx, br.com.bora.repository.UsuarioLojaRepository vinculos) {
+                                AuthContext ctx, br.com.bora.repository.UsuarioLojaRepository vinculos,
+                                br.com.bora.repository.ConfigPlataformaRepository configs) {
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
         this.ctx = ctx;
         this.vinculos = vinculos;
+        this.configs = configs;
     }
 
     @GetMapping("/lojas")
@@ -80,6 +83,32 @@ public class PlataformaController {
         vinculos.save(v);
 
         return Map.of("lojaId", loja.getId(), "plano", loja.getPlano().name(), "adminEmail", email);
+    }
+
+    /** Configurações globais da plataforma — restrito ao ADMINISTRADOR_BORA. */
+    @GetMapping("/config")
+    public Map<String, String> configuracoes() {
+        ctx.requireAdminBora();
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        configs.findAll().forEach(c -> out.put(c.getChave(), c.getValor()));
+        return out;
+    }
+
+    /** Liga/desliga o módulo fiscal (NFC-e) globalmente. Corpo: { "habilitado": true|false }. */
+    @PutMapping("/config/fiscal")
+    public Map<String, String> definirFiscal(@RequestBody Map<String, Boolean> body) {
+        ctx.requireAdminBora();
+        boolean habilitado = body != null && Boolean.TRUE.equals(body.get("habilitado"));
+        br.com.bora.entity.ConfigPlataforma c = configs.findById("fiscal.habilitado")
+                .orElseGet(() -> {
+                    br.com.bora.entity.ConfigPlataforma nova = new br.com.bora.entity.ConfigPlataforma();
+                    nova.setChave("fiscal.habilitado");
+                    return nova;
+                });
+        c.setValor(String.valueOf(habilitado));
+        c.setAtualizadoEm(java.time.OffsetDateTime.now());
+        configs.save(c);
+        return Map.of("fiscal.habilitado", c.getValor());
     }
 
     private Plano parsePlano(String plano) {
