@@ -44,7 +44,7 @@ public class AsaasClient {
                 .header("access_token", apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
-                        "name", nome == null ? "Cliente Bora" : nome,
+                        "name", nome == null ? "Cliente BoraHapp" : nome,
                         "email", email == null ? "" : email,
                         "cpfCnpj", cpfCnpj == null ? "" : cpfCnpj))
                 .retrieve().body(Map.class);

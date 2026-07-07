@@ -50,7 +50,7 @@ public class BootstrapAdmin implements CommandLineRunner {
         if (!superEmail.isBlank() && !usuarios.existsByPapel(Papel.ADMINISTRADOR_BORA)
                 && usuarios.findByEmail(superEmail).isEmpty()) {
             Usuario sa = new Usuario();
-            sa.setNome("Administrador Bora");
+            sa.setNome("Administrador BoraHapp");
             sa.setEmail(superEmail);
             sa.setSenhaHash(encoder.encode(superSenha == null || superSenha.isBlank() ? "bora123" : superSenha));
             sa.setPapel(Papel.ADMINISTRADOR_BORA); // global, sem loja

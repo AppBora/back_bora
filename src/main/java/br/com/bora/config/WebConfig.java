@@ -34,7 +34,7 @@ public class WebConfig {
     public OpenAPI boraOpenAPI() {
         final String scheme = "bearerAuth";
         return new OpenAPI()
-                .info(new Info().title("Bora API").version("1.0.0")
+                .info(new Info().title("BoraHapp API").version("1.0.0")
                         .description("SaaS de delivery white-label, multi-tenant e em tempo real."))
                 .addSecurityItem(new SecurityRequirement().addList(scheme))
                 .components(new Components().addSecuritySchemes(scheme,

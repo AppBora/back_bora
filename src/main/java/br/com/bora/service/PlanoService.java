@@ -76,7 +76,7 @@ public class PlanoService {
         assinaturas.findByLojaId(lojaId).ifPresent(a -> {
             if (a.getAsaasSubscriptionId() != null && asaas.configurado()) {
                 asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), novo.precoMensal,
-                        "Bora " + novo.name() + " - " + loja.getNome());
+                        "BoraHapp " + novo.name() + " - " + loja.getNome());
             }
             a.setPlano(novo);
             a.setValor(java.math.BigDecimal.valueOf(novo.precoMensal));

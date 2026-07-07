@@ -72,7 +72,7 @@ public class AssinaturaService {
         }
         String nextDue = LocalDate.now().plusDays(7).toString(); // 7 dias de cortesia antes da 1ª cobrança
         Map<String, Object> sub = asaas.criarAssinatura(a.getAsaasCustomerId(), plano.precoMensal,
-                "Bora " + plano.name() + " - " + loja.getNome(), nextDue);
+                "BoraHapp " + plano.name() + " - " + loja.getNome(), nextDue);
         a.setAsaasSubscriptionId(sub == null ? null : (String) sub.get("id"));
         a.setStatus(StatusAssinatura.PENDENTE);
         a.setAtualizadoEm(OffsetDateTime.now());
