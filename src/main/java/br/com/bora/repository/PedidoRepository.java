@@ -21,6 +21,22 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                            @Param("inicio") OffsetDateTime inicio,
                            @Param("fim") OffsetDateTime fim);
 
+    /** Pedidos válidos (não cancelados) da loja numa janela — balancete da rede. */
+    @Query("select count(p) from Pedido p " +
+           "where p.lojaId = :lojaId and p.status <> br.com.bora.entity.StatusPedido.CANCELADO " +
+           "and p.criadoEm >= :inicio and p.criadoEm < :fim")
+    long contaPedidosValidos(@Param("lojaId") Long lojaId,
+                             @Param("inicio") OffsetDateTime inicio,
+                             @Param("fim") OffsetDateTime fim);
+
+    /** Pedidos cancelados da loja numa janela — balancete da rede. */
+    @Query("select count(p) from Pedido p " +
+           "where p.lojaId = :lojaId and p.status = br.com.bora.entity.StatusPedido.CANCELADO " +
+           "and p.criadoEm >= :inicio and p.criadoEm < :fim")
+    long contaPedidosCancelados(@Param("lojaId") Long lojaId,
+                                @Param("inicio") OffsetDateTime inicio,
+                                @Param("fim") OffsetDateTime fim);
+
     long countByLojaIdAndStatus(Long lojaId, StatusPedido status);
     long countByLojaIdAndEntregueEmAfter(Long lojaId, OffsetDateTime dt);
     List<Pedido> findByLojaIdOrderByCriadoEmDesc(Long lojaId);

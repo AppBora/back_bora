@@ -26,12 +26,15 @@ public class PlataformaController {
     private final UsuarioRepository usuarios;
     private final PasswordEncoder encoder;
     private final AuthContext ctx;
+    private final br.com.bora.repository.UsuarioLojaRepository vinculos;
 
-    public PlataformaController(LojaRepository lojas, UsuarioRepository usuarios, PasswordEncoder encoder, AuthContext ctx) {
+    public PlataformaController(LojaRepository lojas, UsuarioRepository usuarios, PasswordEncoder encoder,
+                                AuthContext ctx, br.com.bora.repository.UsuarioLojaRepository vinculos) {
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
         this.ctx = ctx;
+        this.vinculos = vinculos;
     }
 
     @GetMapping("/lojas")
@@ -69,7 +72,12 @@ public class PlataformaController {
         admin.setEmail(email);
         admin.setSenhaHash(encoder.encode(req.adminSenha()));
         admin.setPapel(Papel.ADMINISTRADOR_LOJA);
-        usuarios.save(admin);
+        admin = usuarios.save(admin);
+
+        br.com.bora.entity.UsuarioLoja v = new br.com.bora.entity.UsuarioLoja();
+        v.setUsuarioId(admin.getId());
+        v.setLojaId(loja.getId());
+        vinculos.save(v);
 
         return Map.of("lojaId", loja.getId(), "plano", loja.getPlano().name(), "adminEmail", email);
     }

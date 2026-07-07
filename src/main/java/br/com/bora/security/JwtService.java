@@ -31,12 +31,17 @@ public class JwtService {
     }
 
     public String gerar(Usuario u) {
+        return gerar(u, u.getLojaId());
+    }
+
+    /** Gera token com contexto de loja específico (troca de loja na rede — vínculo já validado). */
+    public String gerar(Usuario u, Long lojaId) {
         Date now = new Date();
         return Jwts.builder()
                 .subject(String.valueOf(u.getId()))
                 .claim("email", u.getEmail())
                 .claim("papel", u.getPapel().name())
-                .claim("lojaId", u.getLojaId())
+                .claim("lojaId", lojaId)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expMs))
                 .signWith(key)

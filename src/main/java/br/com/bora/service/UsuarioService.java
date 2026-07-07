@@ -20,12 +20,15 @@ public class UsuarioService {
     private final PlanoService planos;
     private final PasswordEncoder encoder;
     private final AuthContext ctx;
+    private final br.com.bora.repository.UsuarioLojaRepository vinculos;
 
-    public UsuarioService(UsuarioRepository repo, PlanoService planos, PasswordEncoder encoder, AuthContext ctx) {
+    public UsuarioService(UsuarioRepository repo, PlanoService planos, PasswordEncoder encoder, AuthContext ctx,
+                          br.com.bora.repository.UsuarioLojaRepository vinculos) {
         this.repo = repo;
         this.planos = planos;
         this.encoder = encoder;
         this.ctx = ctx;
+        this.vinculos = vinculos;
     }
 
     public List<UsuarioView> listar() {
@@ -52,7 +55,12 @@ public class UsuarioService {
         u.setEmail(email);
         u.setSenhaHash(encoder.encode(n.senha()));
         u.setPapel(papel);
-        return view(repo.save(u));
+        u = repo.save(u);
+        br.com.bora.entity.UsuarioLoja v = new br.com.bora.entity.UsuarioLoja();
+        v.setUsuarioId(u.getId());
+        v.setLojaId(lojaId);
+        vinculos.save(v);
+        return view(u);
     }
 
     public UsuarioView atualizarPapel(Long id, String papel) {

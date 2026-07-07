@@ -22,12 +22,14 @@ public class BootstrapAdmin implements CommandLineRunner {
     private final UsuarioRepository usuarios;
     private final LojaRepository lojas;
     private final PasswordEncoder encoder;
+    private final br.com.bora.repository.UsuarioLojaRepository vinculos;
     private final String email;
     private final String senha;
     private final String superEmail;
     private final String superSenha;
 
     public BootstrapAdmin(UsuarioRepository usuarios, LojaRepository lojas, PasswordEncoder encoder,
+                          br.com.bora.repository.UsuarioLojaRepository vinculos,
                           @Value("${bora.bootstrap.admin-email:admin@bora.app}") String email,
                           @Value("${bora.bootstrap.admin-senha:bora123}") String senha,
                           @Value("${bora.bootstrap.superadmin-email:}") String superEmail,
@@ -35,6 +37,7 @@ public class BootstrapAdmin implements CommandLineRunner {
         this.usuarios = usuarios;
         this.lojas = lojas;
         this.encoder = encoder;
+        this.vinculos = vinculos;
         this.email = email.trim().toLowerCase();
         this.senha = senha;
         this.superEmail = superEmail == null ? "" : superEmail.trim().toLowerCase();
@@ -72,7 +75,12 @@ public class BootstrapAdmin implements CommandLineRunner {
         admin.setEmail(email);
         admin.setSenhaHash(encoder.encode(senha));
         admin.setPapel(Papel.ADMINISTRADOR_LOJA);
-        usuarios.save(admin);
+        admin = usuarios.save(admin);
+
+        br.com.bora.entity.UsuarioLoja v = new br.com.bora.entity.UsuarioLoja();
+        v.setUsuarioId(admin.getId());
+        v.setLojaId(loja.getId());
+        vinculos.save(v);
 
         log.warn("Admin inicial criado: {} (troque a senha padrão). Loja: {}", email, loja.getId());
     }
