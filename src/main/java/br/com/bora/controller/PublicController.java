@@ -33,15 +33,21 @@ public class PublicController {
     private final PedidoItemRepository itens;
     private final IntegracaoCanalRepository integracoes;
     private final PixService pix;
+    private final br.com.bora.repository.ComplementoGrupoRepository compGrupos;
+    private final br.com.bora.repository.ComplementoItemRepository compItens;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
-                            PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix) {
+                            PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
+                            br.com.bora.repository.ComplementoGrupoRepository compGrupos,
+                            br.com.bora.repository.ComplementoItemRepository compItens) {
         this.lojas = lojas;
         this.produtos = produtos;
         this.pedidos = pedidos;
         this.itens = itens;
         this.integracoes = integracoes;
         this.pix = pix;
+        this.compGrupos = compGrupos;
+        this.compItens = compItens;
     }
 
     /** Cardápio público de uma loja: nome + produtos ativos (somente leitura). */
@@ -52,12 +58,31 @@ public class PublicController {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("loja", Map.of("id", loja.id, "nome", loja.nome == null ? "Cardápio" : loja.nome));
         resp.put("pixDisponivel", integracaoPix(lojaId).isPresent());
+        // complementos por produto (1 consulta para grupos + 1 para itens)
+        List<br.com.bora.entity.ComplementoGrupo> gs = lista.isEmpty() ? List.of()
+                : compGrupos.findByLojaIdAndProdutoIdInOrderById(lojaId, lista.stream().map(p -> p.id).toList());
+        Map<Long, List<Map<String, Object>>> itensPorGrupo = new java.util.HashMap<>();
+        if (!gs.isEmpty()) {
+            compItens.findByLojaIdAndGrupoIdInOrderById(lojaId, gs.stream().map(g -> g.id).toList()).forEach(i -> {
+                Map<String, Object> mi = new LinkedHashMap<>();
+                mi.put("id", i.id); mi.put("nome", i.nome); mi.put("preco", i.preco);
+                itensPorGrupo.computeIfAbsent(i.grupoId, k -> new java.util.ArrayList<>()).add(mi);
+            });
+        }
+        Map<Long, List<Map<String, Object>>> gruposPorProduto = new java.util.HashMap<>();
+        for (br.com.bora.entity.ComplementoGrupo g : gs) {
+            Map<String, Object> mg = new LinkedHashMap<>();
+            mg.put("id", g.id); mg.put("nome", g.nome); mg.put("minimo", g.minimo); mg.put("maximo", g.maximo);
+            mg.put("itens", itensPorGrupo.getOrDefault(g.id, List.of()));
+            gruposPorProduto.computeIfAbsent(g.produtoId, k -> new java.util.ArrayList<>()).add(mg);
+        }
         resp.put("produtos", lista.stream().map(p -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.id);
             m.put("nome", p.nome);
             m.put("categoria", p.categoria == null || p.categoria.isBlank() ? "Outros" : p.categoria);
             m.put("preco", p.preco);
+            m.put("complementos", gruposPorProduto.getOrDefault(p.id, List.of()));
             return m;
         }).toList());
         return resp;
@@ -106,15 +131,51 @@ public class PublicController {
             Produto prod = produtos.findById(produtoId)
                     .filter(x -> lojaId.equals(x.lojaId) && Boolean.TRUE.equals(x.ativo))
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto indisponível"));
+
+            // Complementos escolhidos: valida posse, min/max por grupo e soma no preço unitário.
+            List<br.com.bora.entity.ComplementoGrupo> gs = compGrupos.findByLojaIdAndProdutoIdOrderById(lojaId, prod.id);
+            List<Long> escolhidos = new java.util.ArrayList<>();
+            Object escRaw = it.get("complementos");
+            if (escRaw instanceof List<?> ls) for (Object o : ls) { try { escolhidos.add(Long.valueOf(String.valueOf(o))); } catch (Exception e) {} }
+            BigDecimal extra = BigDecimal.ZERO;
+            StringBuilder nomeItem = new StringBuilder(prod.nome);
+            if (!gs.isEmpty()) {
+                Map<Long, br.com.bora.entity.ComplementoItem> catalogo = new java.util.HashMap<>();
+                compItens.findByLojaIdAndGrupoIdInOrderById(lojaId, gs.stream().map(g -> g.id).toList())
+                        .forEach(ci -> catalogo.put(ci.id, ci));
+                Map<Long, List<br.com.bora.entity.ComplementoItem>> porGrupo = new java.util.HashMap<>();
+                for (Long idEsc : escolhidos) {
+                    br.com.bora.entity.ComplementoItem ci = catalogo.get(idEsc);
+                    if (ci == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Complemento inválido");
+                    porGrupo.computeIfAbsent(ci.grupoId, k -> new java.util.ArrayList<>()).add(ci);
+                }
+                List<String> partes = new java.util.ArrayList<>();
+                for (br.com.bora.entity.ComplementoGrupo g : gs) {
+                    List<br.com.bora.entity.ComplementoItem> sel = porGrupo.getOrDefault(g.id, List.of());
+                    if (sel.size() < g.minimo || sel.size() > g.maximo) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Escolha entre " + g.minimo + " e " + g.maximo + " em \"" + g.nome + "\" de " + prod.nome);
+                    }
+                    for (br.com.bora.entity.ComplementoItem ci : sel) {
+                        extra = extra.add(ci.preco == null ? BigDecimal.ZERO : ci.preco);
+                        partes.add(ci.nome);
+                    }
+                }
+                if (!partes.isEmpty()) nomeItem.append(" (").append(String.join(", ", partes)).append(")");
+            } else if (!escolhidos.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto não tem complementos");
+            }
+
             PedidoItem item = new PedidoItem();
             item.setLojaId(lojaId);
             item.setPedidoId(p.id);
             item.setProdutoId(prod.id);
-            item.setDescricao(prod.nome);
+            item.setDescricao(nomeItem.toString());
             item.setQuantidade(qtd);
-            item.setPrecoUnitario(prod.preco);
+            BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
+            item.setPrecoUnitario(unit);
             item.setCustoUnitario(prod.custo);
-            BigDecimal sub = prod.preco == null ? BigDecimal.ZERO : prod.preco.multiply(BigDecimal.valueOf(qtd));
+            BigDecimal sub = unit.multiply(BigDecimal.valueOf(qtd));
             item.setSubtotal(sub);
             itens.save(item);
             total = total.add(sub);
