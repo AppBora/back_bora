@@ -38,6 +38,8 @@ public class PedidoService {
     private final LogStatusRepository logs;
     private final PlanoService planos;
     private final IntegracaoService integracoes;
+    @org.springframework.beans.factory.annotation.Autowired
+    private NotificacaoClienteService notifCliente; // Operação Assistida (Módulo IA)
     private final TaxaEntregaRepository taxasEntrega;
     private final InsumoService insumos;
     private final AuthContext ctx;
@@ -280,6 +282,7 @@ public class PedidoService {
         Pedido salvo = repo.save(p);
         registrarLog(salvo, anterior, status); // RN07
         integracoes.notificarStatus(salvo, status.name()); // sincroniza status com o marketplace (se conectado)
+        notifCliente.notificarFase(salvo, status); // Operação Assistida: avisa o cliente no WhatsApp
         return salvo;
     }
 

@@ -129,6 +129,7 @@ public class PublicController {
         p.lojaId = lojaId;
         p.origem = "Cardápio Digital";
         p.formaPagamento = "PIX".equals(forma) ? "PIX (aguardando)" : "Na entrega";
+        if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("\\D", "");
         StringBuilder ob = new StringBuilder("Cliente: ").append(nome.trim());
         if (telefone != null && !telefone.isBlank()) ob.append(" | Tel: ").append(telefone.trim());
         if (endereco != null && !endereco.isBlank()) ob.append(" | End: ").append(endereco.trim());
@@ -249,10 +250,14 @@ public class PublicController {
     public Map<String, Object> statusPedido(@PathVariable Long lojaId, @PathVariable Long pedidoId) {
         Pedido p = pedidos.findByIdAndLojaId(pedidoId, lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado"));
-        return Map.of(
-                "codigo", p.codigo == null ? String.valueOf(p.id) : p.codigo,
-                "status", p.status.name(),
-                "pago", "PIX (pago)".equals(p.formaPagamento));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("codigo", p.codigo == null ? String.valueOf(p.id) : p.codigo);
+        m.put("status", p.status.name());
+        m.put("pago", "PIX (pago)".equals(p.formaPagamento));
+        m.put("loja", lojas.findById(lojaId).map(l -> l.nome).orElse(""));
+        m.put("criadoEm", p.criadoEm);
+        m.put("motivoCancelamento", p.motivoCancelamento);
+        return m;
     }
 
     /** Webhook do Asaas DO LOJISTA: confirma o pagamento PIX do pedido. */
