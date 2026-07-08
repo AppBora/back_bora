@@ -82,6 +82,7 @@ public class PublicController {
             m.put("nome", p.nome);
             m.put("categoria", p.categoria == null || p.categoria.isBlank() ? "Outros" : p.categoria);
             m.put("preco", p.preco);
+            m.put("imagem", p.imagemUrl);
             m.put("complementos", gruposPorProduto.getOrDefault(p.id, List.of()));
             return m;
         }).toList());

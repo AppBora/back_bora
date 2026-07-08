@@ -42,6 +42,7 @@ public class ProdutoService {
         p.custo = dados.custo;
         p.estoque = dados.estoque;
         p.estoqueMinimo = dados.estoqueMinimo;
+        if (dados.imagemUrl != null) p.imagemUrl = dados.imagemUrl.isBlank() ? null : dados.imagemUrl;
         if (dados.ativo != null) p.ativo = dados.ativo;
         return repo.save(p);
     }
