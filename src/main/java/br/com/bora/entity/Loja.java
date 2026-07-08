@@ -25,4 +25,14 @@ public class Loja {
     /** WhatsApp do dono — destino do resumo diário do Gerente Virtual. */
     @Column(name = "whatsapp_dono")
     public String whatsappDono;
+
+    /** Preço mensal negociado (fundador etc.); NULL = tabela do plano. Só o ADMINISTRADOR_BORA define. */
+    @Column(name = "preco_mensal")
+    public java.math.BigDecimal precoMensal;
+
+    /** Preço efetivo da assinatura desta loja. */
+    public java.math.BigDecimal precoEfetivo() {
+        return precoMensal != null ? precoMensal
+                : java.math.BigDecimal.valueOf((plano == null ? Plano.UNICO : plano).precoMensal);
+    }
 }

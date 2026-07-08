@@ -75,11 +75,11 @@ public class PlanoService {
         lojas.save(loja);
         assinaturas.findByLojaId(lojaId).ifPresent(a -> {
             if (a.getAsaasSubscriptionId() != null && asaas.configurado()) {
-                asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), novo.precoMensal,
+                asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), loja.precoEfetivo().doubleValue(),
                         "BoraHapp " + novo.name() + " - " + loja.getNome());
             }
             a.setPlano(novo);
-            a.setValor(java.math.BigDecimal.valueOf(novo.precoMensal));
+            a.setValor(loja.precoEfetivo());
             a.setAtualizadoEm(java.time.OffsetDateTime.now());
             assinaturas.save(a);
         });

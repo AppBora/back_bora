@@ -66,12 +66,12 @@ public class AssinaturaService {
             return nova;
         });
         a.setPlano(plano);
-        a.setValor(BigDecimal.valueOf(plano.precoMensal));
+        a.setValor(loja.precoEfetivo()); // respeita preço negociado por loja (ex.: fundador R$149)
         if (a.getAsaasCustomerId() == null) {
             a.setAsaasCustomerId(asaas.criarCliente(loja.getNome(), email, cpfCnpj));
         }
         String nextDue = LocalDate.now().plusDays(7).toString(); // 7 dias de cortesia antes da 1ª cobrança
-        Map<String, Object> sub = asaas.criarAssinatura(a.getAsaasCustomerId(), plano.precoMensal,
+        Map<String, Object> sub = asaas.criarAssinatura(a.getAsaasCustomerId(), loja.precoEfetivo().doubleValue(),
                 "BoraHapp " + plano.name() + " - " + loja.getNome(), nextDue);
         a.setAsaasSubscriptionId(sub == null ? null : (String) sub.get("id"));
         a.setStatus(StatusAssinatura.PENDENTE);

@@ -96,6 +96,18 @@ public class PlataformaController {
         return Map.of("lojaId", lojaId, "moduloIa", loja.moduloIa);
     }
 
+    /** Define preço negociado da loja (fundador etc.). Corpo: { "precoMensal": 149.00 } (null = tabela). */
+    @PutMapping("/lojas/{lojaId}/preco")
+    public Map<String, Object> definirPreco(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
+        ctx.requireAdminBora();
+        Loja loja = lojas.findById(lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        Object v = body == null ? null : body.get("precoMensal");
+        loja.precoMensal = v == null ? null : new java.math.BigDecimal(String.valueOf(v));
+        lojas.save(loja);
+        return Map.of("lojaId", lojaId, "precoEfetivo", loja.precoEfetivo());
+    }
+
     /** Configurações globais da plataforma — restrito ao ADMINISTRADOR_BORA. */
     @GetMapping("/config")
     public Map<String, String> configuracoes() {
