@@ -85,6 +85,17 @@ public class PlataformaController {
         return Map.of("lojaId", loja.getId(), "plano", loja.getPlano().name(), "adminEmail", email);
     }
 
+    /** Libera/revoga o Módulo IA (add-on pago) de uma loja — SÓ o ADMINISTRADOR_BORA. */
+    @PutMapping("/lojas/{lojaId}/modulo-ia")
+    public Map<String, Object> definirModuloIa(@PathVariable Long lojaId, @RequestBody Map<String, Boolean> body) {
+        ctx.requireAdminBora();
+        Loja loja = lojas.findById(lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        loja.moduloIa = body != null && Boolean.TRUE.equals(body.get("habilitado"));
+        lojas.save(loja);
+        return Map.of("lojaId", lojaId, "moduloIa", loja.moduloIa);
+    }
+
     /** Configurações globais da plataforma — restrito ao ADMINISTRADOR_BORA. */
     @GetMapping("/config")
     public Map<String, String> configuracoes() {

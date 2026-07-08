@@ -37,6 +37,8 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                                 @Param("inicio") OffsetDateTime inicio,
                                 @Param("fim") OffsetDateTime fim);
 
+    Optional<Pedido> findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(Long lojaId, Long clienteId);
+    List<Pedido> findByLojaIdAndClienteIdAndCriadoEmAfter(Long lojaId, Long clienteId, OffsetDateTime corte);
     long countByLojaIdAndStatus(Long lojaId, StatusPedido status);
     long countByLojaIdAndEntregueEmAfter(Long lojaId, OffsetDateTime dt);
     List<Pedido> findByLojaIdOrderByCriadoEmDesc(Long lojaId);

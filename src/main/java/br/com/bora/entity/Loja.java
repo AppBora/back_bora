@@ -17,4 +17,12 @@ public class Loja {
 
     @Enumerated(EnumType.STRING)
     public Plano plano = Plano.UNICO;
+
+    /** Add-on pago "Módulo IA" — liberado somente pelo ADMINISTRADOR_BORA quando contratado. */
+    @Column(name = "modulo_ia")
+    public Boolean moduloIa = false;
+
+    /** WhatsApp do dono — destino do resumo diário do Gerente Virtual. */
+    @Column(name = "whatsapp_dono")
+    public String whatsappDono;
 }
