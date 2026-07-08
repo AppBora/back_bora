@@ -35,11 +35,13 @@ public class PublicController {
     private final PixService pix;
     private final br.com.bora.repository.ComplementoGrupoRepository compGrupos;
     private final br.com.bora.repository.ComplementoItemRepository compItens;
+    private final br.com.bora.repository.CupomRepository cupons;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
                             br.com.bora.repository.ComplementoGrupoRepository compGrupos,
-                            br.com.bora.repository.ComplementoItemRepository compItens) {
+                            br.com.bora.repository.ComplementoItemRepository compItens,
+                            br.com.bora.repository.CupomRepository cupons) {
         this.lojas = lojas;
         this.produtos = produtos;
         this.pedidos = pedidos;
@@ -48,6 +50,17 @@ public class PublicController {
         this.pix = pix;
         this.compGrupos = compGrupos;
         this.compItens = compItens;
+        this.cupons = cupons;
+    }
+
+    /** Valida um cupom para exibir o desconto no checkout (não reserva nada). */
+    @GetMapping("/loja/{lojaId}/cupom/{codigo}")
+    public Map<String, Object> validarCupom(@PathVariable Long lojaId, @PathVariable String codigo) {
+        lojaAtiva(lojaId);
+        br.com.bora.entity.Cupom c = cupons.findByLojaIdAndCodigoIgnoreCase(lojaId, codigo.trim())
+                .filter(br.com.bora.entity.Cupom::valido)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cupom inválido ou vencido"));
+        return Map.of("codigo", c.codigo, "tipo", c.tipo, "valor", c.valor);
     }
 
     /** Cardápio público de uma loja: nome + produtos ativos (somente leitura). */
@@ -184,6 +197,22 @@ public class PublicController {
         if (total.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pedido sem valor");
         }
+
+        // Cupom de desconto (recalculado no servidor; nunca zera o pedido)
+        BigDecimal descontoAplicado = BigDecimal.ZERO;
+        String codCupom = str(body.get("cupom"));
+        if (codCupom != null && !codCupom.isBlank()) {
+            br.com.bora.entity.Cupom c = cupons.findByLojaIdAndCodigoIgnoreCase(lojaId, codCupom.trim())
+                    .filter(br.com.bora.entity.Cupom::valido)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cupom inválido ou vencido"));
+            descontoAplicado = c.desconto(total);
+            if (descontoAplicado.compareTo(total) >= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O cupom não pode zerar o pedido");
+            }
+            total = total.subtract(descontoAplicado);
+            p.observacao = p.observacao + " | Cupom " + c.codigo + " (-R$ " + descontoAplicado + ")";
+        }
+
         p.valorTotal = total;
         p.codigo = "CD-" + p.id;
 
@@ -191,6 +220,7 @@ public class PublicController {
         resp.put("pedidoId", p.id);
         resp.put("codigo", p.codigo);
         resp.put("valorTotal", total);
+        resp.put("desconto", descontoAplicado);
 
         if ("PIX".equals(forma)) {
             IntegracaoCanal integ = integracaoPix(lojaId)
