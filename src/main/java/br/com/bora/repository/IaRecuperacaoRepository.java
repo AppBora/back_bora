@@ -9,4 +9,5 @@ import java.util.List;
 public interface IaRecuperacaoRepository extends JpaRepository<IaRecuperacao, Long> {
     List<IaRecuperacao> findByLojaIdAndEnviadoEmAfter(Long lojaId, OffsetDateTime corte);
     boolean existsByLojaIdAndClienteIdAndEnviadoEmAfter(Long lojaId, Long clienteId, OffsetDateTime corte);
+    long countByLojaIdAndEnviadoEmAfter(Long lojaId, OffsetDateTime corte);
 }

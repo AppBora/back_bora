@@ -27,6 +27,8 @@ public class IaService {
 
     private static final ZoneId ZONE = ZoneId.of("America/Sao_Paulo");
     private static final int DIAS_SUMIDO = 21, DIAS_JANELA_ROI = 7;
+    /** Teto de disparos de recuperação por loja/mês (protege o custo de template do WhatsApp). */
+    private static final int MAX_MSGS_MES = 200;
 
     private final LojaRepository lojas;
     private final ClienteRepository clientes;
@@ -75,8 +77,12 @@ public class IaService {
         IntegracaoCanal zap = integracoes.findByLojaIdAndCanal(lojaId, "WHATSAPP")
                 .filter(i -> Boolean.TRUE.equals(i.ativo)).orElse(null);
         OffsetDateTime agora = OffsetDateTime.now(ZONE);
+        OffsetDateTime inicioMes = agora.withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
+        long usadasNoMes = recuperacoes.countByLojaIdAndEnviadoEmAfter(lojaId, inicioMes);
+        long saldo = Math.max(0, MAX_MSGS_MES - usadasNoMes);
         int enviados = 0, candidatos = 0;
         for (Cliente c : clientes.findByLojaIdOrderByNomeAsc(lojaId)) {
+            if (enviados >= saldo) break; // teto mensal do plano do Módulo IA atingido
             if (c.telefone == null || c.telefone.replaceAll("\\D", "").length() < 10) continue;
             OffsetDateTime ultimo = pedidos.findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(lojaId, c.id)
                     .map(p -> p.criadoEm).orElse(null);
@@ -98,7 +104,9 @@ public class IaService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("clientesSumidos", candidatos);
         out.put("mensagensEnviadas", enviados);
+        out.put("saldoMensal", Math.max(0, saldo - enviados));
         if (zap == null) out.put("aviso", "Conecte a integração WhatsApp para o disparo automático.");
+        else if (saldo - enviados <= 0) out.put("aviso", "Limite de " + MAX_MSGS_MES + " mensagens/mês do Módulo IA atingido.");
         return out;
     }
 
