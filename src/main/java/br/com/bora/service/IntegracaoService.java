@@ -27,14 +27,18 @@ public class IntegracaoService {
         put("UBER_EATS", "Uber Eats");
         put("AIQFOME", "aiqfome");
         put("GOOMER", "Goomer");
+        put("PIX", "PIX Online (Asaas do lojista)");
+        put("WHATSAPP", "Robô WhatsApp (API oficial Meta)");
     }};
 
     private final IntegracaoCanalRepository repo;
     private final AuthContext ctx;
+    private final PixService pix;
 
-    public IntegracaoService(IntegracaoCanalRepository repo, AuthContext ctx) {
+    public IntegracaoService(IntegracaoCanalRepository repo, AuthContext ctx, PixService pix) {
         this.repo = repo;
         this.ctx = ctx;
+        this.pix = pix;
     }
 
     public static String label(String canal) {
@@ -88,6 +92,10 @@ public class IntegracaoService {
         if (i.webhookToken == null) i.webhookToken = UUID.randomUUID().toString().replace("-", "");
         boolean temCred = i.clientSecret != null && !i.clientSecret.isBlank();
         i.status = Boolean.TRUE.equals(i.ativo) ? (temCred ? "CONECTADO" : "PRONTO") : (temCred ? "PRONTO" : "DESCONECTADO");
+        // PIX: ao ativar com a chave Asaas do lojista, cria automaticamente o webhook na conta dele.
+        if ("PIX".equals(code) && Boolean.TRUE.equals(i.ativo) && temCred) {
+            pix.provisionarWebhook(i, "https://borahapp.com.br");
+        }
         repo.save(i);
         return Map.of("canal", code, "status", i.status, "ativo", Boolean.TRUE.equals(i.ativo));
     }
