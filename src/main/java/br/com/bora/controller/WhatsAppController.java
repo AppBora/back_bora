@@ -47,6 +47,7 @@ public class WhatsAppController {
     @PostMapping("/{lojaId}")
     @SuppressWarnings("unchecked")
     public Map<String, String> receber(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
+        log.info("WhatsApp loja {} payload: {}", lojaId, body); // raio-X temporário de diagnóstico
         try {
             IntegracaoCanal i = integracoes.findByLojaIdAndCanal(lojaId, "WHATSAPP")
                     .filter(x -> Boolean.TRUE.equals(x.ativo) && x.clientSecret != null && x.clientId != null)

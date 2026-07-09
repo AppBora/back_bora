@@ -53,6 +53,26 @@ public class PublicController {
         this.cupons = cupons;
     }
 
+    /** Manifesto PWA da loja: o cliente instala o "app" com o nome/cara da loja (white-label). */
+    @GetMapping(value = "/loja/{lojaId}/manifest", produces = "application/manifest+json")
+    public Map<String, Object> manifest(@PathVariable Long lojaId) {
+        Loja loja = lojaAtiva(lojaId);
+        String nome = loja.nome == null ? "Cardápio" : loja.nome;
+        return Map.of(
+                "name", nome + " · Pedidos",
+                "short_name", nome.length() > 12 ? nome.substring(0, 12) : nome,
+                "start_url", "/cardapio.html?loja=" + lojaId,
+                "scope", "/",
+                "display", "standalone",
+                "background_color", "#f6f7fb",
+                "theme_color", "#7c3aed",
+                "icons", List.of(Map.of(
+                        "src", "/assets/img/icone-bora.svg",
+                        "sizes", "any",
+                        "type", "image/svg+xml",
+                        "purpose", "any")));
+    }
+
     /** Valida um cupom para exibir o desconto no checkout (não reserva nada). */
     @GetMapping("/loja/{lojaId}/cupom/{codigo}")
     public Map<String, Object> validarCupom(@PathVariable Long lojaId, @PathVariable String codigo) {
