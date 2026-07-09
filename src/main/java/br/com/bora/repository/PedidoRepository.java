@@ -37,6 +37,29 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                                 @Param("inicio") OffsetDateTime inicio,
                                 @Param("fim") OffsetDateTime fim);
 
+    /** Acerto de entregadores: soma por entregador das entregas realizadas ainda não acertadas, na janela. */
+    @Query("select p.entregador, count(p), coalesce(sum(p.taxaEntrega), 0), " +
+           "coalesce(sum(case when upper(coalesce(p.formaPagamento, '')) like '%DINHEIRO%' then p.valorTotal else 0 end), 0), " +
+           "coalesce(sum(p.valorTotal), 0) " +
+           "from Pedido p where p.lojaId = :lojaId " +
+           "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
+           "and p.entregador is not null and p.entregador <> '' " +
+           "and p.entregueEm >= :inicio and p.entregueEm < :fim " +
+           "group by p.entregador order by p.entregador")
+    List<Object[]> previaAcerto(@Param("lojaId") Long lojaId,
+                                @Param("inicio") OffsetDateTime inicio,
+                                @Param("fim") OffsetDateTime fim);
+
+    /** Entregas de um entregador (não canceladas/acertadas) na janela — base do "fazer acerto". */
+    @Query("select p from Pedido p where p.lojaId = :lojaId " +
+           "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
+           "and p.entregador = :entregador " +
+           "and p.entregueEm >= :inicio and p.entregueEm < :fim")
+    List<Pedido> entregasParaAcerto(@Param("lojaId") Long lojaId,
+                                    @Param("entregador") String entregador,
+                                    @Param("inicio") OffsetDateTime inicio,
+                                    @Param("fim") OffsetDateTime fim);
+
     Optional<Pedido> findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(Long lojaId, Long clienteId);
     List<Pedido> findByLojaIdAndClienteIdAndCriadoEmAfter(Long lojaId, Long clienteId, OffsetDateTime corte);
     long countByLojaIdAndStatus(Long lojaId, StatusPedido status);
