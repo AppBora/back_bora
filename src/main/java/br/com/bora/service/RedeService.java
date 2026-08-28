@@ -89,7 +89,7 @@ public class RedeService {
      * no período [inicio, fim] (datas locais America/Sao_Paulo, fim inclusivo).
      */
     public Map<String, Object> balancete(LocalDate inicio, LocalDate fim) {
-        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
         if (inicio == null) inicio = LocalDate.now(ZONE).withDayOfMonth(1);
         if (fim == null) fim = LocalDate.now(ZONE);
         if (fim.isBefore(inicio)) {
