@@ -34,11 +34,72 @@ public class IntegracaoService {
     private final IntegracaoCanalRepository repo;
     private final AuthContext ctx;
     private final PixService pix;
+    private final List<br.com.bora.service.marketplace.MarketplaceClient> clients;
 
-    public IntegracaoService(IntegracaoCanalRepository repo, AuthContext ctx, PixService pix) {
+    public IntegracaoService(IntegracaoCanalRepository repo, AuthContext ctx, PixService pix,
+                             List<br.com.bora.service.marketplace.MarketplaceClient> clients) {
         this.repo = repo;
         this.ctx = ctx;
         this.pix = pix;
+        this.clients = clients;
+    }
+
+    /** Implementação oficial do canal, quando existe (hoje: iFood e Open Delivery/99Food). */
+    private Optional<br.com.bora.service.marketplace.MarketplaceClient> clientDe(String canal) {
+        if (canal == null) return Optional.empty();
+        return clients.stream().filter(c -> c.canal().equalsIgnoreCase(canal)).findFirst();
+    }
+
+    private br.com.bora.service.marketplace.MarketplaceClient exigirClient(String canal) {
+        return clientDe(canal).orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                label(canal) + " ainda não tem integração oficial. Hoje funcionam iFood e 99Food."));
+    }
+
+    private IntegracaoCanal exigirIntegracao(String canal) {
+        Long lojaId = ctx.lojaId();
+        return repo.findByLojaIdAndCanal(lojaId, canal.toUpperCase())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Salve o merchantId da loja em " + label(canal) + " antes de conectar."));
+    }
+
+    /** Passo 1 do vínculo oficial com o marketplace. */
+    public Map<String, Object> iniciarVinculo(String canal) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
+        return exigirClient(canal).iniciarVinculo(exigirIntegracao(canal));
+    }
+
+    /** Passo 2 (iFood): troca o código autorizado pelo lojista por tokens de acesso. */
+    public Map<String, Object> concluirVinculo(String canal, String authorizationCode) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
+        IntegracaoCanal i = exigirIntegracao(canal);
+        exigirClient(canal).concluirVinculo(i, authorizationCode);
+        return Map.of("canal", i.canal, "status", i.status, "conectado", true);
+    }
+
+    /** Diagnóstico da conexão — o que o lojista precisa ver quando "não chega pedido". */
+    public Map<String, Object> diagnostico(String canal) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
+        IntegracaoCanal i = exigirIntegracao(canal);
+        var client = clientDe(canal);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("canal", i.canal);
+        m.put("label", label(i.canal));
+        m.put("integracaoOficial", client.isPresent());
+        m.put("appDaPlataformaConfigurado", client.map(c -> c.configurado()).orElse(false));
+        m.put("merchantId", i.merchantId);
+        m.put("status", i.status);
+        m.put("ativo", Boolean.TRUE.equals(i.ativo));
+        m.put("ultimoPollingEm", i.ultimoPollingEm);
+        m.put("ultimaSync", i.ultimaSync);
+        m.put("pedidosRecebidos", i.pedidosRecebidos);
+        m.put("ultimoErro", i.ultimoErro);
+        m.put("tokenExpiraEm", i.tokenExpiraEm);
+        // No iFood a loja só aparece como aberta enquanto o polling roda.
+        boolean online = i.ultimoPollingEm != null
+                && i.ultimoPollingEm.isAfter(OffsetDateTime.now().minusMinutes(2))
+                && i.ultimoErro == null;
+        m.put("onlineNoMarketplace", online);
+        return m;
     }
 
     public static String label(String canal) {
@@ -68,6 +129,14 @@ public class IntegracaoService {
             m.put("ultimaSync", i == null ? null : i.ultimaSync);
             m.put("webhookPath", i == null || i.webhookToken == null ? null
                     : "/webhooks/" + e.getKey().toLowerCase() + "?loja=" + lojaId + "&token=" + i.webhookToken);
+            // Canais com integração oficial não pedem credencial ao lojista: o app é da plataforma.
+            var client = clientDe(e.getKey());
+            m.put("oficial", client.isPresent());
+            m.put("appConfigurado", client.map(c -> c.configurado()).orElse(false));
+            m.put("userCode", i == null ? null : i.userCode);
+            m.put("verificationUrl", i == null ? null : i.verificationUrl);
+            m.put("ultimoPollingEm", i == null ? null : i.ultimoPollingEm);
+            m.put("ultimoErro", i == null ? null : i.ultimoErro);
             out.add(m);
         }
         return out;
@@ -117,14 +186,18 @@ public class IntegracaoService {
     public void notificarStatus(Pedido p, String novoStatus) {
         if (p == null || p.canalExterno == null) return;
         repo.findByLojaIdAndCanal(p.lojaId, p.canalExterno.toUpperCase()).ifPresent(i -> {
-            boolean temCred = i.clientSecret != null && !i.clientSecret.isBlank();
+            // Nos canais oficiais o que autoriza é o token do vínculo, não uma senha colada pelo lojista.
+            boolean temCred = clientDe(i.canal).isPresent()
+                    ? i.prontaParaSincronizar()
+                    : (i.clientSecret != null && !i.clientSecret.isBlank());
             if (!Boolean.TRUE.equals(i.ativo) || !temCred) {
                 log.debug("[{}] status {} do pedido {} não enviado (conexão sem credenciais)", p.canalExterno, novoStatus, p.idExterno);
                 return;
             }
-            // PRONTO-PARA-PRODUÇÃO: aqui entra a chamada HTTP autenticada à API do marketplace.
-            // Ex. iFood: PUT /order/v1.0/orders/{id}/statuses/{status} com Bearer token.
-            log.info("[{}] -> push status {} do pedido externo {}", p.canalExterno, novoStatus, p.idExterno);
+            clientDe(i.canal).ifPresentOrElse(
+                    c -> c.enviarStatus(i, p.idExterno, novoStatus),
+                    () -> log.debug("[{}] canal sem integração oficial; status {} não propagado",
+                            p.canalExterno, novoStatus));
         });
     }
 

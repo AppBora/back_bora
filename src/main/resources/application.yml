@@ -1,4 +1,9 @@
 spring:
+  task:
+    scheduling:
+      pool:
+        # O poller de marketplace nao pode disputar a unica thread padrao do agendador.
+        size: 4
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/bora}
     username: ${SPRING_DATASOURCE_USERNAME:bora}
@@ -26,3 +31,19 @@ asaas:
   url-publica: ${ASAAS_URL_PUBLICA:https://borahapp.com.br}
   platform-wallet-id: ${ASAAS_PLATFORM_WALLET_ID:}
   taxa-percentual: ${ASAAS_TAXA_PERCENTUAL:0}
+
+# Integracao oficial com marketplaces. O aplicativo e da PLATAFORMA (integradora);
+# por loja guardamos so o merchantId e os tokens que o lojista autorizou.
+marketplace:
+  ifood:
+    base-url: ${BORA_IFOOD_BASE_URL:https://merchant-api.ifood.com.br}
+    client-id: ${BORA_IFOOD_CLIENT_ID:}
+    client-secret: ${BORA_IFOOD_CLIENT_SECRET:}
+  opendelivery:
+    base-url: ${BORA_OPENDELIVERY_BASE_URL:https://openapi.99food.com/v4/opendelivery}
+    client-id: ${BORA_OPENDELIVERY_CLIENT_ID:}
+    client-secret: ${BORA_OPENDELIVERY_CLIENT_SECRET:}
+  polling:
+    # A loja so fica online no iFood enquanto este ciclo roda. Nao aumentar sem motivo.
+    intervalo-ms: ${BORA_MARKETPLACE_POLLING_MS:30000}
+    habilitado: ${BORA_MARKETPLACE_POLLING:true}

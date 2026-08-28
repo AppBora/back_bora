@@ -34,9 +34,38 @@ public class IntegracaoCanal {
     @Column(name = "auto_aceitar")
     public Boolean autoAceitar = true;
 
-    public String status = "DESCONECTADO";   // DESCONECTADO | PRONTO | CONECTADO | ERRO
+    // ---- OAuth do marketplace (V28) ----
+    // O app e da plataforma (env); aqui ficam os tokens que ESTA loja autorizou.
+    @Column(name = "access_token")
+    public String accessToken;
+    @Column(name = "refresh_token")
+    public String refreshToken;
+    @Column(name = "token_expira_em")
+    public OffsetDateTime tokenExpiraEm;
+
+    // Fluxo distribuido do iFood: o lojista digita o userCode no portal do parceiro.
+    @Column(name = "user_code")
+    public String userCode;
+    @Column(name = "code_verifier")
+    public String codeVerifier;
+    @Column(name = "verification_url")
+    public String verificationUrl;
+    @Column(name = "vinculo_expira_em")
+    public OffsetDateTime vinculoExpiraEm;
+
+    @Column(name = "ultimo_polling_em")
+    public OffsetDateTime ultimoPollingEm;
+    @Column(name = "ultimo_erro")
+    public String ultimoErro;
+
+    public String status = "DESCONECTADO";   // DESCONECTADO | AGUARDANDO_AUTORIZACAO | CONECTADO | ERRO
     @Column(name = "ultima_sync")
     public OffsetDateTime ultimaSync;
     @Column(name = "pedidos_recebidos")
     public Integer pedidosRecebidos = 0;
+
+    /** Tem o mínimo para falar com a API do canal: loja identificada e vínculo concluído. */
+    public boolean prontaParaSincronizar() {
+        return merchantId != null && !merchantId.isBlank() && "CONECTADO".equals(status);
+    }
 }
