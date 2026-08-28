@@ -34,6 +34,7 @@ public class InsumoService {
     public List<Insumo> listar() { return insumos.findByLojaIdOrderByNomeAsc(ctx.lojaId()); }
 
     public Insumo salvar(Insumo i) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         Insumo alvo = i.id == null ? new Insumo()
                 : insumos.findByIdAndLojaId(i.id, loja).orElseThrow(() -> nf("Insumo"));
@@ -43,7 +44,9 @@ public class InsumoService {
         return insumos.save(alvo);
     }
 
-    public void excluir(Long id) { insumos.delete(insumos.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> nf("Insumo"))); }
+    public void excluir(Long id) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        insumos.delete(insumos.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> nf("Insumo"))); }
 
     // ---- Ficha técnica ----
     public List<Map<String, Object>> ficha(Long produtoId) {
@@ -66,6 +69,7 @@ public class InsumoService {
 
     @Transactional
     public List<Map<String, Object>> salvarFicha(Long produtoId, List<Map<String, Object>> itens) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         produtos.findByIdAndLojaId(produtoId, loja).orElseThrow(() -> nf("Produto")); // impede ficha em produto de outra loja
         fichas.deleteByLojaIdAndProdutoId(loja, produtoId);

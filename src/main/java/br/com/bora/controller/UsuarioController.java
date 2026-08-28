@@ -32,6 +32,12 @@ public class UsuarioController {
         return service.atualizarPapel(id, papel);
     }
 
+    /** Redefine a senha de um usuário da loja (o funcionário esqueceu). Só o admin. */
+    @PutMapping("/{id}/senha")
+    public br.com.bora.dto.UsuarioView senha(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
+        return service.definirSenha(id, body == null ? null : body.get("novaSenha"));
+    }
+
     @PutMapping("/{id}/ativo")
     public UsuarioView ativo(@PathVariable Long id, @RequestParam boolean ativo) {
         return service.definirAtivo(id, ativo);

@@ -71,6 +71,17 @@ public class UsuarioService {
         return view(repo.save(u));
     }
 
+    /** Redefine a senha de um usuário da loja. Só o admin — é ele quem responde pelos acessos. */
+    public UsuarioView definirSenha(Long id, String nova) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        if (nova == null || nova.length() < 8) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A nova senha precisa ter ao menos 8 caracteres");
+        }
+        Usuario u = buscar(id);
+        u.setSenhaHash(encoder.encode(nova));
+        return view(repo.save(u));
+    }
+
     public UsuarioView definirAtivo(Long id, boolean ativo) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         impedirAlvoProprio(id, "Você não pode desativar a si mesmo");

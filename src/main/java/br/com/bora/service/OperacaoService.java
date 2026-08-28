@@ -36,6 +36,7 @@ public class OperacaoService {
     // ---------- Taxas de entrega ----------
     public List<TaxaEntrega> taxas() { return taxas.findByLojaIdOrderByBairroAsc(ctx.lojaId()); }
     public TaxaEntrega salvarTaxa(TaxaEntrega t) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         if (t.bairro == null || t.bairro.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bairro é obrigatório");
         TaxaEntrega alvo = t.id == null ? new TaxaEntrega()
@@ -44,7 +45,9 @@ public class OperacaoService {
         alvo.tempoMin = t.tempoMin; alvo.ativo = t.ativo == null || t.ativo;
         return taxas.save(alvo);
     }
-    public void excluirTaxa(Long id) { taxas.delete(taxas.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> naoEncontrado("Taxa"))); }
+    public void excluirTaxa(Long id) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        taxas.delete(taxas.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> naoEncontrado("Taxa"))); }
 
     // ---------- Formas de pagamento ----------
     public List<FormaPagamento> formas() {
@@ -59,6 +62,7 @@ public class OperacaoService {
             f.comTroco = b[1].equals("troco"); f.online = b[1].equals("online"); f.ativo = true; f.ordem = o++; formas.save(f); }
     }
     public FormaPagamento salvarForma(FormaPagamento f) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         if (f.descricao == null || f.descricao.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Descrição é obrigatória");
         FormaPagamento alvo = f.id == null ? new FormaPagamento()
@@ -67,7 +71,9 @@ public class OperacaoService {
         alvo.ativo = f.ativo == null || f.ativo; alvo.ordem = f.ordem == null ? 0 : f.ordem;
         return formas.save(alvo);
     }
-    public void excluirForma(Long id) { formas.delete(formas.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> naoEncontrado("Forma de pagamento"))); }
+    public void excluirForma(Long id) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        formas.delete(formas.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> naoEncontrado("Forma de pagamento"))); }
 
     // ---------- Horário de funcionamento ----------
     public List<HorarioFuncionamento> horarios() {
@@ -82,6 +88,7 @@ public class OperacaoService {
     }
     @Transactional
     public List<HorarioFuncionamento> salvarHorarios(List<HorarioFuncionamento> entrada) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         List<HorarioFuncionamento> atual = horarios.findByLojaIdOrderByDiaAsc(loja);
         for (HorarioFuncionamento e : entrada) {
@@ -121,6 +128,7 @@ public class OperacaoService {
         return lista;
     }
     public MotivoCancelamento salvarMotivo(MotivoCancelamento m) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         if (m.descricao == null || m.descricao.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Descrição é obrigatória");
         MotivoCancelamento alvo = m.id == null ? new MotivoCancelamento()
@@ -128,7 +136,9 @@ public class OperacaoService {
         alvo.lojaId = loja; alvo.descricao = m.descricao; alvo.ativo = m.ativo == null || m.ativo;
         return motivos.save(alvo);
     }
-    public void excluirMotivo(Long id) { motivos.delete(motivos.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> naoEncontrado("Motivo"))); }
+    public void excluirMotivo(Long id) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        motivos.delete(motivos.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> naoEncontrado("Motivo"))); }
 
     private boolean bool(Boolean b) { return Boolean.TRUE.equals(b); }
     private ResponseStatusException naoEncontrado(String o) { return new ResponseStatusException(HttpStatus.NOT_FOUND, o + " não encontrado"); }

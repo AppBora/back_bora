@@ -25,6 +25,7 @@ public class EntregadorService {
     }
 
     public Entregador criar(Entregador e) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         if (e.nome == null || e.nome.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome do entregador é obrigatório");
         }
@@ -35,6 +36,7 @@ public class EntregadorService {
     }
 
     public Entregador atualizar(Long id, Entregador dados) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         if (dados.nome == null || dados.nome.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome do entregador é obrigatório");
         }
@@ -47,6 +49,7 @@ public class EntregadorService {
     }
 
     public void excluir(Long id) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         repo.delete(buscar(id));
     }
 

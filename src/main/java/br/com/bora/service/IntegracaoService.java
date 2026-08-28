@@ -144,6 +144,7 @@ public class IntegracaoService {
 
     /** Cria/atualiza a conexão de um canal (credenciais inseridas pelo lojista). */
     public Map<String, Object> salvar(String canal, Map<String, Object> body) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
         Long lojaId = ctx.lojaId();
         String code = canal == null ? "" : canal.toUpperCase();
         if (!CATALOGO.containsKey(code)) {
