@@ -103,11 +103,13 @@ public class PixService {
         corpo.put("description", "Pedido " + (pedido.codigo == null ? pedido.id : pedido.codigo) + " - " + loja.nome);
         corpo.put("externalReference", String.valueOf(pedido.id));
         // Split: retém a taxa da plataforma quando o recebimento é pela subconta do lojista.
+        // A loja pode ter taxa própria (fundador = 0); sem valor definido, vale o padrão global.
+        java.math.BigDecimal taxa = loja.splitPercentual != null ? loja.splitPercentual : taxaPercentual;
         if (viaSubconta && walletPlataforma != null && !walletPlataforma.isBlank()
-                && taxaPercentual.signum() > 0) {
+                && taxa.signum() > 0) {
             corpo.put("split", List.of(Map.of(
                     "walletId", walletPlataforma,
-                    "percentualValue", taxaPercentual)));
+                    "percentualValue", taxa)));
         }
         Map<String, Object> pagamento = c.post().uri("/payments").body(corpo).retrieve().body(Map.class);
         String paymentId = pagamento == null ? null : (String) pagamento.get("id");

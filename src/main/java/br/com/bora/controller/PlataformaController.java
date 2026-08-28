@@ -29,11 +29,14 @@ public class PlataformaController {
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
     private final br.com.bora.repository.ConfigPlataformaRepository configs;
     private final br.com.bora.service.ProvisionamentoService provisionamento;
+    private final String splitPadrao;
 
     public PlataformaController(LojaRepository lojas, UsuarioRepository usuarios, PasswordEncoder encoder,
                                 AuthContext ctx, br.com.bora.repository.UsuarioLojaRepository vinculos,
                                 br.com.bora.repository.ConfigPlataformaRepository configs,
-                                br.com.bora.service.ProvisionamentoService provisionamento) {
+                                br.com.bora.service.ProvisionamentoService provisionamento,
+                                @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
+        this.splitPadrao = splitPadrao;
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
@@ -113,12 +116,41 @@ public class PlataformaController {
         return Map.of("lojaId", lojaId, "precoEfetivo", loja.precoEfetivo());
     }
 
+    /** Define a taxa de split da loja no PIX online, em %. Corpo: { "percentual": 0 }
+     *  (ausente/null = volta ao padrão global). Fundadores ficam em 0. */
+    @PutMapping("/lojas/{lojaId}/split")
+    public Map<String, Object> definirSplit(@PathVariable Long lojaId,
+                                            @RequestBody(required = false) Map<String, Object> body) {
+        ctx.requireAdminBora();
+        Loja loja = lojas.findById(lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        Object v = body == null ? null : body.get("percentual");
+        java.math.BigDecimal novo;
+        try {
+            novo = (v == null || String.valueOf(v).isBlank()) ? null : new java.math.BigDecimal(String.valueOf(v));
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Percentual inválido");
+        }
+        if (novo != null && (novo.signum() < 0 || novo.compareTo(new java.math.BigDecimal("100")) > 0)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Percentual deve estar entre 0 e 100");
+        }
+        loja.splitPercentual = novo;
+        lojas.save(loja);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("lojaId", lojaId);
+        out.put("splitPercentual", novo);
+        out.put("efetivo", (novo == null ? splitPadrao : novo.toPlainString()) + "%");
+        out.put("padraoDaPlataforma", splitPadrao + "%");
+        return out;
+    }
+
     /** Configurações globais da plataforma — restrito ao ADMINISTRADOR_BORA. */
     @GetMapping("/config")
     public Map<String, String> configuracoes() {
         ctx.requireAdminBora();
         Map<String, String> out = new java.util.LinkedHashMap<>();
         configs.findAll().forEach(c -> out.put(c.getChave(), c.getValor()));
+        out.put("split.padrao", splitPadrao);
         return out;
     }
 

@@ -53,6 +53,11 @@ public class Loja {
     @Column(name = "asaas_onboarding_url")
     public String asaasOnboardingUrl;
 
+    /** Taxa da plataforma retida por split no PIX online, em %. NULL = usa o padrão global
+     *  (ASAAS_TAXA_PERCENTUAL). Fundadores ficam em 0 — foram vendidos sem taxa por pedido. */
+    @Column(name = "split_percentual")
+    public java.math.BigDecimal splitPercentual;
+
     /** Token que autentica o webhook de PIX registrado NA SUBCONTA do lojista.
      *  Sem ele o Asaas não consegue confirmar o pagamento. NUNCA serializar. */
     @com.fasterxml.jackson.annotation.JsonIgnore
