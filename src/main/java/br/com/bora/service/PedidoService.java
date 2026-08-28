@@ -42,12 +42,14 @@ public class PedidoService {
     private NotificacaoClienteService notifCliente; // Operação Assistida (Módulo IA)
     private final TaxaEntregaRepository taxasEntrega;
     private final InsumoService insumos;
+    private final FidelidadeService fidelidade;
     private final AuthContext ctx;
 
     public PedidoService(PedidoRepository repo, PedidoItemRepository itemRepo, ProdutoRepository produtos,
                          ClienteRepository clientes, LogStatusRepository logs, PlanoService planos,
                          IntegracaoService integracoes, TaxaEntregaRepository taxasEntrega,
-                         InsumoService insumos, AuthContext ctx) {
+                         InsumoService insumos, FidelidadeService fidelidade, AuthContext ctx) {
+        this.fidelidade = fidelidade;
         this.repo = repo;
         this.itemRepo = itemRepo;
         this.produtos = produtos;
@@ -156,11 +158,8 @@ public class PedidoService {
 
         // resgate de cashback como desconto (RN fidelidade)
         BigDecimal resgate = BigDecimal.ZERO;
-        if (Boolean.TRUE.equals(req.usarCashback()) && req.clienteId() != null) {
-            var cli = clientes.findByIdAndLojaId(req.clienteId(), lojaId).orElse(null);
-            if (cli != null && cli.cashback != null && cli.cashback.signum() > 0) {
-                resgate = cli.cashback.min(total);
-            }
+        if (Boolean.TRUE.equals(req.usarCashback())) {
+            resgate = fidelidade.resgatePossivel(lojaId, req.clienteId(), total);
         }
         BigDecimal taxa = taxaPara(lojaId, req.clienteId(), req.origem());
         p.taxaEntrega = taxa;
@@ -172,22 +171,9 @@ public class PedidoService {
         return salvo;
     }
 
-    /** CRM: atualiza gasto/quantidade, debita o cashback resgatado e credita 5% sobre o pago. */
+    /** CRM e cashback — a regra mora no FidelidadeService, compartilhada com o cardápio online. */
     private void acumularFidelidade(Long lojaId, Long clienteId, BigDecimal totalPago, BigDecimal resgate) {
-        if (clienteId == null) return;
-        BigDecimal usado = resgate == null ? BigDecimal.ZERO : resgate;
-        clientes.findByIdAndLojaId(clienteId, lojaId).ifPresent(c -> {
-            BigDecimal gasto = c.totalGasto == null ? BigDecimal.ZERO : c.totalGasto;
-            BigDecimal saldo = c.cashback == null ? BigDecimal.ZERO : c.cashback;
-            c.totalGasto = gasto.add(totalPago);
-            c.qtdPedidos = (c.qtdPedidos == null ? 0 : c.qtdPedidos) + 1;
-            c.cashback = saldo.subtract(usado)
-                    .add(totalPago.multiply(new BigDecimal("0.05")))
-                    .max(BigDecimal.ZERO)
-                    .setScale(2, java.math.RoundingMode.HALF_UP);
-            c.ultimoPedido = OffsetDateTime.now();
-            clientes.save(c);
-        });
+        fidelidade.registrar(lojaId, clienteId, totalPago, resgate);
     }
 
     /** Cria pedido recebido de um marketplace (sem JWT) — usado pelos webhooks. */

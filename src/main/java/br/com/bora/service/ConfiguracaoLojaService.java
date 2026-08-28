@@ -4,6 +4,8 @@ import br.com.bora.entity.ConfiguracaoLoja;
 import br.com.bora.entity.Plano;
 import br.com.bora.repository.ConfiguracaoLojaRepository;
 import br.com.bora.security.AuthContext;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -45,6 +47,16 @@ public class ConfiguracaoLojaService {
         if (dados.logoUrl != null)      c.logoUrl = dados.logoUrl;
         if (dados.corPrimaria != null)  c.corPrimaria = dados.corPrimaria;
         if (dados.nomeSistema != null)  c.nomeSistema = dados.nomeSistema;
+
+        // Cashback: 0 desliga. Teto de 50% para um erro de digitação não virar prejuízo.
+        if (dados.cashbackPercentual != null) {
+            if (dados.cashbackPercentual.signum() < 0
+                    || dados.cashbackPercentual.compareTo(new java.math.BigDecimal("50")) > 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "O cashback deve ficar entre 0% e 50%");
+            }
+            c.cashbackPercentual = dados.cashbackPercentual;
+        }
 
         // Liberados conforme o plano
         if (plano.permiteCoresSecundarias() && dados.corSecundaria != null) c.corSecundaria = dados.corSecundaria;

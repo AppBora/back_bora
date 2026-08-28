@@ -25,6 +25,7 @@ import java.util.List;
 public class ProvisionamentoService {
 
     private static final String COR_PADRAO = "#7c3aed";
+    private static final java.math.BigDecimal CASHBACK_PADRAO = new java.math.BigDecimal("5");
 
     private final ConfiguracaoLojaRepository configs;
     private final FormaPagamentoRepository formas;
@@ -56,6 +57,9 @@ public class ProvisionamentoService {
         c.lojaId = lojaId;
         c.nomeExibicao = nomeLoja == null || nomeLoja.isBlank() ? "Minha Loja" : nomeLoja.trim();
         c.corPrimaria = COR_PADRAO;
+        // Explícito de propósito: se ficasse nulo, a loja daria 5% de cashback com o campo em
+        // branco na tela — o lojista estaria dando desconto sem saber.
+        c.cashbackPercentual = CASHBACK_PADRAO;
         c.mostrarMarcaBora = true;
         configs.save(c);
     }

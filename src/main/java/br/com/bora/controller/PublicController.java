@@ -33,6 +33,7 @@ public class PublicController {
     private final PedidoItemRepository itens;
     private final IntegracaoCanalRepository integracoes;
     private final PixService pix;
+    private final br.com.bora.service.FidelidadeService fidelidade;
     private final br.com.bora.repository.ComplementoGrupoRepository compGrupos;
     private final br.com.bora.repository.ComplementoItemRepository compItens;
     private final br.com.bora.repository.CupomRepository cupons;
@@ -41,13 +42,15 @@ public class PublicController {
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
                             br.com.bora.repository.ComplementoGrupoRepository compGrupos,
                             br.com.bora.repository.ComplementoItemRepository compItens,
-                            br.com.bora.repository.CupomRepository cupons) {
+                            br.com.bora.repository.CupomRepository cupons,
+                            br.com.bora.service.FidelidadeService fidelidade) {
         this.lojas = lojas;
         this.produtos = produtos;
         this.pedidos = pedidos;
         this.itens = itens;
         this.integracoes = integracoes;
         this.pix = pix;
+        this.fidelidade = fidelidade;
         this.compGrupos = compGrupos;
         this.compItens = compItens;
         this.cupons = cupons;
@@ -234,6 +237,19 @@ public class PublicController {
             p.observacao = p.observacao + " | Cupom " + c.codigo + " (-R$ " + descontoAplicado + ")";
         }
 
+        // Fidelidade: no cardápio o cliente é identificado pelo telefone — não há cadastro nem login.
+        Long clienteId = fidelidade.identificarPeloTelefone(lojaId, nome, telefone, endereco);
+        p.clienteId = clienteId;
+
+        BigDecimal resgate = BigDecimal.ZERO;
+        if (Boolean.TRUE.equals(body.get("usarCashback")) || "true".equals(str(body.get("usarCashback")))) {
+            resgate = fidelidade.resgatePossivel(lojaId, clienteId, total);
+            if (resgate.signum() > 0) {
+                total = total.subtract(resgate);
+                p.observacao = p.observacao + " | Cashback usado (-R$ " + resgate + ")";
+            }
+        }
+
         p.valorTotal = total;
         p.codigo = "CD-" + p.id;
 
@@ -242,6 +258,7 @@ public class PublicController {
         resp.put("codigo", p.codigo);
         resp.put("valorTotal", total);
         resp.put("desconto", descontoAplicado);
+        resp.put("cashbackUsado", resgate);
 
         if ("PIX".equals(forma)) {
             // Recebimento por subconta do lojista (novo) OU integração PIX legada (chave própria).
@@ -266,7 +283,24 @@ public class PublicController {
         }
         p.atualizadoEm = OffsetDateTime.now();
         pedidos.save(p);
+
+        // Só credita depois que o pedido está de pé (o PIX pode falhar e abortar tudo acima).
+        fidelidade.registrar(lojaId, clienteId, p.valorTotal, resgate);
+        resp.put("cashbackNovo", fidelidade.saldo(lojaId, clienteId));
         return resp;
+    }
+
+    /**
+     * Saldo de cashback de quem está no checkout. O telefone é a identificação do cliente no
+     * cardápio; devolve só o valor, nunca nome ou histórico.
+     */
+    @GetMapping("/loja/{lojaId}/cashback")
+    public Map<String, Object> cashback(@PathVariable Long lojaId, @RequestParam String telefone) {
+        lojaAtiva(lojaId);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("percentual", fidelidade.percentual(lojaId));
+        m.put("saldo", fidelidade.saldoPeloTelefone(lojaId, telefone));
+        return m;
     }
 
     /** Status público do pedido (para a tela de acompanhamento do QR PIX). */
