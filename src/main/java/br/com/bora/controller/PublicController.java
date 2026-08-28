@@ -244,8 +244,12 @@ public class PublicController {
         resp.put("desconto", descontoAplicado);
 
         if ("PIX".equals(forma)) {
-            IntegracaoCanal integ = integracaoPix(lojaId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Esta loja não aceita PIX online"));
+            // Recebimento por subconta do lojista (novo) OU integração PIX legada (chave própria).
+            boolean subconta = loja.asaasApiKey != null && !loja.asaasApiKey.isBlank();
+            IntegracaoCanal integ = integracaoPix(lojaId).orElse(null);
+            if (!subconta && integ == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Esta loja não aceita PIX online");
+            }
             if (cpf == null || cpf.replaceAll("\\D", "").length() < 11) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe um CPF válido para pagar com PIX");
             }
@@ -286,9 +290,17 @@ public class PublicController {
     public Map<String, String> pixWebhook(@PathVariable Long lojaId,
                                           @RequestHeader(value = "asaas-access-token", required = false) String token,
                                           @RequestBody Map<String, Object> body) {
-        IntegracaoCanal integ = integracoes.findByLojaIdAndCanal(lojaId, "PIX")
-                .filter(i -> token != null && token.equals(i.webhookToken))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token inválido"));
+        // Dois caminhos de recebimento convivem: a subconta white-label (token na própria loja)
+        // e a integração PIX legada (lojista colou a chave dele). Basta um dos dois autenticar.
+        Loja loja = lojas.findById(lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        IntegracaoCanal integ = integracoes.findByLojaIdAndCanal(lojaId, "PIX").orElse(null);
+        boolean viaSubconta = token != null && loja.asaasWebhookToken != null
+                && token.equals(loja.asaasWebhookToken);
+        boolean viaLegado = token != null && integ != null && token.equals(integ.webhookToken);
+        if (!viaSubconta && !viaLegado) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token inválido");
+        }
         String event = str(body.get("event"));
         @SuppressWarnings("unchecked")
         Map<String, Object> payment = (Map<String, Object>) body.get("payment");
@@ -299,8 +311,10 @@ public class PublicController {
                 p.atualizadoEm = OffsetDateTime.now();
                 pedidos.save(p);
             });
-            integ.ultimaSync = OffsetDateTime.now();
-            integracoes.save(integ);
+            if (integ != null) {
+                integ.ultimaSync = OffsetDateTime.now();
+                integracoes.save(integ);
+            }
         }
         return Map.of("received", "true");
     }

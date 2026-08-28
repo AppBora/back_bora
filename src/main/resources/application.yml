@@ -22,3 +22,7 @@ asaas:
   base-url: ${ASAAS_BASE_URL:https://sandbox.asaas.com/api/v3}
   api-key: ${ASAAS_API_KEY:}
   webhook-token: ${ASAAS_WEBHOOK_TOKEN:}
+  # Recebimento white-label (subconta + split): o PIX do cliente cai na conta do lojista.
+  url-publica: ${ASAAS_URL_PUBLICA:https://borahapp.com.br}
+  platform-wallet-id: ${ASAAS_PLATFORM_WALLET_ID:}
+  taxa-percentual: ${ASAAS_TAXA_PERCENTUAL:0}

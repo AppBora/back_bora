@@ -28,16 +28,19 @@ public class PlataformaController {
     private final AuthContext ctx;
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
     private final br.com.bora.repository.ConfigPlataformaRepository configs;
+    private final br.com.bora.service.ProvisionamentoService provisionamento;
 
     public PlataformaController(LojaRepository lojas, UsuarioRepository usuarios, PasswordEncoder encoder,
                                 AuthContext ctx, br.com.bora.repository.UsuarioLojaRepository vinculos,
-                                br.com.bora.repository.ConfigPlataformaRepository configs) {
+                                br.com.bora.repository.ConfigPlataformaRepository configs,
+                                br.com.bora.service.ProvisionamentoService provisionamento) {
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
         this.ctx = ctx;
         this.vinculos = vinculos;
         this.configs = configs;
+        this.provisionamento = provisionamento;
     }
 
     @GetMapping("/lojas")
@@ -81,6 +84,8 @@ public class PlataformaController {
         v.setUsuarioId(admin.getId());
         v.setLojaId(loja.getId());
         vinculos.save(v);
+
+        provisionamento.semear(loja.getId(), loja.getNome()); // loja nasce operável (defaults)
 
         return Map.of("lojaId", loja.getId(), "plano", loja.getPlano().name(), "adminEmail", email);
     }

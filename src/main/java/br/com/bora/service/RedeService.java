@@ -122,11 +122,20 @@ public class RedeService {
             cancTotal += canc;
         }
 
+        // Representatividade: quanto cada loja pesa no faturamento da rede (%)
+        for (Map<String, Object> m : porLoja) {
+            BigDecimal fat = (BigDecimal) m.get("faturamento");
+            BigDecimal rep = fatTotal.signum() == 0 ? BigDecimal.ZERO
+                    : fat.multiply(BigDecimal.valueOf(100)).divide(fatTotal, 2, RoundingMode.HALF_UP);
+            m.put("representatividade", rep);
+        }
+
         Map<String, Object> total = new LinkedHashMap<>();
         total.put("faturamento", fatTotal);
         total.put("pedidos", pedTotal);
         total.put("cancelados", cancTotal);
         total.put("ticketMedio", pedTotal > 0 ? fatTotal.divide(BigDecimal.valueOf(pedTotal), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO);
+        total.put("representatividade", new BigDecimal("100.00"));
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("inicio", inicio.toString());

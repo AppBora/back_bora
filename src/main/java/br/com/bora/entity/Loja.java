@@ -30,6 +30,35 @@ public class Loja {
     @Column(name = "preco_mensal")
     public java.math.BigDecimal precoMensal;
 
+    // ---- Recebimento via subconta Asaas (PIX do cliente cai direto na conta do lojista) ----
+    /** Id da subconta do lojista no Asaas (acc_...). */
+    @Column(name = "asaas_subconta_id")
+    public String asaasSubcontaId;
+
+    /** walletId da subconta — usado no split para direcionar o recebimento ao lojista. */
+    @Column(name = "asaas_wallet_id")
+    public String asaasWalletId;
+
+    /** API key da subconta (retornada uma única vez na criação) — usada para gerar as cobranças.
+     *  NUNCA serializar: é credencial de pagamento viva. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "asaas_api_key")
+    public String asaasApiKey;
+
+    /** Situação do recebimento: null/PENDENTE (falta KYC) · ATIVO · ERRO. */
+    @Column(name = "asaas_status")
+    public String asaasStatus;
+
+    /** Link de onboarding/KYC do Asaas (documentos + selfie) para o lojista concluir. */
+    @Column(name = "asaas_onboarding_url")
+    public String asaasOnboardingUrl;
+
+    /** Token que autentica o webhook de PIX registrado NA SUBCONTA do lojista.
+     *  Sem ele o Asaas não consegue confirmar o pagamento. NUNCA serializar. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "asaas_webhook_token")
+    public String asaasWebhookToken;
+
     /** Preço efetivo da assinatura desta loja. */
     public java.math.BigDecimal precoEfetivo() {
         return precoMensal != null ? precoMensal
