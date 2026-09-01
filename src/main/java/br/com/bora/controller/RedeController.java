@@ -32,4 +32,28 @@ public class RedeController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fim) {
         return rede.balancete(inicio, fim);
     }
+
+    /** Equipe da loja atual, com as lojas de cada pessoa. */
+    @GetMapping("/equipe")
+    public List<Map<String, Object>> equipe() {
+        return rede.equipe();
+    }
+
+    /** Lojas da mesma empresa — as opções válidas para vincular alguém. */
+    @GetMapping("/lojas-da-empresa")
+    public List<Map<String, Object>> lojasDaEmpresa() {
+        return rede.lojasDaEmpresa();
+    }
+
+    /** Dá a um usuário acesso a outra loja da mesma empresa (ex.: gerente que cobre duas unidades). */
+    @PostMapping("/usuarios/{usuarioId}/lojas")
+    public Map<String, Object> vincular(@PathVariable Long usuarioId, @RequestBody Map<String, Long> body) {
+        return rede.vincular(usuarioId, body == null ? null : body.get("lojaId"));
+    }
+
+    /** Remove o acesso — vale já no request seguinte, não só quando o token expirar. */
+    @DeleteMapping("/usuarios/{usuarioId}/lojas/{lojaId}")
+    public Map<String, Object> desvincular(@PathVariable Long usuarioId, @PathVariable Long lojaId) {
+        return rede.desvincular(usuarioId, lojaId);
+    }
 }

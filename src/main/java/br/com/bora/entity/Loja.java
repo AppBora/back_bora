@@ -13,6 +13,14 @@ public class Loja {
     public Long id;
     public String nome;
     public String documento;
+
+    /** Empresa dona da loja (mesmo CNPJ = mesma empresa). Fato societário, não controle de acesso. */
+    @Column(name = "empresa_id")
+    public Long empresaId;
+
+    /** Quando a loja entrou na plataforma. NULL nas lojas anteriores à V31 sem rastro conhecido. */
+    @Column(name = "criado_em")
+    public java.time.OffsetDateTime criadoEm = java.time.OffsetDateTime.now();
     public Boolean ativo = true;
 
     @Enumerated(EnumType.STRING)

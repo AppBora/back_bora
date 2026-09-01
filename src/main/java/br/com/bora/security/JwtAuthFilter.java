@@ -21,9 +21,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtService jwt;
     private final br.com.bora.repository.UsuarioRepository usuarios;
     private final br.com.bora.repository.LojaRepository lojas;
+    private final br.com.bora.repository.UsuarioLojaRepository vinculos;
 
     public JwtAuthFilter(JwtService jwt, br.com.bora.repository.UsuarioRepository usuarios,
-                         br.com.bora.repository.LojaRepository lojas) {
+                         br.com.bora.repository.LojaRepository lojas,
+                         br.com.bora.repository.UsuarioLojaRepository vinculos) {
+        this.vinculos = vinculos;
         this.jwt = jwt;
         this.usuarios = usuarios;
         this.lojas = lojas;
@@ -43,9 +46,19 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 // viaja assinado no token, então sem esta checagem o token já emitido continuaria
                 // valendo por até 24h depois de o cliente ser cortado.
                 if (ativo && loja != null) {
-                    ativo = lojas.findById(loja.longValue())
+                    Long lojaId = loja.longValue();
+                    ativo = lojas.findById(lojaId)
                             .map(l -> !l.bloqueadaPelaPlataforma())
                             .orElse(false);
+                    // Token emitido para uma loja que não é a principal do usuário só vale enquanto
+                    // o vínculo existir: sem isto, quem perde o acesso a uma loja da rede continua
+                    // entrando nela até o token expirar (24h). Consulta por chave primária.
+                    if (ativo) {
+                        Long principal = usuarios.findById(userId).map(u -> u.getLojaId()).orElse(null);
+                        if (!lojaId.equals(principal)) {
+                            ativo = vinculos.existsByUsuarioIdAndLojaId(userId, lojaId);
+                        }
+                    }
                 }
                 if (ativo) {
                     BoraPrincipal principal = new BoraPrincipal(

@@ -30,6 +30,9 @@ public class PlataformaController {
     private final br.com.bora.repository.ConfigPlataformaRepository configs;
     private final br.com.bora.service.ProvisionamentoService provisionamento;
     private final br.com.bora.service.AssinaturaService assinaturas;
+    private final br.com.bora.repository.AssinaturaRepository assinaturaRepo;
+    private final br.com.bora.repository.PedidoRepository pedidos;
+    private final br.com.bora.service.EmpresaService empresas;
     private final String splitPadrao;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
@@ -39,9 +42,15 @@ public class PlataformaController {
                                 br.com.bora.repository.ConfigPlataformaRepository configs,
                                 br.com.bora.service.ProvisionamentoService provisionamento,
                                 br.com.bora.service.AssinaturaService assinaturas,
+                                br.com.bora.repository.AssinaturaRepository assinaturaRepo,
+                                br.com.bora.repository.PedidoRepository pedidos,
+                                br.com.bora.service.EmpresaService empresas,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
         this.splitPadrao = splitPadrao;
         this.assinaturas = assinaturas;
+        this.assinaturaRepo = assinaturaRepo;
+        this.pedidos = pedidos;
+        this.empresas = empresas;
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
@@ -57,6 +66,59 @@ public class PlataformaController {
         ctx.requireAdminBora();
         List<Loja> todas = lojas.findAll();
         return incluirArquivadas ? todas : todas.stream().filter(l -> !l.arquivada()).toList();
+    }
+
+    /**
+     * Painel de clientes: o que o administrador da plataforma precisa para cobrar e dar suporte.
+     * Três consultas agregadas em vez de uma por loja — a lista cresce com a base de clientes.
+     */
+    @GetMapping("/clientes")
+    public List<br.com.bora.dto.ClienteView> clientes(@RequestParam(defaultValue = "false") boolean incluirArquivadas) {
+        ctx.requireAdminBora();
+        Map<Long, String> statusAssinatura = new java.util.HashMap<>();
+        assinaturaRepo.findAll().forEach(a ->
+                statusAssinatura.put(a.getLojaId(), a.getStatus() == null ? null : a.getStatus().name()));
+
+        Map<Long, Long> usuariosAtivos = new java.util.HashMap<>();
+        usuarios.ativosPorLoja().forEach(r -> usuariosAtivos.put((Long) r[0], (Long) r[1]));
+
+        Map<Long, java.time.OffsetDateTime> ultimoPedido = new java.util.HashMap<>();
+        pedidos.ultimoPedidoPorLoja().forEach(r ->
+                ultimoPedido.put((Long) r[0], (java.time.OffsetDateTime) r[1]));
+
+        return lojas.findAll().stream()
+                .filter(l -> incluirArquivadas || !l.arquivada())
+                .map(l -> new br.com.bora.dto.ClienteView(
+                        l.id,
+                        l.nome,
+                        l.documento,
+                        l.plano == null ? null : l.plano.name(),
+                        l.precoEfetivo(),
+                        l.precoMensal != null,
+                        l.moduloIa,
+                        l.splitPercentual,
+                        situacaoDe(l),
+                        motivoVigente(l),
+                        statusAssinatura.get(l.id),
+                        usuariosAtivos.getOrDefault(l.id, 0L),
+                        (l.plano == null ? Plano.UNICO : l.plano).maxUsuarios,
+                        l.criadoEm,
+                        ultimoPedido.get(l.id)))
+                .toList();
+    }
+
+    /** Motivo só enquanto o corte está valendo — depois de reativar, vira histórico e confunde a tela. */
+    private String motivoVigente(Loja l) {
+        if (l.arquivada()) return l.motivoExclusao;
+        return Boolean.TRUE.equals(l.suspensaPelaPlataforma) ? l.motivoSuspensao : null;
+    }
+
+    /** "ativo" é status de pagamento; "suspensa" é decisão da plataforma. O painel não pode confundir. */
+    private String situacaoDe(Loja l) {
+        if (l.arquivada()) return "ARQUIVADA";
+        if (Boolean.TRUE.equals(l.suspensaPelaPlataforma)) return "SUSPENSA";
+        if (Boolean.FALSE.equals(l.getAtivo())) return "SEM_PAGAMENTO";
+        return "ATIVA";
     }
 
     /**
@@ -176,6 +238,8 @@ public class PlataformaController {
         loja.setNome(req.nomeLoja());
         loja.setDocumento(req.documento());
         loja.setPlano(parsePlano(req.plano()));
+        // Mesmo CNPJ = mesma empresa: a segunda loja do cliente entra na rede dele automaticamente.
+        loja.empresaId = empresas.paraDocumento(req.documento(), req.nomeLoja()).getId();
         loja = lojas.save(loja);
 
         Usuario admin = new Usuario();

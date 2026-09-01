@@ -8,4 +8,7 @@ import java.util.List;
 public interface UsuarioLojaRepository extends JpaRepository<UsuarioLoja, UsuarioLoja.Pk> {
     List<UsuarioLoja> findByUsuarioId(Long usuarioId);
     boolean existsByUsuarioIdAndLojaId(Long usuarioId, Long lojaId);
+    List<UsuarioLoja> findByLojaId(Long lojaId);
+    long countByUsuarioId(Long usuarioId);
+    void deleteByUsuarioIdAndLojaId(Long usuarioId, Long lojaId);
 }

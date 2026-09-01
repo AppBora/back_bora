@@ -33,10 +33,13 @@ public class SignupController {
     private final UsuarioLojaRepository vinculos;
     private final PasswordEncoder encoder;
     private final br.com.bora.service.ProvisionamentoService provisionamento;
+    private final br.com.bora.service.EmpresaService empresas;
 
     public SignupController(LojaRepository lojas, UsuarioRepository usuarios,
                             UsuarioLojaRepository vinculos, PasswordEncoder encoder,
-                            br.com.bora.service.ProvisionamentoService provisionamento) {
+                            br.com.bora.service.ProvisionamentoService provisionamento,
+                            br.com.bora.service.EmpresaService empresas) {
+        this.empresas = empresas;
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.vinculos = vinculos;
@@ -107,6 +110,7 @@ public class SignupController {
         loja.setNome(req.nomeLoja().trim());
         loja.setDocumento(req.documento());
         loja.setPlano(Plano.UNICO); // plano único: R$ 299/mês por loja
+        loja.empresaId = empresas.paraDocumento(req.documento(), req.nomeLoja()).getId();
         loja = lojas.save(loja);
         provisionamento.semear(loja.getId(), loja.getNome()); // nasce operável (defaults)
         return loja;

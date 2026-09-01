@@ -12,4 +12,8 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
     long countByLojaId(Long lojaId);
     long countByLojaIdAndAtivoTrue(Long lojaId);
     boolean existsByPapel(Papel papel);
+
+    /** Usuários ativos por loja, para o painel de clientes (x/15 do plano). */
+    @org.springframework.data.jpa.repository.Query("select u.lojaId, count(u) from Usuario u where u.ativo = true and u.lojaId is not null group by u.lojaId")
+    List<Object[]> ativosPorLoja();
 }

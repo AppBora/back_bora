@@ -35,9 +35,11 @@ public class RedeService {
     private final PedidoRepository pedidos;
     private final JwtService jwt;
     private final AuthContext ctx;
+    private final EmpresaService empresas;
 
     public RedeService(UsuarioLojaRepository vinculos, UsuarioRepository usuarios, LojaRepository lojas,
-                       PedidoRepository pedidos, JwtService jwt, AuthContext ctx) {
+                       PedidoRepository pedidos, JwtService jwt, AuthContext ctx, EmpresaService empresas) {
+        this.empresas = empresas;
         this.vinculos = vinculos;
         this.usuarios = usuarios;
         this.lojas = lojas;
@@ -148,5 +150,107 @@ public class RedeService {
         out.put("lojas", porLoja);
         out.put("total", total);
         return out;
+    }
+
+    // ---- Equipe da rede: um usuário (ex.: gerente) atendendo mais de uma loja da mesma empresa ----
+
+    /** Usuários da loja atual e as lojas de cada um — base da tela de equipe da rede. */
+    public List<Map<String, Object>> equipe() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
+        Long lojaAtual = ctx.lojaId();
+        List<Map<String, Object>> saida = new ArrayList<>();
+        for (UsuarioLoja v : vinculos.findByLojaId(lojaAtual)) {
+            usuarios.findById(v.getUsuarioId()).ifPresent(u -> {
+                List<Map<String, Object>> dele = new ArrayList<>();
+                for (UsuarioLoja x : vinculos.findByUsuarioId(u.getId())) {
+                    lojas.findById(x.getLojaId()).ifPresent(l -> dele.add(Map.of(
+                            "id", l.id, "nome", l.nome == null ? "Loja" : l.nome,
+                            "principal", l.id.equals(u.getLojaId()))));
+                }
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", u.getId());
+                m.put("nome", u.getNome());
+                m.put("email", u.getEmail());
+                m.put("papel", u.getPapel().name());
+                m.put("ativo", u.getAtivo());
+                m.put("lojas", dele);
+                saida.add(m);
+            });
+        }
+        return saida;
+    }
+
+    /** Lojas da mesma empresa que a atual — as únicas às quais se pode vincular alguém. */
+    public List<Map<String, Object>> lojasDaEmpresa() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        Long atual = ctx.lojaId();
+        List<Map<String, Object>> saida = new ArrayList<>();
+        for (Loja l : lojas.findAll()) {
+            if (l.arquivada() || !empresas.mesmaEmpresa(atual, l.id)) continue;
+            saida.add(Map.of("id", l.id, "nome", l.nome == null ? "Loja" : l.nome,
+                    "atual", l.id.equals(atual)));
+        }
+        return saida;
+    }
+
+    /**
+     * Dá a um usuário acesso a outra loja DA MESMA EMPRESA. É o ponto onde o isolamento pode furar:
+     * sem a checagem de empresa, um administrador de loja vincularia gente sua à loja de outro
+     * cliente só sabendo o id. Por isso a empresa é a fonte de verdade, não o vínculo.
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public Map<String, Object> vincular(Long usuarioId, Long lojaId) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        Usuario u = usuarioDaMinhaEmpresa(usuarioId);
+        Loja alvo = lojas.findById(lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        if (!empresas.mesmaEmpresa(ctx.lojaId(), lojaId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Essa loja é de outra empresa — só dá para vincular às lojas da sua rede");
+        }
+        if (alvo.bloqueadaPelaPlataforma()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Loja desativada pela plataforma");
+        }
+        if (vinculos.existsByUsuarioIdAndLojaId(usuarioId, lojaId)) {
+            return Map.of("usuarioId", usuarioId, "lojaId", lojaId, "criado", false);
+        }
+        UsuarioLoja v = new UsuarioLoja();
+        v.setUsuarioId(usuarioId);
+        v.setLojaId(lojaId);
+        vinculos.save(v);
+        return Map.of("usuarioId", usuarioId, "lojaId", lojaId, "criado", true,
+                "usuario", u.getNome(), "loja", alvo.nome == null ? "" : alvo.nome);
+    }
+
+    /** Tira o acesso do usuário a uma loja. O efeito é imediato: o filtro revalida o vínculo. */
+    @org.springframework.transaction.annotation.Transactional
+    public Map<String, Object> desvincular(Long usuarioId, Long lojaId) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        Usuario u = usuarioDaMinhaEmpresa(usuarioId);
+        if (!empresas.mesmaEmpresa(ctx.lojaId(), lojaId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Loja de outra empresa");
+        }
+        if (lojaId.equals(u.getLojaId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Esta é a loja principal do usuário — ele ficaria sem casa. Troque a principal antes.");
+        }
+        if (vinculos.countByUsuarioId(usuarioId) <= 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "É o último acesso do usuário");
+        }
+        vinculos.deleteByUsuarioIdAndLojaId(usuarioId, lojaId);
+        return Map.of("usuarioId", usuarioId, "lojaId", lojaId, "removido", true);
+    }
+
+    /** O usuário alvo tem que ser da minha empresa — senão eu estaria mexendo em gente de outro cliente. */
+    private Usuario usuarioDaMinhaEmpresa(Long usuarioId) {
+        Usuario u = usuarios.findById(usuarioId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuário não encontrado"));
+        if (u.getPapel() == br.com.bora.entity.Papel.ADMINISTRADOR_BORA) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Administrador da plataforma não tem loja");
+        }
+        if (u.getLojaId() == null || !empresas.mesmaEmpresa(ctx.lojaId(), u.getLojaId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuário não encontrado");
+        }
+        return u;
     }
 }
