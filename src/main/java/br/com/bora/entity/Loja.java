@@ -64,6 +64,40 @@ public class Loja {
     @Column(name = "asaas_webhook_token")
     public String asaasWebhookToken;
 
+    // ---- Decisão do ADMINISTRADOR_BORA sobre o cliente (separada de "ativo", que é do webhook) ----
+    /** Suspensão administrativa. Fica em campo próprio porque o webhook do Asaas escreve em
+     *  "ativo": sem isso, o pagamento seguinte reativaria a loja e desfaria a decisão do admin. */
+    @Column(name = "suspensa_pela_plataforma")
+    public Boolean suspensaPelaPlataforma = false;
+
+    @Column(name = "suspensa_em")
+    public java.time.OffsetDateTime suspensaEm;
+
+    @Column(name = "motivo_suspensao")
+    public String motivoSuspensao;
+
+    /** Arquivamento ("excluir cliente"): a loja some das listagens e do acesso, os dados ficam. */
+    @Column(name = "excluida_em")
+    public java.time.OffsetDateTime excluidaEm;
+
+    /** Quem arquivou (usuarioId do administrador da plataforma) — auditoria mínima. */
+    @Column(name = "excluida_por")
+    public Long excluidaPor;
+
+    @Column(name = "motivo_exclusao")
+    public String motivoExclusao;
+
+    /** Arquivada = "excluída" pelo administrador da plataforma (soft delete). */
+    public boolean arquivada() {
+        return excluidaEm != null;
+    }
+
+    /** Bloqueia login e cada request da equipe desta loja. Não confundir com "ativo": aquele é o
+     *  status de pagamento (fecha só o cardápio público); este é a decisão da plataforma. */
+    public boolean bloqueadaPelaPlataforma() {
+        return Boolean.TRUE.equals(suspensaPelaPlataforma) || arquivada();
+    }
+
     /** Preço efetivo da assinatura desta loja. */
     public java.math.BigDecimal precoEfetivo() {
         return precoMensal != null ? precoMensal

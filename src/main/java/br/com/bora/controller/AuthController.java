@@ -21,9 +21,11 @@ public class AuthController {
     private final JwtService jwt;
     private final AuthContext ctx;
     private final br.com.bora.service.RedeService rede;
+    private final br.com.bora.repository.LojaRepository lojas;
 
     public AuthController(UsuarioRepository repo, PasswordEncoder encoder, JwtService jwt, AuthContext ctx,
-                          br.com.bora.service.RedeService rede) {
+                          br.com.bora.service.RedeService rede, br.com.bora.repository.LojaRepository lojas) {
+        this.lojas = lojas;
         this.repo = repo;
         this.encoder = encoder;
         this.jwt = jwt;
@@ -38,6 +40,17 @@ public class AuthController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais inválidas"));
         if (!encoder.matches(req.senha(), u.getSenhaHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais inválidas");
+        }
+        // Cliente suspenso ou arquivado pela plataforma não entra no painel. Mensagem separada da
+        // de credencial: a senha está certa, quem está bloqueado é a loja — o suporte precisa
+        // conseguir distinguir os dois casos. O ADMINISTRADOR_BORA não tem loja e passa direto.
+        if (u.getLojaId() != null) {
+            lojas.findById(u.getLojaId())
+                    .filter(br.com.bora.entity.Loja::bloqueadaPelaPlataforma)
+                    .ifPresent(l -> {
+                        throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                                "Loja desativada pela plataforma. Fale com o suporte do BoraHapp.");
+                    });
         }
         return new LoginResponse(jwt.gerar(u), u.getNome(), u.getPapel().name(), u.getLojaId());
     }

@@ -103,8 +103,43 @@ public class AssinaturaService {
 
     private void ativarLoja(Long lojaId, boolean ativo) {
         lojas.findById(lojaId).ifPresent(l -> {
+            // Pagamento não levanta suspensão administrativa: quem suspendeu foi a plataforma,
+            // e só a plataforma reativa. Sem esta guarda, a mensalidade seguinte desfaria a decisão.
+            if (ativo && l.bloqueadaPelaPlataforma()) return;
             l.setAtivo(ativo);
             lojas.save(l);
         });
+    }
+
+    /**
+     * Cancela a assinatura da loja no Asaas por decisão da plataforma (suspender/arquivar cliente).
+     * Não lança quando a cobrança não está configurada ou a assinatura não existe — o cancelamento
+     * do cliente aqui não pode ficar refém do gateway; devolve o que aconteceu para o admin ver.
+     */
+    @Transactional
+    public String cancelarPorAdministracao(Long lojaId) {
+        Assinatura a = repo.findByLojaId(lojaId).orElse(null);
+        if (a == null) return "sem assinatura";
+        if (a.getStatus() == StatusAssinatura.CANCELADA) return "assinatura já cancelada";
+        String sub = a.getAsaasSubscriptionId();
+        String resultado;
+        if (sub == null || sub.isBlank()) {
+            resultado = "assinatura sem id no Asaas";
+        } else if (!asaas.configurado()) {
+            resultado = "ATENÇÃO: cobrança não configurada, cancele no Asaas manualmente";
+        } else {
+            try {
+                resultado = asaas.cancelarAssinatura(sub)
+                        ? "assinatura cancelada no Asaas"
+                        : "assinatura não encontrada no Asaas";
+            } catch (Exception e) {
+                return "ATENÇÃO: falha ao cancelar no Asaas (" + e.getMessage()
+                        + ") — cancele manualmente para o cliente parar de ser cobrado";
+            }
+        }
+        a.setStatus(StatusAssinatura.CANCELADA);
+        a.setAtualizadoEm(OffsetDateTime.now());
+        repo.save(a);
+        return resultado;
     }
 }

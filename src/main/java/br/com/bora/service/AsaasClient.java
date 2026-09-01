@@ -68,6 +68,26 @@ public class AsaasClient {
                 .retrieve().body(Map.class);
     }
 
+    /**
+     * Cancela a assinatura no Asaas. Chamado quando a plataforma suspende ou arquiva um cliente —
+     * sem isso a loja sai do ar aqui e o lojista continua sendo cobrado lá.
+     * Devolve false quando a assinatura já não existe no Asaas (404), para o cancelamento do
+     * cliente não travar por causa de um id órfão.
+     */
+    @SuppressWarnings("unchecked")
+    public boolean cancelarAssinatura(String subscriptionId) {
+        exigirConfig();
+        if (subscriptionId == null || subscriptionId.isBlank()) return false;
+        try {
+            Map<String, Object> resp = http.delete().uri("/subscriptions/" + subscriptionId)
+                    .header("access_token", apiKey)
+                    .retrieve().body(Map.class);
+            return resp == null || !Boolean.FALSE.equals(resp.get("deleted"));
+        } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
+            return false;
+        }
+    }
+
     /** Atualiza o valor/descrição de uma assinatura existente (usado ao trocar de plano). */
     @SuppressWarnings("unchecked")
     public Map<String, Object> atualizarAssinatura(String subscriptionId, double valor, String descricao) {

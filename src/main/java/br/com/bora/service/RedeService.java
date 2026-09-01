@@ -72,6 +72,11 @@ public class RedeService {
         }
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        // Trocar de loja é emissão de token novo: não pode ser a porta dos fundos para entrar
+        // numa loja que a plataforma suspendeu ou arquivou.
+        if (loja.bloqueadaPelaPlataforma()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Loja desativada pela plataforma");
+        }
         Usuario u = usuarios.findById(userId)
                 .filter(Usuario::getAtivo)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Usuário inválido"));

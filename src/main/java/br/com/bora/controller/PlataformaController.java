@@ -29,14 +29,19 @@ public class PlataformaController {
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
     private final br.com.bora.repository.ConfigPlataformaRepository configs;
     private final br.com.bora.service.ProvisionamentoService provisionamento;
+    private final br.com.bora.service.AssinaturaService assinaturas;
     private final String splitPadrao;
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
 
     public PlataformaController(LojaRepository lojas, UsuarioRepository usuarios, PasswordEncoder encoder,
                                 AuthContext ctx, br.com.bora.repository.UsuarioLojaRepository vinculos,
                                 br.com.bora.repository.ConfigPlataformaRepository configs,
                                 br.com.bora.service.ProvisionamentoService provisionamento,
+                                br.com.bora.service.AssinaturaService assinaturas,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
         this.splitPadrao = splitPadrao;
+        this.assinaturas = assinaturas;
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
@@ -46,10 +51,108 @@ public class PlataformaController {
         this.provisionamento = provisionamento;
     }
 
+    /** Lista os clientes da plataforma. As arquivadas ficam fora por padrão (a "lixeira" é opt-in). */
     @GetMapping("/lojas")
-    public List<Loja> listarLojas() {
+    public List<Loja> listarLojas(@RequestParam(defaultValue = "false") boolean incluirArquivadas) {
         ctx.requireAdminBora();
-        return lojas.findAll();
+        List<Loja> todas = lojas.findAll();
+        return incluirArquivadas ? todas : todas.stream().filter(l -> !l.arquivada()).toList();
+    }
+
+    /**
+     * Suspende ou reativa um cliente. Suspender corta o acesso da equipe (login e requests),
+     * fecha o cardápio público e cancela a assinatura no Asaas — senão o cliente sairia do ar
+     * aqui e continuaria sendo cobrado lá.
+     */
+    @PutMapping("/lojas/{lojaId}/ativo")
+    @Transactional
+    public Map<String, Object> definirAtivo(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
+        ctx.requireAdminBora();
+        Loja loja = exigirLoja(lojaId);
+        if (loja.arquivada()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Loja arquivada — restaure antes de reativar");
+        }
+        boolean ativo = !Boolean.FALSE.equals(body == null ? null : body.get("ativo"));
+        String motivo = body == null ? null : str(body.get("motivo"));
+
+        Map<String, Object> resp = new java.util.LinkedHashMap<>();
+        if (ativo) {
+            loja.suspensaPelaPlataforma = false;
+            loja.suspensaEm = null;
+            loja.motivoSuspensao = null;
+            loja.setAtivo(true);
+        } else {
+            loja.suspensaPelaPlataforma = true;
+            loja.suspensaEm = java.time.OffsetDateTime.now();
+            loja.motivoSuspensao = motivo;
+            loja.setAtivo(false);
+            resp.put("assinatura", assinaturas.cancelarPorAdministracao(lojaId));
+        }
+        lojas.save(loja);
+        log.warn("AUDITORIA plataforma: usuario {} {} a loja {} ({}). Motivo: {}",
+                ctx.atual().userId(), ativo ? "REATIVOU" : "SUSPENDEU", lojaId, loja.getNome(), motivo);
+        resp.put("lojaId", lojaId);
+        resp.put("ativo", ativo);
+        resp.put("suspensa", loja.suspensaPelaPlataforma);
+        return resp;
+    }
+
+    /**
+     * Arquiva o cliente ("excluir"). Nunca apaga: pedidos, assinatura e acertos de entregador são
+     * histórico financeiro, e a maioria das tabelas com loja_id não tem chave estrangeira — um
+     * DELETE deixaria dado órfão em silêncio. A loja some da lista e perde o acesso.
+     */
+    @PutMapping("/lojas/{lojaId}/arquivar")
+    @Transactional
+    public Map<String, Object> arquivar(@PathVariable Long lojaId, @RequestBody(required = false) Map<String, Object> body) {
+        ctx.requireAdminBora();
+        Loja loja = exigirLoja(lojaId);
+        if (loja.arquivada()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Loja já está arquivada");
+        }
+        String motivo = body == null ? null : str(body.get("motivo"));
+        String assinatura = assinaturas.cancelarPorAdministracao(lojaId);
+
+        loja.excluidaEm = java.time.OffsetDateTime.now();
+        loja.excluidaPor = ctx.atual().userId();
+        loja.motivoExclusao = motivo;
+        loja.suspensaPelaPlataforma = true;
+        loja.suspensaEm = loja.suspensaEm == null ? loja.excluidaEm : loja.suspensaEm;
+        loja.setAtivo(false);
+        lojas.save(loja);
+        log.warn("AUDITORIA plataforma: usuario {} ARQUIVOU a loja {} ({}). Motivo: {}. Assinatura: {}",
+                loja.excluidaPor, lojaId, loja.getNome(), motivo, assinatura);
+        return Map.of("lojaId", lojaId, "arquivadaEm", loja.excluidaEm.toString(), "assinatura", assinatura);
+    }
+
+    /** Tira o cliente da lixeira. Continua suspenso: reativar é uma segunda decisão, explícita. */
+    @PutMapping("/lojas/{lojaId}/restaurar")
+    @Transactional
+    public Map<String, Object> restaurar(@PathVariable Long lojaId) {
+        ctx.requireAdminBora();
+        Loja loja = exigirLoja(lojaId);
+        if (!loja.arquivada()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Loja não está arquivada");
+        }
+        loja.excluidaEm = null;
+        loja.excluidaPor = null;
+        loja.motivoExclusao = null;
+        lojas.save(loja);
+        log.warn("AUDITORIA plataforma: usuario {} RESTAUROU a loja {} ({}) — segue suspensa",
+                ctx.atual().userId(), lojaId, loja.getNome());
+        return Map.of("lojaId", lojaId, "arquivada", false, "suspensa", true,
+                "aviso", "A loja continua suspensa e sem assinatura ativa. Reative e peça uma nova assinatura.");
+    }
+
+    private Loja exigirLoja(Long lojaId) {
+        return lojas.findById(lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+    }
+
+    private String str(Object o) {
+        String v = o == null ? null : String.valueOf(o).trim();
+        return v == null || v.isBlank() ? null : v;
     }
 
     /** Provisiona uma nova loja + seu administrador (sem SQL manual). */
