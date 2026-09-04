@@ -34,6 +34,7 @@ public class PlataformaController {
     private final br.com.bora.repository.PedidoRepository pedidos;
     private final br.com.bora.service.EmpresaService empresas;
     private final br.com.bora.security.JwtService jwt;
+    private final br.com.bora.repository.ConfiguracaoLojaRepository configLoja;
     private final String splitPadrao;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
@@ -47,6 +48,7 @@ public class PlataformaController {
                                 br.com.bora.repository.PedidoRepository pedidos,
                                 br.com.bora.service.EmpresaService empresas,
                                 br.com.bora.security.JwtService jwt,
+                                br.com.bora.repository.ConfiguracaoLojaRepository configLoja,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
         this.splitPadrao = splitPadrao;
         this.assinaturas = assinaturas;
@@ -54,6 +56,7 @@ public class PlataformaController {
         this.pedidos = pedidos;
         this.empresas = empresas;
         this.jwt = jwt;
+        this.configLoja = configLoja;
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
@@ -108,6 +111,32 @@ public class PlataformaController {
                         l.criadoEm,
                         ultimoPedido.get(l.id)))
                 .toList();
+    }
+
+    /**
+     * Renomeia a loja. É o nome que o cliente final vê no cardápio público e no app instalável —
+     * o "nome de exibição" do white-label muda só o cabeçalho do painel, não o que o comprador lê.
+     * Por isso os dois são atualizados juntos aqui: manter nomes diferentes confunde o lojista.
+     */
+    @PutMapping("/lojas/{lojaId}/nome")
+    @Transactional
+    public Map<String, Object> renomear(@PathVariable Long lojaId, @RequestBody Map<String, String> body) {
+        ctx.requireAdminBora();
+        Loja loja = exigirLoja(lojaId);
+        String novo = body == null ? null : str(body.get("nome"));
+        if (novo == null || novo.length() < 2) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o novo nome da loja");
+        }
+        String antes = loja.getNome();
+        loja.setNome(novo);
+        lojas.save(loja);
+        configLoja.findByLojaId(lojaId).ifPresent(c -> {
+            c.nomeExibicao = novo;
+            configLoja.save(c);
+        });
+        log.warn("AUDITORIA plataforma: usuario {} RENOMEOU a loja {} de \"{}\" para \"{}\"",
+                ctx.atual().userId(), lojaId, antes, novo);
+        return Map.of("lojaId", lojaId, "nome", novo, "nomeAnterior", antes == null ? "" : antes);
     }
 
     /**
