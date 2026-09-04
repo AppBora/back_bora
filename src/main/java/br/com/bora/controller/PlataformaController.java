@@ -33,6 +33,7 @@ public class PlataformaController {
     private final br.com.bora.repository.AssinaturaRepository assinaturaRepo;
     private final br.com.bora.repository.PedidoRepository pedidos;
     private final br.com.bora.service.EmpresaService empresas;
+    private final br.com.bora.security.JwtService jwt;
     private final String splitPadrao;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
@@ -45,12 +46,14 @@ public class PlataformaController {
                                 br.com.bora.repository.AssinaturaRepository assinaturaRepo,
                                 br.com.bora.repository.PedidoRepository pedidos,
                                 br.com.bora.service.EmpresaService empresas,
+                                br.com.bora.security.JwtService jwt,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
         this.splitPadrao = splitPadrao;
         this.assinaturas = assinaturas;
         this.assinaturaRepo = assinaturaRepo;
         this.pedidos = pedidos;
         this.empresas = empresas;
+        this.jwt = jwt;
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.encoder = encoder;
@@ -105,6 +108,31 @@ public class PlataformaController {
                         l.criadoEm,
                         ultimoPedido.get(l.id)))
                 .toList();
+    }
+
+    /**
+     * Acesso de suporte: devolve ao ADMINISTRADOR_BORA um token no contexto da loja, para ele
+     * configurar o cliente (cardápio, taxas, horário, marca) sem pedir a senha do lojista.
+     *
+     * <p>Existe porque o cadastro das lojas é feito pela plataforma: sem isto, operar a loja de um
+     * cliente exigiria saber a senha dele — e ela deixa de valer assim que o lojista a troca.
+     * O papel continua ADMINISTRADOR_BORA no token; o que muda é o contexto de loja.</p>
+     */
+    @PostMapping("/lojas/{lojaId}/acessar")
+    public Map<String, Object> acessarLoja(@PathVariable Long lojaId) {
+        ctx.requireAdminBora();
+        Loja loja = exigirLoja(lojaId);
+        Usuario eu = usuarios.findById(ctx.atual().userId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Sessão inválida"));
+        log.warn("AUDITORIA plataforma: usuario {} ({}) ENTROU na loja {} ({}) por acesso de suporte",
+                eu.getId(), eu.getEmail(), lojaId, loja.getNome());
+        return Map.of(
+                "token", jwt.gerar(eu, lojaId),
+                "nome", eu.getNome(),
+                "papel", eu.getPapel().name(),
+                "lojaId", lojaId,
+                "lojaNome", loja.getNome() == null ? "" : loja.getNome(),
+                "aviso", "Você está operando como suporte dentro da loja. Saia para voltar à plataforma.");
     }
 
     /** Motivo só enquanto o corte está valendo — depois de reativar, vira histórico e confunde a tela. */

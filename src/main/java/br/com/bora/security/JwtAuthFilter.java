@@ -45,7 +45,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 // Suspensão/arquivamento pela plataforma vale a partir do request seguinte: o lojaId
                 // viaja assinado no token, então sem esta checagem o token já emitido continuaria
                 // valendo por até 24h depois de o cliente ser cortado.
-                if (ativo && loja != null) {
+                // O administrador da plataforma entra em qualquer loja pelo acesso de suporte: não
+                // tem vínculo com nenhuma, e precisa alcançar inclusive a loja suspensa para
+                // arrumá-la. As duas checagens abaixo valem para os usuários de loja.
+                boolean daPlataforma = "ADMINISTRADOR_BORA".equals(c.get("papel", String.class));
+                if (ativo && loja != null && !daPlataforma) {
                     Long lojaId = loja.longValue();
                     ativo = lojas.findById(lojaId)
                             .map(l -> !l.bloqueadaPelaPlataforma())
