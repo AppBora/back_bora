@@ -61,18 +61,37 @@ public class OpenDeliveryClient implements MarketplaceClient {
 
     @Override
     public boolean configurado() {
-        return clientId != null && !clientId.isBlank() && clientSecret != null && !clientSecret.isBlank();
+        return preenchida(clientId, clientSecret);
+    }
+
+    /**
+     * A loja pode entrar com a credencial dela (o 99 oferece "integração de autoatendimento" ao
+     * lojista) enquanto o credenciamento da plataforma como integradora está em análise.
+     * A da loja tem precedência; a da plataforma é o padrão quando a loja não tem a sua.
+     */
+    @Override
+    public boolean configurado(IntegracaoCanal i) {
+        return credencialDaLoja(i) || configurado();
+    }
+
+    private boolean credencialDaLoja(IntegracaoCanal i) {
+        return i != null && preenchida(i.clientId, i.clientSecret);
+    }
+
+    private static boolean preenchida(String id, String secret) {
+        return id != null && !id.isBlank() && secret != null && !secret.isBlank();
     }
 
     private RestClient autenticado(IntegracaoCanal i) {
         return http.client(baseUrl, tokenValido(i));
     }
 
-    private void exigirConfigurado() {
-        if (!configurado()) {
+    private void exigirConfigurado(IntegracaoCanal i) {
+        if (!configurado(i)) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Credenciais Open Delivery não configuradas na plataforma. "
-                            + "Defina BORA_OPENDELIVERY_CLIENT_ID e BORA_OPENDELIVERY_CLIENT_SECRET.");
+                    "Sem credencial para conectar na 99Food. Informe o Client ID e o Client Secret "
+                            + "do aplicativo da loja, ou aguarde o credenciamento da plataforma "
+                            + "(BORA_OPENDELIVERY_CLIENT_ID / _SECRET).");
         }
     }
 
@@ -80,7 +99,7 @@ public class OpenDeliveryClient implements MarketplaceClient {
 
     @Override
     public Map<String, Object> iniciarVinculo(IntegracaoCanal i) {
-        exigirConfigurado();
+        exigirConfigurado(i);
         if (i.merchantId == null || i.merchantId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Informe o merchantId da loja na 99Food antes de conectar.");
@@ -90,7 +109,8 @@ public class OpenDeliveryClient implements MarketplaceClient {
         i.ativo = true;
         i.ultimoErro = null;
         repo.save(i);
-        log.info("Open Delivery: loja {} conectada (merchant {})", i.lojaId, i.merchantId);
+        log.info("Open Delivery: loja {} conectada (merchant {}, credencial {})",
+                i.lojaId, i.merchantId, credencialDaLoja(i) ? "da própria loja" : "da plataforma");
         return Map.of(
                 "conectado", true,
                 "instrucao", "Conexão validada. Os pedidos passam a chegar sozinhos em até 30 segundos.");
@@ -124,11 +144,12 @@ public class OpenDeliveryClient implements MarketplaceClient {
     }
 
     private String autenticar(IntegracaoCanal i) {
-        exigirConfigurado();
+        exigirConfigurado(i);
+        boolean daLoja = credencialDaLoja(i);
         Map<String, Object> corpo = new LinkedHashMap<>();
         corpo.put("grantType", "client_credentials");
-        corpo.put("clientId", clientId);
-        corpo.put("clientSecret", clientSecret);
+        corpo.put("clientId", daLoja ? i.clientId : clientId);
+        corpo.put("clientSecret", daLoja ? i.clientSecret : clientSecret);
 
         Map<String, Object> resp;
         try {

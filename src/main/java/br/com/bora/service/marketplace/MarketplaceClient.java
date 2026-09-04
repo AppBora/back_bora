@@ -33,6 +33,15 @@ public interface MarketplaceClient {
     boolean configurado();
 
     /**
+     * Se ESTA loja tem como autenticar — pela credencial própria dela ou pela da plataforma.
+     * Existe porque um canal pode aceitar que o lojista use o app dele (autoatendimento)
+     * enquanto o credenciamento da plataforma como integradora ainda está em análise.
+     */
+    default boolean configurado(IntegracaoCanal i) {
+        return configurado();
+    }
+
+    /**
      * Primeiro passo do vínculo de uma loja. Devolve ao painel o que o lojista precisa fazer
      * (no iFood, o código que ele digita no Portal do Parceiro). Grava o estado na integração.
      */

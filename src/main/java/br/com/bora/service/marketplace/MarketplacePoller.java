@@ -72,8 +72,9 @@ public class MarketplacePoller {
 
         List<Callable<Void>> tarefas = new ArrayList<>();
         for (MarketplaceClient client : clients) {
-            if (!client.configurado()) continue;   // app da plataforma sem credencial: nada a fazer
             for (IntegracaoCanal i : conectadas(client.canal())) {
+                // Sem credencial (nem da loja, nem da plataforma) não há o que sincronizar.
+                if (!client.configurado(i)) continue;
                 tarefas.add(() -> {
                     try {
                         processar(client, i);
