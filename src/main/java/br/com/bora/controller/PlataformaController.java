@@ -287,25 +287,46 @@ public class PlataformaController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "E-mail e senha (mín. 6) do admin são obrigatórios");
         }
         String email = req.adminEmail().trim().toLowerCase();
-        usuarios.findByEmail(email).ifPresent(u -> {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "E-mail já cadastrado");
-        });
+
+        // Mesmo CNPJ = mesma empresa. É o que permite a rede: as unidades seguintes do cliente
+        // entram na empresa dele em vez de virar cliente separado.
+        br.com.bora.entity.Empresa empresa = empresas.paraDocumento(req.documento(), req.nomeLoja());
+
+        // Dono de rede cadastra a 2ª unidade com o MESMO e-mail: em vez de recusar, vinculamos a
+        // loja nova à conta que já existe — assim ele opera todas com um login só, pelo seletor
+        // de loja. Só vale dentro da mesma empresa; e-mail repetido em outro CNPJ continua sendo
+        // conflito, senão daria para enxergar a loja de outro cliente.
+        Usuario existente = usuarios.findByEmail(email).orElse(null);
+        if (existente != null) {
+            Long empresaDele = existente.getLojaId() == null ? null
+                    : lojas.findById(existente.getLojaId()).map(l -> l.empresaId).orElse(null);
+            if (existente.getPapel() != Papel.ADMINISTRADOR_LOJA
+                    || empresaDele == null || !empresaDele.equals(empresa.getId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "E-mail já cadastrado em outra empresa. Para abrir outra unidade do mesmo "
+                                + "cliente, informe o mesmo CNPJ da loja que ele já tem.");
+            }
+        }
 
         Loja loja = new Loja();
         loja.setNome(req.nomeLoja());
         loja.setDocumento(req.documento());
         loja.setPlano(parsePlano(req.plano()));
-        // Mesmo CNPJ = mesma empresa: a segunda loja do cliente entra na rede dele automaticamente.
-        loja.empresaId = empresas.paraDocumento(req.documento(), req.nomeLoja()).getId();
+        loja.empresaId = empresa.getId();
         loja = lojas.save(loja);
 
-        Usuario admin = new Usuario();
-        admin.setLojaId(loja.getId());
-        admin.setNome(req.adminNome() == null || req.adminNome().isBlank() ? "Administrador" : req.adminNome());
-        admin.setEmail(email);
-        admin.setSenhaHash(encoder.encode(req.adminSenha()));
-        admin.setPapel(Papel.ADMINISTRADOR_LOJA);
-        admin = usuarios.save(admin);
+        Usuario admin;
+        if (existente != null) {
+            admin = existente; // a senha e a loja principal dele continuam como estão
+        } else {
+            admin = new Usuario();
+            admin.setLojaId(loja.getId());
+            admin.setNome(req.adminNome() == null || req.adminNome().isBlank() ? "Administrador" : req.adminNome());
+            admin.setEmail(email);
+            admin.setSenhaHash(encoder.encode(req.adminSenha()));
+            admin.setPapel(Papel.ADMINISTRADOR_LOJA);
+            admin = usuarios.save(admin);
+        }
 
         br.com.bora.entity.UsuarioLoja v = new br.com.bora.entity.UsuarioLoja();
         v.setUsuarioId(admin.getId());
@@ -314,7 +335,18 @@ public class PlataformaController {
 
         provisionamento.semear(loja.getId(), loja.getNome()); // loja nasce operável (defaults)
 
-        return Map.of("lojaId", loja.getId(), "plano", loja.getPlano().name(), "adminEmail", email);
+        Map<String, Object> resp = new java.util.LinkedHashMap<>();
+        resp.put("lojaId", loja.getId());
+        resp.put("plano", loja.getPlano().name());
+        resp.put("adminEmail", email);
+        resp.put("empresaId", empresa.getId());
+        resp.put("vinculada", existente != null);
+        if (existente != null) {
+            long quantas = vinculos.countByUsuarioId(admin.getId());
+            resp.put("mensagem", "Unidade vinculada à conta existente — " + quantas
+                    + " lojas nesse login. O seletor de loja aparece no menu dele.");
+        }
+        return resp;
     }
 
     /** Libera/revoga o Módulo IA (add-on pago) de uma loja — SÓ o ADMINISTRADOR_BORA. */
