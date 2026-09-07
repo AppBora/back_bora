@@ -55,25 +55,39 @@ public class MotorDeSinais {
         Map<String, Object> horario = (Map<String, Object>) dossie.get("horario");
         Map<String, Object> tempos = (Map<String, Object>) dossie.get("tempos");
 
-        horaFraca(horario, out);
-        cancelamentoPorLoja(tempos, out);
-        motivoDominante(tempos, out);
+        // o ticket médio é a régua que converte pedido perdido em dinheiro perdido
+        BigDecimal ticketRede = balancete == null ? BigDecimal.ZERO
+                : num(((Map<String, Object>) balancete.get("total")).get("ticketMedio"));
+
+        horaFraca(horario, ticketRede, out);
+        cancelamentoPorLoja(tempos, ticketRede, out);
+        motivoDominante(tempos, ticketRede, out);
         ruptura((List<Map<String, Object>>) dossie.get("estoque"), out);
         canalCaro(canais, out);
         gargalo(tempos, out);
         produtoEncalhado(canais, out);
-        lojaComTicketBaixo(balancete, out);
+        lojaComTicketBaixo(balancete, ticketRede, out);
 
-        out.sort(Comparator.comparingInt(m -> ordem((String) m.get("impacto"))));
+        // Ordena pelo dinheiro em jogo; sinal sem valor calculável vai para o fim.
+        out.sort(Comparator.comparing(
+                (Map<String, Object> m) -> (BigDecimal) m.get("reais"),
+                Comparator.nullsLast(Comparator.reverseOrder())));
         return out;
     }
 
-    private static int ordem(String impacto) {
-        return "ALTO".equals(impacto) ? 0 : "MEDIO".equals(impacto) ? 1 : 2;
-    }
-
+    /**
+     * Um sinal. {@code reais} é o dinheiro em jogo no período — é o que ordena a lista.
+     *
+     * <p>Priorizar era a parte que sobrava para a IA decidir "no olho". Não precisa: dá para calcular.
+     * Cancelamento vale os pedidos perdidos vezes o ticket; hora fraca vale a diferença para a média;
+     * comissão vale o que passou do teto. Quem manda é o maior número, não o palpite.</p>
+     *
+     * <p>Onde a conta seria chute — gargalo de etapa, produto encalhado — {@code reais} fica nulo e o
+     * sinal desce para o fim. Melhor sem estimativa do que com estimativa inventada.</p>
+     */
     private static Map<String, Object> sinal(String categoria, String impacto, String titulo,
-                                             String porque, String comoFazer, String tela, String rotulo) {
+                                             String porque, String comoFazer, String tela, String rotulo,
+                                             BigDecimal reais) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("origem", "REGRA");
         m.put("categoria", categoria);
@@ -81,7 +95,9 @@ public class MotorDeSinais {
         m.put("titulo", titulo);
         m.put("porque", porque);
         m.put("comoFazer", comoFazer);
-        m.put("ganhoEstimado", null); // estimar ganho é chute; a regra só afirma o que mediu
+        m.put("reais", reais == null ? null : reais.setScale(2, RoundingMode.HALF_UP));
+        m.put("ganhoEstimado", reais == null ? null
+                : money(reais) + " em jogo no período");
         m.put("acao", Map.of("tela", tela, "rotulo", rotulo));
         return m;
     }
@@ -100,7 +116,7 @@ public class MotorDeSinais {
 
     /** Faixa de horário aberta e vazia: custo fixo rodando sem venda. */
     @SuppressWarnings("unchecked")
-    private void horaFraca(Map<String, Object> horario, List<Map<String, Object>> out) {
+    private void horaFraca(Map<String, Object> horario, BigDecimal ticketRede, List<Map<String, Object>> out) {
         if (horario == null) return;
         for (String chave : List.of("diasUteis", "fimSemana")) {
             List<Map<String, Object>> faixas = (List<Map<String, Object>>) horario.get(chave);
@@ -127,13 +143,17 @@ public class MotorDeSinais {
                             + " pedidos, contra média de " + Math.round(media) + " por hora nas horas abertas. "
                             + "A loja está aberta e pagando custo fixo nessas horas.",
                     "Em Promoções, crie um cupom válido só nessa faixa e avise no status do WhatsApp.",
-                    "promocoes.html", "Criar promoção do horário"));
+                    "promocoes.html", "Criar promoção do horário",
+                    // o que se deixou de vender ali: a diferença para a média, convertida em ticket
+                    BigDecimal.valueOf(fracas.stream()
+                            .mapToDouble(f -> media - num(f.get("pedidos")).doubleValue()).sum())
+                            .multiply(ticketRede)));
         }
     }
 
     /** Loja cancelando mais que o teto e mais que as irmãs: é operação, não acaso. */
     @SuppressWarnings("unchecked")
-    private void cancelamentoPorLoja(Map<String, Object> tempos, List<Map<String, Object>> out) {
+    private void cancelamentoPorLoja(Map<String, Object> tempos, BigDecimal ticketRede, List<Map<String, Object>> out) {
         if (tempos == null) return;
         Map<String, Object> canc = (Map<String, Object>) tempos.get("cancelamentos");
         if (canc == null) return;
@@ -149,13 +169,14 @@ public class MotorDeSinais {
                             + " pedidos (" + pct + "%), acima do limite de " + TETO_CANCELAMENTO_PCT + "%.",
                     "Abra os pedidos cancelados dessa loja e fale com os clientes: o motivo repetido "
                             + "aponta a causa (tempo de preparo, falta de produto ou endereço).",
-                    "pedidos.html", "Ver pedidos cancelados"));
+                    "pedidos.html", "Ver pedidos cancelados",
+                    BigDecimal.valueOf(cancelados).multiply(ticketRede)));
         }
     }
 
     /** Um motivo que responde por boa parte dos cancelamentos é um problema só, com um conserto só. */
     @SuppressWarnings("unchecked")
-    private void motivoDominante(Map<String, Object> tempos, List<Map<String, Object>> out) {
+    private void motivoDominante(Map<String, Object> tempos, BigDecimal ticketRede, List<Map<String, Object>> out) {
         if (tempos == null) return;
         Map<String, Object> canc = (Map<String, Object>) tempos.get("cancelamentos");
         if (canc == null) return;
@@ -170,7 +191,8 @@ public class MotorDeSinais {
                     qtd + " dos " + total + " cancelamentos do período foram por \"" + m.get("motivo")
                             + "\" — " + Math.round(qtd * 100.0 / total) + "% do total.",
                     "É um problema só, com um conserto só. Trate a causa antes de mexer em preço ou promoção.",
-                    "pedidos.html", "Ver os cancelamentos"));
+                    "pedidos.html", "Ver os cancelamentos",
+                    BigDecimal.valueOf(qtd).multiply(ticketRede)));
         }
     }
 
@@ -185,7 +207,10 @@ public class MotorDeSinais {
                     "Restam " + e.get("estoque") + " unidades e a média é " + e.get("mediaPorDia")
                             + " por dia: " + dias + " dias de cobertura.",
                     "Lance a reposição em Estoque antes de acabar — produto em falta vira cancelamento.",
-                    "estoque.html", "Abrir estoque"));
+                    "estoque.html", "Abrir estoque",
+                    // dois dias parado até a reposição chegar, ao preço do produto
+                    num(e.get("mediaPorDia")).multiply(num(e.get("precoUnitario")))
+                            .multiply(BigDecimal.valueOf(2))));
         }
     }
 
@@ -208,7 +233,10 @@ public class MotorDeSinais {
                             + " de comissão (" + pct + "%).",
                     "Coloque o QR do cardápio próprio na embalagem e ofereça cashback só nele: "
                             + "o mesmo pedido pelo canal próprio não paga comissão.",
-                    "cardapio-qr.html", "Ver cardápio próprio"));
+                    "cardapio-qr.html", "Ver cardápio próprio",
+                    // só o que passou do teto; abaixo dele a comissão é custo normal de canal
+                    comissao.subtract(fat.multiply(TETO_COMISSAO_PCT)
+                            .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP))));
         }
     }
 
@@ -227,7 +255,8 @@ public class MotorDeSinais {
                             + " (" + t.get("amostras") + " pedidos medidos), acima do limite de "
                             + TETO_MINUTOS_ETAPA + " minutos.",
                     "Espera nessa etapa vira cancelamento e nota baixa. Veja o KDS no horário de pico.",
-                    "kds.html", "Abrir KDS"));
+                    "kds.html", "Abrir KDS",
+                    null)); // quanto a demora custa depende de quantos desistem — não dá para afirmar
         }
     }
 
@@ -247,19 +276,17 @@ public class MotorDeSinais {
                     "Rever " + p.get("produto"),
                     qtd + " venda(s) no período — o pior do cardápio.",
                     "Em Produtos, teste preço menor ou foto melhor por duas semanas; sem reação, tire da vitrine.",
-                    "produtos.html", "Abrir produtos"));
+                    "produtos.html", "Abrir produtos",
+                    null)); // o ganho de destravar um encalhado é hipótese, não medição
         }
     }
 
     /** Loja vendendo com ticket bem abaixo das irmãs. */
     @SuppressWarnings("unchecked")
-    private void lojaComTicketBaixo(Map<String, Object> balancete, List<Map<String, Object>> out) {
+    private void lojaComTicketBaixo(Map<String, Object> balancete, BigDecimal ticketRede, List<Map<String, Object>> out) {
         if (balancete == null) return;
         List<Map<String, Object>> lojas = (List<Map<String, Object>>) balancete.get("lojas");
-        Map<String, Object> total = (Map<String, Object>) balancete.get("total");
-        if (lojas == null || lojas.size() < 2 || total == null) return;
-        BigDecimal ticketRede = num(total.get("ticketMedio"));
-        if (ticketRede.signum() == 0) return;
+        if (lojas == null || lojas.size() < 2 || ticketRede.signum() == 0) return;
         for (Map<String, Object> l : lojas) {
             BigDecimal t = num(l.get("ticketMedio"));
             if (num(l.get("pedidos")).intValue() < 20) continue; // amostra curta engana
@@ -270,7 +297,9 @@ public class MotorDeSinais {
                             + " da rede — " + Math.round((1 - t.doubleValue() / ticketRede.doubleValue()) * 100)
                             + "% menos.",
                     "Compare o cardápio e os adicionais dessa unidade com a de melhor ticket em Relatórios.",
-                    "relatorios.html", "Comparar lojas"));
+                    "relatorios.html", "Comparar lojas",
+                    // o que a unidade deixou na mesa se vendesse no ticket da rede
+                    ticketRede.subtract(t).multiply(num(l.get("pedidos")))));
         }
     }
 }

@@ -61,12 +61,14 @@ public class AgenteRedeService {
     private final PedidoItemRepository itens;
     private final ProdutoRepository produtos;
     private final UsuarioLojaRepository vinculos;
+    private final br.com.bora.repository.IaAnaliseRedeRepository analises;
     private final AuthContext ctx;
     private final String claudeKey;
 
     public AgenteRedeService(AnaliseRedeService analise, MotorDeSinais motor, RedeService rede, IaService ia,
                              LojaRepository lojas, PedidoRepository pedidos, PedidoItemRepository itens,
-                             ProdutoRepository produtos, UsuarioLojaRepository vinculos, AuthContext ctx,
+                             ProdutoRepository produtos, UsuarioLojaRepository vinculos,
+                             br.com.bora.repository.IaAnaliseRedeRepository analises, AuthContext ctx,
                              @Value("${bora.claude.api-key:}") String claudeKey) {
         this.analise = analise;
         this.motor = motor;
@@ -77,6 +79,7 @@ public class AgenteRedeService {
         this.itens = itens;
         this.produtos = produtos;
         this.vinculos = vinculos;
+        this.analises = analises;
         this.ctx = ctx;
         this.claudeKey = claudeKey;
     }
@@ -144,6 +147,7 @@ public class AgenteRedeService {
                 m.put("loja", l.getNome());
                 m.put("lojaId", l.getId());
                 m.put("produto", p.nome);
+                m.put("precoUnitario", p.preco);
                 m.put("estoque", p.estoque);
                 m.put("estoqueMinimo", p.estoqueMinimo);
                 m.put("vendidoNoPeriodo", vendido);
@@ -260,6 +264,24 @@ public class AgenteRedeService {
                     "IA da plataforma não configurada (BORA_CLAUDE_API_KEY)");
         }
 
+        // Teto de custo: uma análise paga por pessoa por dia. Reabrir a do dia não custa nada e é o
+        // caso comum — o lojista consulta de manhã e volta nela à tarde.
+        LocalDate hoje = LocalDate.now(ZONE);
+        Long userId = ctx.atual().userId();
+        var jaFeita = analises.findByUsuarioIdAndDia(userId, hoje);
+        if (jaFeita.isPresent()) {
+            try {
+                Map<String, Object> guardado = new ObjectMapper().readValue(jaFeita.get().plano, Map.class);
+                Map<String, Object> out = new LinkedHashMap<>(guardado);
+                out.put("doCache", true);
+                out.put("aviso", "Esta é a análise de hoje (" + jaFeita.get().inicio + " a " + jaFeita.get().fim
+                        + "). A IA roda uma vez por dia; os sinais das regras continuam atualizando sozinhos.");
+                return out;
+            } catch (Exception e) {
+                analises.delete(jaFeita.get()); // plano corrompido não pode travar o dia inteiro
+            }
+        }
+
         Map<String, Object> dossie = dossie(inicio, fim);
         // As regras já entregam a aritmética pronta. Mandar isso junto evita a IA gastar token para
         // redescobrir divisão, e a deixa fazer o que só ela faz: contexto, prioridade e texto.
@@ -307,8 +329,24 @@ public class AgenteRedeService {
                     "A IA respondeu fora do formato esperado. Tente de novo.");
         }
         Map<String, Object> out = new LinkedHashMap<>(plano);
-        out.put("inicio", ((Map<String, Object>) dossie.get("balancete")).get("inicio"));
-        out.put("fim", ((Map<String, Object>) dossie.get("balancete")).get("fim"));
+        Map<String, Object> bal = (Map<String, Object>) dossie.get("balancete");
+        out.put("inicio", bal.get("inicio"));
+        out.put("fim", bal.get("fim"));
+        out.put("doCache", false);
+
+        var registro = new br.com.bora.entity.IaAnaliseRede();
+        registro.usuarioId = userId;
+        registro.lojaId = ctx.lojaIdOuNulo();
+        registro.dia = hoje;
+        registro.inicio = LocalDate.parse(String.valueOf(bal.get("inicio")));
+        registro.fim = LocalDate.parse(String.valueOf(bal.get("fim")));
+        try {
+            registro.plano = new ObjectMapper().writeValueAsString(out);
+            analises.save(registro);
+        } catch (Exception e) {
+            // guardar falhou: devolve a análise mesmo assim, mas o dia fica sem teto — melhor do que
+            // perder uma chamada já paga
+        }
         return out;
     }
 }
