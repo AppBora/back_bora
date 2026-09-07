@@ -313,6 +313,10 @@ public class AgenteRedeService {
                     .body(Map.of(
                             "model", "claude-sonnet-5",
                             "max_tokens", 4000,
+                            // Sem desligar o raciocínio, ele consome o orçamento de saída e a
+                            // resposta volta cortada em max_tokens, sem o JSON. Aqui o modelo só
+                            // precisa formatar o que as regras já apuraram — e o custo fica previsível.
+                            "thinking", Map.of("type", "disabled"),
                             "system", PAPEL,
                             "messages", List.of(Map.of("role", "user", "content",
                                     "Dossiê da rede (JSON):\n" + corpo))))
@@ -323,17 +327,25 @@ public class AgenteRedeService {
                     "Não consegui falar com a IA agora. Verifique a chave e o saldo da conta Anthropic da plataforma.");
         }
 
-        String texto;
+        // A resposta vem como lista de blocos e o primeiro pode ser de raciocínio, sem campo "text".
+        // Ler content[0].text às cegas devolvia null e derrubava tudo com NullPointerException.
+        StringBuilder texto = new StringBuilder();
         try {
-            texto = String.valueOf(((Map<String, Object>) ((List<Object>) resp.get("content")).get(0)).get("text"))
-                    .replaceAll("(?s)```json|```", "").trim();
+            for (Object bloco : (List<Object>) resp.get("content")) {
+                Map<String, Object> b = (Map<String, Object>) bloco;
+                if ("text".equals(b.get("type")) && b.get("text") != null) texto.append(b.get("text"));
+            }
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Resposta da IA em formato inesperado");
+        }
+        String limpo = texto.toString().replaceAll("(?s)```json|```", "").trim();
+        if (limpo.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "A IA respondeu sem conteúdo. Tente de novo.");
         }
 
         Map<String, Object> plano;
         try {
-            plano = json.readValue(texto, Map.class);
+            plano = json.readValue(limpo, Map.class);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "A IA respondeu fora do formato esperado. Tente de novo.");
