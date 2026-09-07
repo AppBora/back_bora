@@ -62,13 +62,22 @@ public class AgenteRedeService {
     private final ProdutoRepository produtos;
     private final UsuarioLojaRepository vinculos;
     private final br.com.bora.repository.IaAnaliseRedeRepository analises;
+    /**
+     * O ObjectMapper do Spring, não um novo.
+     *
+     * <p>{@code new ObjectMapper()} não registra o módulo de datas do Java 8 e estoura em
+     * {@code OffsetDateTime}. Como só pedido cancelado carrega data no dossiê, a falha só aparecia
+     * em loja que cancelou algo no período — a Zirá quebrava, a loja de teste passava.</p>
+     */
+    private final ObjectMapper json;
     private final AuthContext ctx;
     private final String claudeKey;
 
     public AgenteRedeService(AnaliseRedeService analise, MotorDeSinais motor, RedeService rede, IaService ia,
                              LojaRepository lojas, PedidoRepository pedidos, PedidoItemRepository itens,
                              ProdutoRepository produtos, UsuarioLojaRepository vinculos,
-                             br.com.bora.repository.IaAnaliseRedeRepository analises, AuthContext ctx,
+                             br.com.bora.repository.IaAnaliseRedeRepository analises,
+                             ObjectMapper json, AuthContext ctx,
                              @Value("${bora.claude.api-key:}") String claudeKey) {
         this.analise = analise;
         this.motor = motor;
@@ -80,6 +89,7 @@ public class AgenteRedeService {
         this.produtos = produtos;
         this.vinculos = vinculos;
         this.analises = analises;
+        this.json = json;
         this.ctx = ctx;
         this.claudeKey = claudeKey;
     }
@@ -271,7 +281,7 @@ public class AgenteRedeService {
         var jaFeita = analises.findByUsuarioIdAndDia(userId, hoje);
         if (jaFeita.isPresent()) {
             try {
-                Map<String, Object> guardado = new ObjectMapper().readValue(jaFeita.get().plano, Map.class);
+                Map<String, Object> guardado = json.readValue(jaFeita.get().plano, Map.class);
                 Map<String, Object> out = new LinkedHashMap<>(guardado);
                 out.put("doCache", true);
                 out.put("aviso", "Esta é a análise de hoje (" + jaFeita.get().inicio + " a " + jaFeita.get().fim
@@ -286,9 +296,9 @@ public class AgenteRedeService {
         // As regras já entregam a aritmética pronta. Mandar isso junto evita a IA gastar token para
         // redescobrir divisão, e a deixa fazer o que só ela faz: contexto, prioridade e texto.
         dossie.put("sinaisDasRegras", motor.sinais(dossie));
-        String json;
+        String corpo;
         try {
-            json = new ObjectMapper().writeValueAsString(dossie);
+            corpo = json.writeValueAsString(dossie);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Falha ao montar o dossiê");
         }
@@ -305,7 +315,7 @@ public class AgenteRedeService {
                             "max_tokens", 4000,
                             "system", PAPEL,
                             "messages", List.of(Map.of("role", "user", "content",
-                                    "Dossiê da rede (JSON):\n" + json))))
+                                    "Dossiê da rede (JSON):\n" + corpo))))
                     .retrieve().body(Map.class);
         } catch (Exception e) {
             // sem crédito, chave revogada, rede fora: o lojista precisa saber o que fazer, não ver stacktrace
@@ -323,7 +333,7 @@ public class AgenteRedeService {
 
         Map<String, Object> plano;
         try {
-            plano = new ObjectMapper().readValue(texto, Map.class);
+            plano = json.readValue(texto, Map.class);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "A IA respondeu fora do formato esperado. Tente de novo.");
@@ -341,7 +351,7 @@ public class AgenteRedeService {
         registro.inicio = LocalDate.parse(String.valueOf(bal.get("inicio")));
         registro.fim = LocalDate.parse(String.valueOf(bal.get("fim")));
         try {
-            registro.plano = new ObjectMapper().writeValueAsString(out);
+            registro.plano = json.writeValueAsString(out);
             analises.save(registro);
         } catch (Exception e) {
             // guardar falhou: devolve a análise mesmo assim, mas o dia fica sem teto — melhor do que
