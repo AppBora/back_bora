@@ -240,6 +240,9 @@ public class MotorDeSinais {
         for (Map<String, Object> p : menos) {
             int qtd = num(p.get("quantidade")).intValue();
             if (qtd > VENDA_MINIMA_PRODUTO) continue;
+            // Brinde e cortesia aparecem no fim do ranking por natureza — cobrar venda deles é ruído,
+            // e ruído no primeiro uso é o que faz o lojista parar de olhar a tela.
+            if (num(p.get("faturamento")).signum() == 0) continue;
             out.add(sinal("PRODUTO", "BAIXO",
                     "Rever " + p.get("produto"),
                     qtd + " venda(s) no período — o pior do cardápio.",
