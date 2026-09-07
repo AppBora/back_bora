@@ -47,6 +47,20 @@ public class ConfiguracaoLojaService {
         if (dados.logoUrl != null)      c.logoUrl = dados.logoUrl;
         if (dados.corPrimaria != null)  c.corPrimaria = dados.corPrimaria;
         if (dados.nomeSistema != null)  c.nomeSistema = dados.nomeSistema;
+        // Custos que entram no cálculo de lucro. Zero é valor legítimo (isento / sem custo fixo),
+        // por isso só ignoramos null.
+        if (dados.aliquotaImposto != null) {
+            if (dados.aliquotaImposto.signum() < 0 || dados.aliquotaImposto.compareTo(new java.math.BigDecimal("100")) > 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Alíquota de imposto deve ficar entre 0 e 100%");
+            }
+            c.aliquotaImposto = dados.aliquotaImposto;
+        }
+        if (dados.custoFixoMensal != null) {
+            if (dados.custoFixoMensal.signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Custo fixo não pode ser negativo");
+            }
+            c.custoFixoMensal = dados.custoFixoMensal;
+        }
 
         // Cashback: 0 desliga. Teto de 50% para um erro de digitação não virar prejuízo.
         if (dados.cashbackPercentual != null) {
