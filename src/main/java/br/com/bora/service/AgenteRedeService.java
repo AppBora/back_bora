@@ -53,6 +53,7 @@ public class AgenteRedeService {
     private static final ZoneId ZONE = ZoneId.of("America/Sao_Paulo");
 
     private final AnaliseRedeService analise;
+    private final MotorDeSinais motor;
     private final RedeService rede;
     private final IaService ia;
     private final LojaRepository lojas;
@@ -63,11 +64,12 @@ public class AgenteRedeService {
     private final AuthContext ctx;
     private final String claudeKey;
 
-    public AgenteRedeService(AnaliseRedeService analise, RedeService rede, IaService ia,
+    public AgenteRedeService(AnaliseRedeService analise, MotorDeSinais motor, RedeService rede, IaService ia,
                              LojaRepository lojas, PedidoRepository pedidos, PedidoItemRepository itens,
                              ProdutoRepository produtos, UsuarioLojaRepository vinculos, AuthContext ctx,
                              @Value("${bora.claude.api-key:}") String claudeKey) {
         this.analise = analise;
+        this.motor = motor;
         this.rede = rede;
         this.ia = ia;
         this.lojas = lojas;
@@ -182,6 +184,23 @@ public class AgenteRedeService {
         return out;
     }
 
+    /**
+     * Os sinais que as regras acham sozinhas — sem IA, sem custo, sem esperar.
+     *
+     * <p>É o que a tela mostra assim que abre. A IA vira um segundo passo opcional, para quem quiser
+     * leitura de contexto e priorização escrita em cima disso.</p>
+     */
+    public Map<String, Object> sinais(LocalDate inicio, LocalDate fim) {
+        Map<String, Object> d = dossie(inicio, fim);
+        Map<String, Object> out = new LinkedHashMap<>();
+        Map<String, Object> bal = (Map<String, Object>) d.get("balancete");
+        out.put("inicio", bal.get("inicio"));
+        out.put("fim", bal.get("fim"));
+        out.put("origem", "REGRA");
+        out.put("recomendacoes", motor.sinais(d));
+        return out;
+    }
+
     // ------------------------------------------------------------------ IA
 
     private static final String PAPEL = """
@@ -242,6 +261,9 @@ public class AgenteRedeService {
         }
 
         Map<String, Object> dossie = dossie(inicio, fim);
+        // As regras já entregam a aritmética pronta. Mandar isso junto evita a IA gastar token para
+        // redescobrir divisão, e a deixa fazer o que só ela faz: contexto, prioridade e texto.
+        dossie.put("sinaisDasRegras", motor.sinais(dossie));
         String json;
         try {
             json = new ObjectMapper().writeValueAsString(dossie);

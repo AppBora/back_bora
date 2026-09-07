@@ -34,6 +34,14 @@ public class IaController {
         return agente.dossie(inicio, fim);
     }
 
+    /** Sinais achados só por regra: sem IA, sem custo. É o que a tela mostra ao abrir. */
+    @GetMapping("/rede/sinais")
+    public Map<String, Object> sinaisRede(
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate inicio,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate fim) {
+        return agente.sinais(inicio, fim);
+    }
+
     /** O agente lê o dossiê e devolve o plano de ação da rede. */
     @PostMapping("/rede/analisar")
     public Map<String, Object> analisarRede(
