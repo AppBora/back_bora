@@ -65,6 +65,13 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     long countByLojaIdAndStatus(Long lojaId, StatusPedido status);
     long countByLojaIdAndEntregueEmAfter(Long lojaId, OffsetDateTime dt);
     List<Pedido> findByLojaIdOrderByCriadoEmDesc(Long lojaId);
+
+    /** Pedidos de um dia só — o quadro carrega o dia corrente, não a loja inteira desde a abertura. */
+    List<Pedido> findByLojaIdAndCriadoEmGreaterThanEqualAndCriadoEmLessThanOrderByCriadoEmDesc(
+            Long lojaId, OffsetDateTime inicio, OffsetDateTime fim);
+
+    /** Pedido que virou o dia sem terminar continua no quadro — senão some da vista da cozinha. */
+    List<Pedido> findByLojaIdAndStatusNotInOrderByCriadoEmDesc(Long lojaId, java.util.Collection<StatusPedido> finais);
     List<Pedido> findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(Long lojaId, OffsetDateTime corte);
     Optional<Pedido> findByIdAndLojaId(Long id, Long lojaId);
     long countByLojaIdAndCriadoEmAfter(Long lojaId, OffsetDateTime inicio); // RN09 — limite de pedidos/mês

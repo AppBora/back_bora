@@ -16,7 +16,8 @@ public class RelatorioController {
     }
 
     @GetMapping
-    public Map<String, Object> gerar(@RequestParam(defaultValue = "30") int dias) {
-        return service.gerar(dias);
+    public Map<String, Object> gerar(@RequestParam(defaultValue = "30") int dias,
+                                     @RequestParam(required = false) Long lojaId) {
+        return service.gerar(dias, lojaId);
     }
 }

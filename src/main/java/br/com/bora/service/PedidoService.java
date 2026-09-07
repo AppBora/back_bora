@@ -24,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -79,16 +80,50 @@ public class PedidoService {
         return repo.findByLojaIdOrderByCriadoEmDesc(ctx.lojaId());
     }
 
-    /** Quadro rico (kanban): pedidos + cliente + itens resolvidos em poucas queries (sem N+1). */
-    public List<PedidoCard> board() {
+    private static final java.util.Set<StatusPedido> ENCERRADOS =
+            java.util.Set.of(StatusPedido.ENTREGUE, StatusPedido.CANCELADO);
+
+    /**
+     * Quadro rico (kanban): pedidos + cliente + itens resolvidos em poucas queries (sem N+1).
+     *
+     * <p>O quadro é do <b>dia</b>, não da loja inteira. Antes trazia todo pedido já feito e todos os
+     * itens da loja a cada atualização: a coluna "Entregue" ia empilhando dia após dia e o balcão
+     * abria a manhã com a tela suja do dia anterior — fora o peso, que só cresce.</p>
+     *
+     * <p>Exceção proposital: pedido ainda em andamento aparece mesmo sendo de outro dia. Quem entrou
+     * às 23h50 e está em preparo à meia-noite não pode sumir da vista da cozinha.</p>
+     */
+    public List<PedidoCard> board(java.time.LocalDate dia, java.time.LocalDate desde) {
         Long lojaId = ctx.lojaId();
-        List<Pedido> pedidos = repo.findByLojaIdOrderByCriadoEmDesc(lojaId);
+        java.time.ZoneId zona = java.time.ZoneId.of("America/Sao_Paulo");
+        java.time.LocalDate hoje = java.time.LocalDate.now(zona);
+        // "desde" serve às telas que somam período (canais, entregadores); "dia", ao quadro do balcão
+        java.time.LocalDate inicio = desde != null ? desde : (dia == null ? hoje : dia);
+        java.time.LocalDate ultimo = desde != null ? hoje : inicio;
+        OffsetDateTime ini = inicio.atStartOfDay(zona).toOffsetDateTime();
+        OffsetDateTime fim = ultimo.plusDays(1).atStartOfDay(zona).toOffsetDateTime();
+
+        Map<Long, Pedido> porId = new LinkedHashMap<>();
+        repo.findByLojaIdAndCriadoEmGreaterThanEqualAndCriadoEmLessThanOrderByCriadoEmDesc(lojaId, ini, fim)
+                .forEach(p -> porId.put(p.id, p));
+        // só faz sentido puxar os abertos de outros dias quando o período alcança hoje
+        if (ultimo.equals(hoje)) {
+            repo.findByLojaIdAndStatusNotInOrderByCriadoEmDesc(lojaId, ENCERRADOS)
+                    .forEach(p -> porId.putIfAbsent(p.id, p));
+        }
+        // criadoEm nulo não deveria existir (o campo nasce preenchido), mas uma linha antiga vinda de
+        // carga direta derrubaria o quadro inteiro num NullPointerException. Ordena por último.
+        List<Pedido> pedidos = porId.values().stream()
+                .sorted(Comparator.comparing((Pedido p) -> p.criadoEm,
+                        Comparator.nullsLast(Comparator.naturalOrder())).reversed())
+                .toList();
 
         Map<Long, Cliente> clientePorId = new LinkedHashMap<>();
         clientes.findByLojaIdOrderByNomeAsc(lojaId).forEach(c -> clientePorId.put(c.id, c));
 
         Map<Long, List<PedidoCard.ItemResumo>> itensPorPedido = new LinkedHashMap<>();
-        for (PedidoItem it : itemRepo.findByLojaId(lojaId)) {
+        List<Long> ids = pedidos.stream().map(p -> p.id).toList();
+        for (PedidoItem it : ids.isEmpty() ? List.<PedidoItem>of() : itemRepo.findByLojaIdAndPedidoIdIn(lojaId, ids)) {
             itensPorPedido.computeIfAbsent(it.getPedidoId(), k -> new ArrayList<>())
                     .add(new PedidoCard.ItemResumo(it.getQuantidade(), it.getDescricao()));
         }

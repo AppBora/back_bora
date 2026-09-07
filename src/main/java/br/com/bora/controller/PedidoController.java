@@ -28,8 +28,13 @@ public class PedidoController {
 
     /** Quadro de pedidos enriquecido (cliente, telefone, endereço, itens) para o kanban. */
     @GetMapping("/board")
-    public List<PedidoCard> board() {
-        return service.board();
+    public List<PedidoCard> board(@RequestParam(required = false)
+                                  @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+                                  java.time.LocalDate dia,
+                                  @RequestParam(required = false)
+                                  @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+                                  java.time.LocalDate desde) {
+        return service.board(dia, desde);
     }
 
     @PostMapping

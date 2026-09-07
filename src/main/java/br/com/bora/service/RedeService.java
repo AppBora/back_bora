@@ -127,9 +127,7 @@ public class RedeService {
         BigDecimal fatTotal = BigDecimal.ZERO;
         long pedTotal = 0, cancTotal = 0;
 
-        for (UsuarioLoja v : vinculos.findByUsuarioId(ctx.atual().userId())) {
-            Loja l = lojas.findById(v.getLojaId()).orElse(null);
-            if (l == null) continue;
+        for (Loja l : lojasDoBalancete()) {
             BigDecimal fat = pedidos.somaReceita(l.getId(), ini, fimExc);
             long ped = pedidos.contaPedidosValidos(l.getId(), ini, fimExc);
             long canc = pedidos.contaPedidosCancelados(l.getId(), ini, fimExc);
@@ -167,6 +165,23 @@ public class RedeService {
         out.put("fim", fim.toString());
         out.put("lojas", porLoja);
         out.put("total", total);
+        return out;
+    }
+
+    /**
+     * Lojas do balancete. A plataforma não tem vínculo com loja nenhuma: sem este desvio o painel
+     * dela mostrava o balancete vazio, como se os clientes não tivessem vendido nada.
+     */
+    private List<Loja> lojasDoBalancete() {
+        if (ctx.isAdminBora()) {
+            return lojas.findAll().stream().filter(l -> !l.arquivada())
+                    .sorted(Comparator.comparing(l -> l.getNome() == null ? "" : l.getNome().toLowerCase()))
+                    .toList();
+        }
+        List<Loja> out = new ArrayList<>();
+        for (UsuarioLoja v : vinculos.findByUsuarioId(ctx.atual().userId())) {
+            lojas.findById(v.getLojaId()).ifPresent(out::add);
+        }
         return out;
     }
 

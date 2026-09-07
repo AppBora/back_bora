@@ -23,16 +23,37 @@ public class RelatorioService {
 
     private final PedidoRepository pedidos;
     private final PedidoItemRepository itens;
+    private final br.com.bora.repository.UsuarioLojaRepository vinculos;
+    private final br.com.bora.repository.LojaRepository lojas;
     private final AuthContext ctx;
 
-    public RelatorioService(PedidoRepository pedidos, PedidoItemRepository itens, AuthContext ctx) {
+    public RelatorioService(PedidoRepository pedidos, PedidoItemRepository itens,
+                            br.com.bora.repository.UsuarioLojaRepository vinculos,
+                            br.com.bora.repository.LojaRepository lojas, AuthContext ctx) {
         this.pedidos = pedidos;
         this.itens = itens;
+        this.vinculos = vinculos;
+        this.lojas = lojas;
         this.ctx = ctx;
     }
 
-    public Map<String, Object> gerar(int dias) {
-        Long lojaId = ctx.lojaId();
+    /**
+     * Loja do relatório: a do token, ou outra da rede quando o dono pede.
+     *
+     * <p>Sem isto, ver o relatório de outra unidade obriga a trocar o contexto inteiro do painel.
+     * A permissão continua a mesma da troca de loja: vínculo do usuário (ou plataforma).</p>
+     */
+    private Long lojaDoRelatorio(Long pedida) {
+        if (pedida == null || pedida.equals(ctx.lojaIdOuNulo())) return ctx.lojaId();
+        if (!ctx.isAdminBora() && !vinculos.existsByUsuarioIdAndLojaId(ctx.atual().userId(), pedida)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Você não tem vínculo com essa loja");
+        }
+        return pedida;
+    }
+
+    public Map<String, Object> gerar(int dias, Long lojaPedida) {
+        Long lojaId = lojaDoRelatorio(lojaPedida);
         int janela = dias <= 0 ? 30 : Math.min(dias, 365);
         OffsetDateTime corte = OffsetDateTime.now().minusDays(janela);
 
@@ -41,6 +62,7 @@ public class RelatorioService {
         Set<Long> idsVenda = new HashSet<>(); vendas.forEach(p -> idsVenda.add(p.id));
         Map<Long, Pedido> porId = new HashMap<>(); todos.forEach(p -> porId.put(p.id, p));
 
+        String nomeLoja = lojas.findById(lojaId).map(l -> l.getNome()).orElse(null);
         BigDecimal fat = soma(vendas.stream().map(p -> p.valorTotal));
         int qtdPed = vendas.size();
         int cancelados = todos.size() - vendas.size();
@@ -93,6 +115,8 @@ public class RelatorioService {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("dias", janela);
+        out.put("lojaId", lojaId);
+        out.put("loja", nomeLoja);
         out.put("faturamento", fat);
         out.put("pedidos", qtdPed);
         out.put("ticketMedio", ticket);
