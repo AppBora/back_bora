@@ -43,13 +43,16 @@ public class PedidoService {
     private final TaxaEntregaRepository taxasEntrega;
     private final InsumoService insumos;
     private final FidelidadeService fidelidade;
+    private final ComplementoService complementos;
     private final AuthContext ctx;
 
     public PedidoService(PedidoRepository repo, PedidoItemRepository itemRepo, ProdutoRepository produtos,
                          ClienteRepository clientes, LogStatusRepository logs, PlanoService planos,
                          IntegracaoService integracoes, TaxaEntregaRepository taxasEntrega,
-                         InsumoService insumos, FidelidadeService fidelidade, AuthContext ctx) {
+                         InsumoService insumos, FidelidadeService fidelidade,
+                         ComplementoService complementos, AuthContext ctx) {
         this.fidelidade = fidelidade;
+        this.complementos = complementos;
         this.repo = repo;
         this.itemRepo = itemRepo;
         this.produtos = produtos;
@@ -117,7 +120,8 @@ public class PedidoService {
 
         Pedido p = new Pedido();
         p.lojaId = lojaId; // tenant do token, nunca do corpo
-        p.clienteId = req.clienteId();
+        // o cliente também: id de outra loja no corpo não pode virar pedido nesta
+        p.clienteId = clienteDaLoja(lojaId, req.clienteId());
         p.codigo = req.codigo();
         p.formaPagamento = req.formaPagamento();
         p.origem = req.origem();
@@ -134,14 +138,16 @@ public class PedidoService {
             if (i.quantidade() != null && i.quantidade() < 1)
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantidade deve ser maior que zero");
             int qtd = i.quantidade() == null ? 1 : i.quantidade();
-            BigDecimal preco = prod.preco != null ? prod.preco : BigDecimal.ZERO;
+            // mesma regra do cardápio público: valida min/máx do grupo e soma o adicional no unitário
+            ComplementoService.Escolha escolha = complementos.aplicar(lojaId, prod, i.complementos());
+            BigDecimal preco = (prod.preco != null ? prod.preco : BigDecimal.ZERO).add(escolha.acrescimo());
             BigDecimal subtotal = preco.multiply(BigDecimal.valueOf(qtd));
             total = total.add(subtotal);
 
             PedidoItem it = new PedidoItem();
             it.setLojaId(lojaId);
             it.setProdutoId(prod.id);
-            it.setDescricao(prod.nome);
+            it.setDescricao(escolha.descricao(prod.nome));
             it.setQuantidade(qtd);
             it.setPrecoUnitario(preco);
             // se o produto tem ficha técnica, consome insumos e usa o custo da ficha; senão, custo do produto + baixa do próprio
@@ -159,16 +165,28 @@ public class PedidoService {
         // resgate de cashback como desconto (RN fidelidade)
         BigDecimal resgate = BigDecimal.ZERO;
         if (Boolean.TRUE.equals(req.usarCashback())) {
-            resgate = fidelidade.resgatePossivel(lojaId, req.clienteId(), total);
+            resgate = fidelidade.resgatePossivel(lojaId, p.clienteId, total);
         }
-        BigDecimal taxa = taxaPara(lojaId, req.clienteId(), req.origem());
+        // O balconista pode combinar um frete diferente da tabela (bairro fora da lista, cortesia).
+        // Só respeitamos valor não negativo; sem informar nada, vale a tabela do bairro.
+        BigDecimal taxa = req.taxaEntrega() != null && req.taxaEntrega().signum() >= 0
+                ? req.taxaEntrega()
+                : taxaPara(lojaId, p.clienteId, req.origem());
         p.taxaEntrega = taxa;
         p.valorTotal = total.add(taxa).subtract(resgate);
         Pedido salvo = repo.save(p);
         itens.forEach(it -> it.setPedidoId(salvo.id));
         itemRepo.saveAll(itens);
-        acumularFidelidade(lojaId, req.clienteId(), p.valorTotal, resgate); // CRM / cashback
+        acumularFidelidade(lojaId, p.clienteId, p.valorTotal, resgate); // CRM / cashback
         return salvo;
+    }
+
+    /** Cliente informado tem que ser desta loja — senão o pedido nasce apontando para outro tenant. */
+    private Long clienteDaLoja(Long lojaId, Long clienteId) {
+        if (clienteId == null) return null;
+        return clientes.findByIdAndLojaId(clienteId, lojaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cliente não encontrado nesta loja"))
+                .id;
     }
 
     /** CRM e cashback — a regra mora no FidelidadeService, compartilhada com o cardápio online. */

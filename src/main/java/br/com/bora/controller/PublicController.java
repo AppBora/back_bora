@@ -10,6 +10,7 @@ import br.com.bora.repository.LojaRepository;
 import br.com.bora.repository.PedidoItemRepository;
 import br.com.bora.repository.PedidoRepository;
 import br.com.bora.repository.ProdutoRepository;
+import br.com.bora.service.ComplementoService;
 import br.com.bora.service.PixService;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,12 +37,14 @@ public class PublicController {
     private final br.com.bora.service.FidelidadeService fidelidade;
     private final br.com.bora.repository.ComplementoGrupoRepository compGrupos;
     private final br.com.bora.repository.ComplementoItemRepository compItens;
+    private final ComplementoService complementoService;
     private final br.com.bora.repository.CupomRepository cupons;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
                             br.com.bora.repository.ComplementoGrupoRepository compGrupos,
                             br.com.bora.repository.ComplementoItemRepository compItens,
+                            ComplementoService complementoService,
                             br.com.bora.repository.CupomRepository cupons,
                             br.com.bora.service.FidelidadeService fidelidade) {
         this.lojas = lojas;
@@ -53,6 +56,7 @@ public class PublicController {
         this.fidelidade = fidelidade;
         this.compGrupos = compGrupos;
         this.compItens = compItens;
+        this.complementoService = complementoService;
         this.cupons = cupons;
     }
 
@@ -170,45 +174,20 @@ public class PublicController {
                     .filter(x -> lojaId.equals(x.lojaId) && Boolean.TRUE.equals(x.ativo))
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto indisponível"));
 
-            // Complementos escolhidos: valida posse, min/max por grupo e soma no preço unitário.
-            List<br.com.bora.entity.ComplementoGrupo> gs = compGrupos.findByLojaIdAndProdutoIdOrderById(lojaId, prod.id);
+            // Complementos escolhidos: a regra (posse, mínimo/máximo por grupo, preço) é a mesma do
+            // painel — mora no ComplementoService para os dois canais não divergirem.
             List<Long> escolhidos = new java.util.ArrayList<>();
             Object escRaw = it.get("complementos");
             if (escRaw instanceof List<?> ls) for (Object o : ls) { try { escolhidos.add(Long.valueOf(String.valueOf(o))); } catch (Exception e) {} }
-            BigDecimal extra = BigDecimal.ZERO;
-            StringBuilder nomeItem = new StringBuilder(prod.nome);
-            if (!gs.isEmpty()) {
-                Map<Long, br.com.bora.entity.ComplementoItem> catalogo = new java.util.HashMap<>();
-                compItens.findByLojaIdAndGrupoIdInOrderById(lojaId, gs.stream().map(g -> g.id).toList())
-                        .forEach(ci -> catalogo.put(ci.id, ci));
-                Map<Long, List<br.com.bora.entity.ComplementoItem>> porGrupo = new java.util.HashMap<>();
-                for (Long idEsc : escolhidos) {
-                    br.com.bora.entity.ComplementoItem ci = catalogo.get(idEsc);
-                    if (ci == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Complemento inválido");
-                    porGrupo.computeIfAbsent(ci.grupoId, k -> new java.util.ArrayList<>()).add(ci);
-                }
-                List<String> partes = new java.util.ArrayList<>();
-                for (br.com.bora.entity.ComplementoGrupo g : gs) {
-                    List<br.com.bora.entity.ComplementoItem> sel = porGrupo.getOrDefault(g.id, List.of());
-                    if (sel.size() < g.minimo || sel.size() > g.maximo) {
-                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                "Escolha entre " + g.minimo + " e " + g.maximo + " em \"" + g.nome + "\" de " + prod.nome);
-                    }
-                    for (br.com.bora.entity.ComplementoItem ci : sel) {
-                        extra = extra.add(ci.preco == null ? BigDecimal.ZERO : ci.preco);
-                        partes.add(ci.nome);
-                    }
-                }
-                if (!partes.isEmpty()) nomeItem.append(" (").append(String.join(", ", partes)).append(")");
-            } else if (!escolhidos.isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto não tem complementos");
-            }
+            ComplementoService.Escolha escolha = complementoService.aplicar(lojaId, prod, escolhidos);
+            BigDecimal extra = escolha.acrescimo();
+            String nomeItem = escolha.descricao(prod.nome);
 
             PedidoItem item = new PedidoItem();
             item.setLojaId(lojaId);
             item.setPedidoId(p.id);
             item.setProdutoId(prod.id);
-            item.setDescricao(nomeItem.toString());
+            item.setDescricao(nomeItem);
             item.setQuantidade(qtd);
             BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
             item.setPrecoUnitario(unit);

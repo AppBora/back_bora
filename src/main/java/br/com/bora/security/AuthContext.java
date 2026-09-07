@@ -17,7 +17,26 @@ public class AuthContext {
         return p;
     }
 
+    /**
+     * Loja do contexto atual. O ADMINISTRADOR_BORA logado na plataforma não tem loja: para ele,
+     * qualquer tela de operação precisa dizer o que fazer em vez de quebrar.
+     *
+     * <p>Antes desta guarda, sessão sem loja produzia dois estragos silenciosos: telas de leitura
+     * devolviam lista vazia (parecia loja sem cadastro) e as que semeiam padrões — formas de
+     * pagamento, horários, motivos — tentavam inserir com loja_id nulo e estouravam 500.</p>
+     */
     public Long lojaId() {
+        Long id = atual().lojaId();
+        if (id == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Nenhuma loja selecionada. Em Configurações › Plataforma, use \"Entrar na loja\" "
+                            + "do cliente antes de abrir as telas de operação.");
+        }
+        return id;
+    }
+
+    /** Loja do contexto, ou null quando é a plataforma — para quem sabe lidar com os dois casos. */
+    public Long lojaIdOuNulo() {
         return atual().lojaId();
     }
 

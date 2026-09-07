@@ -9,4 +9,6 @@ public record NovoPedidoRequest(
         String origem,
         String observacao,
         Boolean usarCashback,
-        List<ItemPedidoRequest> itens) {}
+        List<ItemPedidoRequest> itens,
+        /** Taxa de entrega informada pelo operador. Null = calcula pelo bairro do cliente. */
+        java.math.BigDecimal taxaEntrega) {}
