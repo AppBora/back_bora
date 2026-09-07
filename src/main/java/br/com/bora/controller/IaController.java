@@ -3,6 +3,7 @@ package br.com.bora.controller;
 import br.com.bora.entity.Loja;
 import br.com.bora.repository.LojaRepository;
 import br.com.bora.security.AuthContext;
+import br.com.bora.service.AgenteRedeService;
 import br.com.bora.service.IaService;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,13 +15,31 @@ import java.util.Map;
 public class IaController {
 
     private final IaService ia;
+    private final AgenteRedeService agente;
     private final LojaRepository lojas;
     private final AuthContext ctx;
 
-    public IaController(IaService ia, LojaRepository lojas, AuthContext ctx) {
+    public IaController(IaService ia, AgenteRedeService agente, LojaRepository lojas, AuthContext ctx) {
         this.ia = ia;
+        this.agente = agente;
         this.lojas = lojas;
         this.ctx = ctx;
+    }
+
+    /** Dossiê da rede sem IA — os mesmos números das abas, num pacote só (serve para conferência). */
+    @GetMapping("/rede/dossie")
+    public Map<String, Object> dossieRede(
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate inicio,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate fim) {
+        return agente.dossie(inicio, fim);
+    }
+
+    /** O agente lê o dossiê e devolve o plano de ação da rede. */
+    @PostMapping("/rede/analisar")
+    public Map<String, Object> analisarRede(
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate inicio,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate fim) {
+        return agente.analisar(inicio, fim);
     }
 
     /** Status do add-on para a loja logada (a UI usa para mostrar/ocultar o módulo). */
