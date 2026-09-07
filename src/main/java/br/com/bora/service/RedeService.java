@@ -19,6 +19,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,20 +51,37 @@ public class RedeService {
 
     /** Lojas vinculadas ao usuário logado (a atual vem marcada). */
     public List<Map<String, Object>> minhasLojas() {
-        Long userId = ctx.atual().userId();
-        Long lojaAtual = ctx.lojaId();
+        // Aqui a loja atual pode ser nula de propósito: a plataforma navega sem loja nenhuma.
+        Long lojaAtual = ctx.lojaIdOuNulo();
+
+        // A plataforma não tem vínculo com loja alguma. Sem isto, quem dá suporte precisa passar
+        // por Configurações → Plataforma a cada troca de cliente; com isto, troca pelo seletor da
+        // lateral. A entrada continua sendo pelo /acessar, que fica registrado no log de auditoria.
+        if (ctx.isAdminBora()) {
+            return lojas.findAll().stream()
+                    .filter(l -> !l.arquivada())
+                    .sorted(Comparator.comparing(l -> l.getNome() == null ? "" : l.getNome().toLowerCase()))
+                    .map(l -> linhaLoja(l, lojaAtual, true))
+                    .toList();
+        }
+
         List<Map<String, Object>> out = new ArrayList<>();
-        for (UsuarioLoja v : vinculos.findByUsuarioId(userId)) {
+        for (UsuarioLoja v : vinculos.findByUsuarioId(ctx.atual().userId())) {
             Loja l = lojas.findById(v.getLojaId()).orElse(null);
             if (l == null) continue;
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", l.getId());
-            m.put("nome", l.getNome());
-            m.put("ativo", l.getAtivo());
-            m.put("atual", l.getId().equals(lojaAtual));
-            out.add(m);
+            out.add(linhaLoja(l, lojaAtual, false));
         }
         return out;
+    }
+
+    private Map<String, Object> linhaLoja(Loja l, Long lojaAtual, boolean suporte) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", l.getId());
+        m.put("nome", l.getNome());
+        m.put("ativo", l.getAtivo());
+        m.put("atual", l.getId().equals(lojaAtual));
+        m.put("suporte", suporte); // a tela usa isto para escolher por qual porta entrar
+        return m;
     }
 
     /** Troca o contexto para outra loja vinculada e devolve um novo token. */

@@ -164,6 +164,22 @@ public class PlataformaController {
                 "aviso", "Você está operando como suporte dentro da loja. Saia para voltar à plataforma.");
     }
 
+    /** Volta o suporte para o contexto da plataforma (token sem loja), sem precisar deslogar. */
+    @PostMapping("/sair-da-loja")
+    public Map<String, Object> sairDaLoja() {
+        ctx.requireAdminBora();
+        Usuario eu = usuarios.findById(ctx.atual().userId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Sessão inválida"));
+        log.warn("AUDITORIA plataforma: usuario {} ({}) SAIU da loja {} e voltou para a plataforma",
+                eu.getId(), eu.getEmail(), ctx.lojaIdOuNulo());
+        Map<String, Object> r = new java.util.LinkedHashMap<>();
+        r.put("token", jwt.gerar(eu, null));
+        r.put("nome", eu.getNome());
+        r.put("papel", eu.getPapel().name());
+        r.put("lojaId", null);
+        return r;
+    }
+
     /** Motivo só enquanto o corte está valendo — depois de reativar, vira histórico e confunde a tela. */
     private String motivoVigente(Loja l) {
         if (l.arquivada()) return l.motivoExclusao;
