@@ -25,6 +25,12 @@ public class RecebimentoController {
         return subcontas.status();
     }
 
+    /** Religa o aviso de pagamento (webhook) de quem ja tem subconta mas ficou sem ele. */
+    @PostMapping("/webhook")
+    public Map<String, Object> repararWebhook() {
+        return subcontas.repararWebhook();
+    }
+
     /** Ativa o recebimento criando a subconta do lojista. Corpo: { cpfCnpj, mobilePhone?, postalCode?, ... }. */
     @PostMapping("/ativar")
     public Map<String, Object> ativar(@RequestBody Map<String, Object> body) {

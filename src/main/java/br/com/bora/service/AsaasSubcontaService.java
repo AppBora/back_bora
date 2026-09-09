@@ -33,6 +33,7 @@ public class AsaasSubcontaService {
     private final String baseUrl;
     private final String masterKey;
     private final String urlPublica;
+    private final String webhookEmail;
     private final LojaRepository lojas;
     private final UsuarioRepository usuarios;
     private final AuthContext ctx;
@@ -40,10 +41,12 @@ public class AsaasSubcontaService {
     public AsaasSubcontaService(@Value("${asaas.base-url:https://sandbox.asaas.com/api/v3}") String baseUrl,
                                 @Value("${asaas.api-key:}") String masterKey,
                                 @Value("${asaas.url-publica:https://borahapp.com.br}") String urlPublica,
+                                @Value("${asaas.webhook-email:}") String webhookEmail,
                                 LojaRepository lojas, UsuarioRepository usuarios, AuthContext ctx) {
         this.baseUrl = baseUrl;
         this.masterKey = masterKey;
         this.urlPublica = urlPublica;
+        this.webhookEmail = webhookEmail;
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.ctx = ctx;
@@ -87,9 +90,7 @@ public class AsaasSubcontaService {
             return view(loja); // já provisionada — não recria
         }
 
-        String email = usuarios.findByLojaId(loja.getId()).stream()
-                .filter(u -> u.getPapel() == Papel.ADMINISTRADOR_LOJA)
-                .findFirst().map(Usuario::getEmail).orElse("contato@borahapp.com.br");
+        String email = emailDoAdmin(loja);
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", loja.getNome() == null ? "Loja BoraHapp" : loja.getNome());
@@ -112,7 +113,7 @@ public class AsaasSubcontaService {
             loja.asaasApiKey = str(resp.get("apiKey"));
             loja.asaasOnboardingUrl = str(resp.getOrDefault("onboardingUrl", resp.get("onboardingUrlLink")));
             loja.asaasStatus = "PENDENTE"; // vira ATIVO quando o KYC é aprovado (webhook/consulta)
-            criarWebhookPix(loja);
+            criarWebhookPix(loja, email);
             lojas.save(loja);
             log.info("Subconta Asaas criada para a loja {} (id {})", loja.getId(), loja.asaasSubcontaId);
             return view(loja);
@@ -127,15 +128,46 @@ public class AsaasSubcontaService {
         }
     }
 
+    /** E-mail do admin da loja - e o dono da subconta no Asaas. */
+    private String emailDoAdmin(Loja loja) {
+        return usuarios.findByLojaId(loja.getId()).stream()
+                .filter(u -> u.getPapel() == Papel.ADMINISTRADOR_LOJA)
+                .findFirst().map(Usuario::getEmail).orElse("contato@borahapp.com.br");
+    }
+
+    /**
+     * Registra de novo o webhook de PIX de uma loja que ja tem subconta. Existe porque a criacao da
+     * subconta e do webhook sao duas chamadas: a segunda ja falhou em producao (o Asaas passou a exigir
+     * e-mail) e a loja ficou com conta viva e nenhum aviso de pagamento chegando.
+     */
+    @Transactional
+    public Map<String, Object> repararWebhook() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        Loja loja = lojas.findById(ctx.lojaId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja nao encontrada"));
+        if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ative o recebimento antes");
+        }
+        criarWebhookPix(loja, emailDoAdmin(loja));
+        if (loja.asaasWebhookToken == null || loja.asaasWebhookToken.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Nao foi possivel registrar o aviso de pagamento no Asaas. Veja o log da API.");
+        }
+        lojas.save(loja);
+        return view(loja);
+    }
+
     /** Cria, na subconta do lojista, o webhook que confirma o pagamento do PIX. */
     @SuppressWarnings("unchecked")
-    private void criarWebhookPix(Loja loja) {
+    private void criarWebhookPix(Loja loja, String email) {
         if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) return;
         try {
             String token = UUID.randomUUID().toString().replace("-", "");
-            loja.asaasWebhookToken = token; // persistido junto com a loja pelo chamador — sem isso o webhook e rejeitado
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("name", "BoraHapp PIX - loja " + loja.getId());
+            // O Asaas exige e-mail no webhook (invalid_email 400) - e para onde ele avisa quando o
+            // webhook falha. Vai para quem consegue agir: a plataforma, se configurada; senao o lojista.
+            body.put("email", webhookEmail == null || webhookEmail.isBlank() ? email : webhookEmail);
             body.put("url", urlPublica + "/public/pix-webhook/" + loja.getId());
             body.put("enabled", true);
             body.put("interrupted", false);
@@ -144,6 +176,9 @@ public class AsaasSubcontaService {
             body.put("authToken", token);
             body.put("events", List.of("PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"));
             client(loja.asaasApiKey).post().uri("/webhooks").body(body).retrieve().body(Map.class);
+            // So agora: token gravado antes da chamada dava webhook "valido" no nosso lado que o Asaas
+            // nunca chamaria. Quem persiste a loja e o chamador.
+            loja.asaasWebhookToken = token;
         } catch (Exception e) {
             log.warn("Loja {}: subconta criada, mas falhou ao registrar webhook PIX: {}", loja.getId(), e.getMessage());
         }
@@ -157,6 +192,9 @@ public class AsaasSubcontaService {
         m.put("status", loja.asaasStatus == null ? (provisionada ? "PENDENTE" : "DESATIVADO") : loja.asaasStatus);
         m.put("walletId", loja.asaasWalletId);
         m.put("onboardingUrl", loja.asaasOnboardingUrl);
+        m.put("webhookOk", loja.asaasWebhookToken != null && !loja.asaasWebhookToken.isBlank());
+        // Sem onboardingUrl a tela precisa dizer POR ONDE concluir o cadastro: o acesso e por este e-mail.
+        if (provisionada) m.put("email", emailDoAdmin(loja));
         return m;
     }
 
