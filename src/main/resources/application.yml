@@ -4,6 +4,14 @@ spring:
       pool:
         # O poller de marketplace nao pode disputar a unica thread padrao do agendador.
         size: 4
+  servlet:
+    multipart:
+      max-file-size: 8MB
+      max-request-size: 10MB
+      # Acima deste limiar o Tomcat grava o upload em disco. Mantendo o limiar ACIMA do tamanho
+      # maximo do arquivo, foto de documento de lojista nunca encosta no disco do servidor: entra
+      # na memoria, e repassada ao Asaas e morre com a requisicao.
+      file-size-threshold: 10MB
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/bora}
     username: ${SPRING_DATASOURCE_USERNAME:bora}

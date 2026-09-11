@@ -8,18 +8,24 @@ import br.com.bora.repository.UsuarioRepository;
 import br.com.bora.security.AuthContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -32,6 +38,10 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class AsaasSubcontaService {
+
+    /** So imagem e PDF: o Asaas recusa o resto e o lojista ficaria sem entender o erro. */
+    private static final Set<String> ACEITOS = Set.of(
+            "image/jpeg", "image/jpg", "image/png", "image/heic", "image/heif", "application/pdf");
 
     private final String baseUrl;
     private final String masterKey;
@@ -215,6 +225,90 @@ public class AsaasSubcontaService {
         for (String k : chaves) {
             Object v = de.get(k);
             if (v != null && !String.valueOf(v).isBlank()) para.put(k, v);
+        }
+    }
+
+    /**
+     * Checklist de identidade que o Asaas ainda espera da subconta (documento com foto, selfie...).
+     * Cada item pode vir com `onboardingUrl` proprio: quando vem, a documentacao do Asaas PROIBE
+     * enviar o arquivo por API e manda usar o link. E isso que decide se a nossa tela vai ter
+     * upload ou um botao que abre o link do Asaas.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> documentos() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        Loja loja = lojas.findById(ctx.lojaId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja nao encontrada"));
+        if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ative o recebimento antes");
+        }
+        try {
+            Map<String, Object> resp = client(loja.asaasApiKey).get().uri("/myAccount/documents")
+                    .retrieve().body(Map.class);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("lojaId", loja.getId());
+            out.put("statusDaConta", loja.asaasStatus);
+            out.put("asaas", resp);
+            return out;
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Nao consegui consultar os documentos no Asaas: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Repassa ao Asaas a foto que o lojista tirou na nossa tela (documento ou selfie).
+     *
+     * <p>O arquivo NAO e gravado em lugar nenhum: vive na memoria durante a requisicao e morre com
+     * ela. Guardar RG e selfie de lojista no nosso banco seria responsabilidade de LGPD que nao
+     * precisamos ter - quem custodia esses documentos e a instituicao financeira, nao a plataforma.
+     * O limiar de multipart no application.yml existe para o Tomcat nao escrever em disco no meio.</p>
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> enviarDocumento(String documentoId, String tipo, MultipartFile arquivo) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        Loja loja = lojas.findById(ctx.lojaId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja nao encontrada"));
+        if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ative o recebimento antes");
+        }
+        if (arquivo == null || arquivo.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Envie a foto");
+        }
+        String mime = arquivo.getContentType() == null ? "" : arquivo.getContentType().toLowerCase();
+        if (!ACEITOS.contains(mime)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Formato nao aceito. Envie uma foto JPG ou PNG, ou um PDF.");
+        }
+        byte[] bytes;
+        try {
+            bytes = arquivo.getBytes();
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nao consegui ler o arquivo enviado");
+        }
+
+        String nome = arquivo.getOriginalFilename();
+        if (nome == null || nome.isBlank()) nome = "documento" + (mime.contains("pdf") ? ".pdf" : ".jpg");
+        final String nomeFinal = nome;
+
+        MultiValueMap<String, Object> corpo = new LinkedMultiValueMap<>();
+        if (tipo != null && !tipo.isBlank()) corpo.add("type", tipo);
+        corpo.add("documentFile", new ByteArrayResource(bytes) {
+            @Override public String getFilename() { return nomeFinal; }
+        });
+
+        try {
+            Map<String, Object> resp = client(loja.asaasApiKey).post()
+                    .uri("/myAccount/documents/{id}", documentoId)
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(corpo).retrieve().body(Map.class);
+            // Sem nome de arquivo nem conteudo no log: o que interessa e que a loja enviou.
+            log.info("Loja {}: documento {} ({}) enviado ao Asaas, {} KB",
+                    loja.getId(), documentoId, tipo, bytes.length / 1024);
+            return resp == null ? Map.of("enviado", true) : resp;
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "O Asaas nao aceitou o arquivo: " + e.getMessage());
         }
     }
 

@@ -2,6 +2,7 @@ package br.com.bora.controller;
 
 import br.com.bora.service.AsaasSubcontaService;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
@@ -23,6 +24,23 @@ public class RecebimentoController {
     @GetMapping
     public Map<String, Object> status() {
         return subcontas.status();
+    }
+
+    /** O que o Asaas ainda espera para liberar a conta do lojista (documento com foto, selfie). */
+    @GetMapping("/documentos")
+    public Map<String, Object> documentos() {
+        return subcontas.documentos();
+    }
+
+    /**
+     * Envia ao Asaas a foto tirada pelo lojista. O arquivo so passa pela memoria - nada e gravado.
+     * Corpo: multipart com `arquivo` (a foto) e `tipo` (IDENTIFICATION, IDENTIFICATION_SELFIE...).
+     */
+    @PostMapping("/documentos/{documentoId}")
+    public Map<String, Object> enviarDocumento(@PathVariable String documentoId,
+                                               @RequestParam(value = "tipo", required = false) String tipo,
+                                               @RequestParam("arquivo") MultipartFile arquivo) {
+        return subcontas.enviarDocumento(documentoId, tipo, arquivo);
     }
 
     /** Religa o aviso de pagamento (webhook) de quem ja tem subconta mas ficou sem ele. */
