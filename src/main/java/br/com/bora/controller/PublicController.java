@@ -97,7 +97,7 @@ public class PublicController {
         List<Produto> lista = produtos.findByLojaIdAndAtivoTrueOrderByCategoriaAscNomeAsc(lojaId);
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("loja", Map.of("id", loja.id, "nome", loja.nome == null ? "Cardápio" : loja.nome));
-        resp.put("pixDisponivel", integracaoPix(lojaId).isPresent());
+        resp.put("pixDisponivel", integracaoPix(lojaId).isPresent() || subcontaRecebendo(loja));
         // complementos por produto (1 consulta para grupos + 1 para itens)
         List<br.com.bora.entity.ComplementoGrupo> gs = lista.isEmpty() ? List.of()
                 : compGrupos.findByLojaIdAndProdutoIdInOrderById(lojaId, lista.stream().map(p -> p.id).toList());
@@ -241,7 +241,7 @@ public class PublicController {
 
         if ("PIX".equals(forma)) {
             // Recebimento por subconta do lojista (novo) OU integração PIX legada (chave própria).
-            boolean subconta = loja.asaasApiKey != null && !loja.asaasApiKey.isBlank();
+            boolean subconta = subcontaRecebendo(loja);
             IntegracaoCanal integ = integracaoPix(lojaId).orElse(null);
             if (!subconta && integ == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Esta loja não aceita PIX online");
@@ -339,6 +339,16 @@ public class PublicController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja indisponível");
         }
         return loja;
+    }
+
+    /**
+     * Subconta do lojista pronta para receber. Exige o KYC aprovado (asaasStatus ATIVO): conta
+     * criada mas em analise nao libera o dinheiro, e oferecer PIX ali deixaria o cliente pagando
+     * para uma conta que nao pode sacar. A tela de Integracoes reconfere isso no Asaas.
+     */
+    private boolean subcontaRecebendo(Loja loja) {
+        return loja != null && loja.asaasApiKey != null && !loja.asaasApiKey.isBlank()
+                && "ATIVO".equals(loja.asaasStatus);
     }
 
     private java.util.Optional<IntegracaoCanal> integracaoPix(Long lojaId) {

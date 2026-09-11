@@ -9,11 +9,14 @@ import br.com.bora.security.AuthContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,16 +59,26 @@ public class AsaasSubcontaService {
         return masterKey != null && !masterKey.isBlank();
     }
 
+    /**
+     * Timeout explicito: sem ele uma lentidao do Asaas prende a thread do request. A tela de
+     * Integracoes agora consulta o Asaas a cada abertura, entao isso deixou de ser teorico.
+     */
     private RestClient client(String apiKey) {
-        return RestClient.builder().baseUrl(baseUrl).defaultHeader("access_token", apiKey).build();
+        SimpleClientHttpRequestFactory fabrica = new SimpleClientHttpRequestFactory();
+        fabrica.setConnectTimeout(Duration.ofSeconds(5));
+        fabrica.setReadTimeout(Duration.ofSeconds(12));
+        return RestClient.builder().baseUrl(baseUrl).requestFactory(fabrica)
+                .defaultHeader("access_token", apiKey).build();
     }
 
     /** Estado do recebimento da loja logada. Restrito ao admin: a resposta traz o link de KYC
      *  bancário da subconta, que decide para onde vai o dinheiro do PIX. */
+    @Transactional
     public Map<String, Object> status() {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         Loja loja = lojas.findById(ctx.lojaId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
+        if (atualizarStatus(loja)) lojas.save(loja);
         return view(loja);
     }
 
@@ -202,6 +215,67 @@ public class AsaasSubcontaService {
         for (String k : chaves) {
             Object v = de.get(k);
             if (v != null && !String.valueOf(v).isBlank()) para.put(k, v);
+        }
+    }
+
+    /**
+     * Pergunta ao Asaas se o KYC da subconta ja foi aprovado. Existe porque asaasStatus nascia
+     * "PENDENTE" e NINGUEM nunca o virava "ATIVO": a tela dizia "falta o KYC" para sempre e o
+     * cardapio jamais liberava o PIX, mesmo com a conta ja aprovada do outro lado.
+     * Devolve true quando mudou (o chamador persiste).
+     */
+    @SuppressWarnings("unchecked")
+    public boolean atualizarStatus(Loja loja) {
+        if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) return false;
+        if ("ATIVO".equals(loja.asaasStatus)) return false;
+        try {
+            Map<String, Object> s = client(loja.asaasApiKey).get().uri("/myAccount/status")
+                    .retrieve().body(Map.class);
+            if (s == null || !aprovada(s)) return false;
+            loja.asaasStatus = "ATIVO";
+            log.info("Subconta Asaas da loja {} aprovada no KYC - PIX liberado no cardapio", loja.getId());
+            return true;
+        } catch (Exception e) {
+            // Conta ainda em analise, chave invalida ou Asaas fora do ar: mantem o status atual.
+            log.debug("Loja {}: nao consegui conferir o status da subconta: {}", loja.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * O Asaas devolve "general" (resumo) + os itens do cadastro. Vale o resumo quando ele vem;
+     * senao exige os tres itens que travam o recebimento. Cada valor pode ser texto ou objeto.
+     */
+    private boolean aprovada(Map<String, Object> s) {
+        Object geral = s.get("general");
+        if (geral != null) return "APPROVED".equalsIgnoreCase(valor(geral));
+        return "APPROVED".equalsIgnoreCase(valor(s.get("commercialInfo")))
+                && "APPROVED".equalsIgnoreCase(valor(s.get("documentation")))
+                && "APPROVED".equalsIgnoreCase(valor(s.get("bankAccountInfo")));
+    }
+
+    @SuppressWarnings("unchecked")
+    private String valor(Object o) {
+        if (o == null) return "";
+        if (o instanceof Map) {
+            Object st = ((Map<String, Object>) o).get("status");
+            return st == null ? "" : String.valueOf(st);
+        }
+        return String.valueOf(o);
+    }
+
+    /**
+     * Sem isto o lojista so descobriria a aprovacao se abrisse a tela de Integracoes: o KYC e
+     * aprovado no Asaas, ninguem avisa o nosso lado e o PIX segue escondido no cardapio.
+     */
+    @Scheduled(initialDelay = 120_000L, fixedDelay = 1_800_000L)
+    @Transactional
+    public void reconciliarSubcontas() {
+        if (!configurado()) return;
+        for (Loja loja : lojas.findAll()) {
+            if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) continue;
+            if ("ATIVO".equals(loja.asaasStatus)) continue;
+            if (atualizarStatus(loja)) lojas.save(loja);
         }
     }
 
