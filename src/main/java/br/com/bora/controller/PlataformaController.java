@@ -66,6 +66,118 @@ public class PlataformaController {
         this.provisionamento = provisionamento;
     }
 
+    /**
+     * Administradores da plataforma. Existe porque o ADMINISTRADOR_BORA so nascia do BootstrapAdmin,
+     * e SO quando nao havia nenhum: perder essa conta (ou a pessoa dela) deixava a plataforma sem
+     * dono, sem caminho de volta que nao fosse mexer no banco.
+     */
+    @GetMapping("/admins")
+    public List<Map<String, Object>> listarAdmins() {
+        ctx.requireAdminBora();
+        Long eu = ctx.atual().userId();
+        return usuarios.findByPapel(Papel.ADMINISTRADOR_BORA).stream()
+                .sorted(java.util.Comparator.comparing(Usuario::getId))
+                .map(u -> {
+                    Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("id", u.getId());
+                    m.put("nome", u.getNome());
+                    m.put("email", u.getEmail());
+                    m.put("ativo", Boolean.TRUE.equals(u.getAtivo()));
+                    m.put("criadoEm", u.getCriadoEm());
+                    m.put("euMesmo", u.getId().equals(eu)); // a tela nao deixa desativar a propria conta
+                    return m;
+                }).toList();
+    }
+
+    /**
+     * Cria outro administrador da plataforma. E-mail que ja existe e RECUSADO, nunca promovido:
+     * promover em silencio transformaria "cadastrei um colega" em escalar o operador de uma loja
+     * a dono da plataforma inteira.
+     */
+    @PostMapping("/admins")
+    @Transactional
+    public Map<String, Object> criarAdmin(@RequestBody Map<String, String> body) {
+        ctx.requireAdminBora();
+        String nome = body == null ? null : body.get("nome");
+        String email = body == null ? null : body.get("email");
+        String senha = body == null ? null : body.get("senha");
+        if (nome == null || nome.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o nome");
+        }
+        if (email == null || !email.contains("@") || email.trim().length() < 5) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe um e-mail válido");
+        }
+        // Mesmo minimo da troca de senha: esta conta enxerga todos os clientes da plataforma.
+        if (senha == null || senha.length() < 8) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A senha precisa ter ao menos 8 caracteres");
+        }
+        String limpo = email.trim().toLowerCase();
+        if (usuarios.findByEmail(limpo).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Este e-mail já existe no sistema. Use um e-mail que ainda não tenha conta.");
+        }
+
+        Usuario novo = new Usuario();
+        novo.setNome(nome.trim());
+        novo.setEmail(limpo);
+        novo.setSenhaHash(encoder.encode(senha));
+        novo.setPapel(Papel.ADMINISTRADOR_BORA);
+        novo.setLojaId(null); // papel global: conta de plataforma nao pertence a loja nenhuma
+        novo.setAtivo(true);
+        novo = usuarios.save(novo);
+
+        Usuario quem = usuarios.findById(ctx.atual().userId()).orElse(null);
+        log.warn("AUDITORIA plataforma: usuario {} ({}) CRIOU o administrador de plataforma {} ({})",
+                quem == null ? "?" : quem.getId(), quem == null ? "?" : quem.getEmail(),
+                novo.getId(), novo.getEmail());
+
+        Map<String, Object> r = new java.util.LinkedHashMap<>();
+        r.put("id", novo.getId());
+        r.put("nome", novo.getNome());
+        r.put("email", novo.getEmail());
+        r.put("ativo", true);
+        r.put("aviso", "Peça para ele trocar a senha no primeiro acesso, em Configurações → Minha senha.");
+        return r; // sem hash, nunca
+    }
+
+    /**
+     * Liga/desliga um administrador da plataforma — o caminho de revogar acesso (o JwtAuthFilter
+     * confere `ativo` a cada request, entao vale no request seguinte, sem esperar o token vencer).
+     * Duas travas contra ficar sem dono: ninguem desativa a propria conta nem o ultimo ativo.
+     */
+    @PutMapping("/admins/{id}/ativo")
+    @Transactional
+    public Map<String, Object> ativarAdmin(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        ctx.requireAdminBora();
+        boolean ativo = body != null && Boolean.parseBoolean(String.valueOf(body.get("ativo")));
+        // Trava a lista inteira (FOR UPDATE) ANTES de decidir: a conta que sobra tem de ser contada
+        // com o estado ja congelado, senao duas desativacoes simultaneas zeram a plataforma.
+        List<Usuario> daPlataforma = usuarios.findByPapelParaAtualizar(Papel.ADMINISTRADOR_BORA);
+        Usuario alvo = daPlataforma.stream().filter(u -> u.getId().equals(id)).findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Administrador de plataforma não encontrado"));
+        if (!ativo) {
+            if (alvo.getId().equals(ctx.atual().userId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Você não pode desativar a sua própria conta.");
+            }
+            long ativosDepois = daPlataforma.stream()
+                    .filter(u -> Boolean.TRUE.equals(u.getAtivo()) && !u.getId().equals(alvo.getId()))
+                    .count();
+            if (ativosDepois == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Este é o último administrador ativo da plataforma. Crie outro antes de desativá-lo.");
+            }
+        }
+        alvo.setAtivo(ativo);
+        usuarios.save(alvo);
+        Usuario quem = usuarios.findById(ctx.atual().userId()).orElse(null);
+        log.warn("AUDITORIA plataforma: usuario {} ({}) {} o administrador de plataforma {} ({})",
+                quem == null ? "?" : quem.getId(), quem == null ? "?" : quem.getEmail(),
+                ativo ? "REATIVOU" : "DESATIVOU", alvo.getId(), alvo.getEmail());
+        return Map.of("id", alvo.getId(), "ativo", ativo);
+    }
+
     /** Lista os clientes da plataforma. As arquivadas ficam fora por padrão (a "lixeira" é opt-in). */
     @GetMapping("/lojas")
     public List<Loja> listarLojas(@RequestParam(defaultValue = "false") boolean incluirArquivadas) {
