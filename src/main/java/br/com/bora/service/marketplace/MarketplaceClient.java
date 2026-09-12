@@ -70,4 +70,14 @@ public interface MarketplaceClient {
      * Recebe o status interno do BoraHapp; cada implementação traduz para o verbo do canal.
      */
     void enviarStatus(IntegracaoCanal i, String orderId, String statusInterno);
+
+    /**
+     * Cancelamento carrega o MOTIVO, que o status sozinho nao transporta. O iFood recusa
+     * requestCancellation sem codigo de motivo, e o motivo tem que vir da lista que ELE devolve
+     * para aquele pedido - lista fixa no nosso codigo e reprovacao na homologacao.
+     * O padrao mantem o comportamento antigo para quem nao implementou.
+     */
+    default void enviarCancelamento(IntegracaoCanal i, String orderId, String motivo) {
+        enviarStatus(i, orderId, "CANCELADO");
+    }
 }

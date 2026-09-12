@@ -291,6 +291,55 @@ public class IfoodClient implements MarketplaceClient {
     }
 
     /**
+     * Cancelamento no iFood tem duas partes: PERGUNTAR a ele quais motivos valem para aquele pedido
+     * (a lista muda conforme o estado) e mandar o codigo escolhido. Enviar requestCancellation sem
+     * corpo - como estava - o iFood recusa, e o pedido fica aberto la enquanto some do nosso painel.
+     *
+     * <p>A documentacao deles e explicita em NAO deixar a lista fixa no codigo do parceiro: e um dos
+     * criterios de homologacao. Por isso buscamos a lista a cada cancelamento e so casamos o texto do
+     * motivo que o lojista escreveu com a descricao que o iFood devolveu.</p>
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public void enviarCancelamento(IntegracaoCanal i, String orderId, String motivo) {
+        try {
+            List<Map<String, Object>> motivos = autenticado(i).get()
+                    .uri(ORDERS + "/{id}/cancellationReasons", orderId)
+                    .retrieve().body(List.class);
+            String codigo = escolherMotivo(motivos, motivo);
+            if (codigo == null) {
+                log.warn("iFood: pedido {} sem motivo de cancelamento aceito; cancelamento nao enviado", orderId);
+                return;
+            }
+            autenticado(i).post().uri(ORDERS + "/{id}/requestCancellation", orderId)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("reason", codigo))
+                    .retrieve().toBodilessEntity();
+            // 202: o iFood confirma (ou recusa) pelo evento CANCELLED / CANCELLATION_REQUEST_FAILED
+            // no polling seguinte - nao tratar a resposta daqui como "cancelado".
+            log.info("iFood: cancelamento do pedido {} solicitado (motivo {})", orderId, codigo);
+        } catch (Exception e) {
+            log.warn("iFood: falha ao cancelar o pedido {}: {}", orderId, e.getMessage());
+        }
+    }
+
+    /** Casa o motivo escrito pelo lojista com a descricao do iFood; sem casar, usa o primeiro da lista. */
+    private String escolherMotivo(List<Map<String, Object>> motivos, String motivo) {
+        if (motivos == null || motivos.isEmpty()) return null;
+        String alvo = motivo == null ? "" : motivo.trim().toLowerCase();
+        if (!alvo.isBlank()) {
+            for (Map<String, Object> m : motivos) {
+                String desc = str(firstNonNull(m.get("description"), m.get("descricao")));
+                if (desc != null && (desc.toLowerCase().contains(alvo) || alvo.contains(desc.toLowerCase()))) {
+                    return str(firstNonNull(m.get("cancelCodeId"), firstNonNull(m.get("code"), m.get("codigo"))));
+                }
+            }
+        }
+        Map<String, Object> primeiro = motivos.get(0);
+        return str(firstNonNull(primeiro.get("cancelCodeId"), firstNonNull(primeiro.get("code"), primeiro.get("codigo"))));
+    }
+
+    /**
      * Traduz o status interno do BoraHapp para o verbo da Merchant API.
      *
      * <p>Com o aceite automático ligado, o pedido já foi confirmado no momento da importação —
@@ -305,7 +354,7 @@ public class IfoodClient implements MarketplaceClient {
             case "EM_PREPARO" -> "startPreparation";
             case "PRONTO" -> "readyToPickup";
             case "SAIU_PARA_ENTREGA" -> "dispatch";
-            case "CANCELADO" -> "requestCancellation";
+            case "CANCELADO" -> null; // vai por enviarCancelamento, que leva o motivo junto
             default -> null; // ENTREGUE é concluído pelo próprio iFood
         };
     }

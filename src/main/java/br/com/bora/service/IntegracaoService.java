@@ -196,7 +196,12 @@ public class IntegracaoService {
                 return;
             }
             clientDe(i.canal).ifPresentOrElse(
-                    c -> c.enviarStatus(i, p.idExterno, novoStatus),
+                    c -> {
+                        // O motivo so existe no cancelamento e o marketplace exige ele; mandar
+                        // "CANCELADO" seco faz o iFood recusar e o pedido fica aberto la dentro.
+                        if ("CANCELADO".equals(novoStatus)) c.enviarCancelamento(i, p.idExterno, p.motivoCancelamento);
+                        else c.enviarStatus(i, p.idExterno, novoStatus);
+                    },
                     () -> log.debug("[{}] canal sem integração oficial; status {} não propagado",
                             p.canalExterno, novoStatus));
         });
