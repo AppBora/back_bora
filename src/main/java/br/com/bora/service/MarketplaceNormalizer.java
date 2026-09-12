@@ -43,11 +43,14 @@ public class MarketplaceNormalizer {
             Map<String, Object> i = mapOf(o);
             itens.add(new InboundOrder.InboundItem(str(i.get("name")), intg(i.get("quantity")), num(i.get("unitPrice"))));
         }
+        // Complemento e referencia decidem se o entregador acha a casa; sem eles o endereco vira
+        // so "rua e numero" e o motoboy liga para o cliente.
         String endereco = join(str(end.get("streetName")), str(end.get("streetNumber")));
+        endereco = juntarComVirgula(endereco, str(end.get("complement")), str(end.get("reference")));
         return new InboundOrder(firstNonBlank(str(r.get("id")), str(r.get("externalId"))), str(cliente.get("name")),
                 firstNonBlank(str(fone.get("number")), str(cliente.get("phone"))),
                 endereco, str(end.get("neighborhood")), pagamentoIfood(r),
-                str(r.get("observations")), firstNum(num(orderAmount.get("value")), num(total.get("value"))), itens);
+                observacaoIfood(r, delivery), firstNum(num(orderAmount.get("value")), num(total.get("value"))), itens);
     }
 
     @SuppressWarnings("unchecked")
@@ -112,6 +115,29 @@ public class MarketplaceNormalizer {
     }
 
     // ---------- Genérico / canônico (AiQFome, Goomer, site, testes) ----------
+    /**
+     * O iFood tem DOIS campos de observacao: a do pedido ("sem cebola") e a da ENTREGA
+     * ("interfone quebrado"), dentro de delivery. Ler so a primeira - como estava - perde a segunda,
+     * e exibir a observacao de entrega e criterio de homologacao do modulo de pedidos.
+     */
+    private String observacaoIfood(Map<String, Object> r, Map<String, Object> delivery) {
+        String doPedido = str(r.get("observations"));
+        String daEntrega = str(delivery.get("observations"));
+        if (daEntrega == null || daEntrega.isBlank()) return doPedido;
+        String prefixado = "Entrega: " + daEntrega;
+        return doPedido == null || doPedido.isBlank() ? prefixado : doPedido + " | " + prefixado;
+    }
+
+    private String juntarComVirgula(String base, String... extras) {
+        StringBuilder sb = new StringBuilder(base == null ? "" : base);
+        for (String e : extras) {
+            if (e == null || e.isBlank()) continue;
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(e.trim());
+        }
+        return sb.toString();
+    }
+
     private InboundOrder generico(Map<String, Object> r) {
         List<InboundOrder.InboundItem> itens = new ArrayList<>();
         for (Object o : listOf(r.get("itens"))) {
