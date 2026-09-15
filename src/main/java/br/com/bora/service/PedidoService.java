@@ -32,6 +32,8 @@ import java.util.Map;
 @Service
 public class PedidoService {
 
+    private static final org.slf4j.Logger AUDITORIA = org.slf4j.LoggerFactory.getLogger(PedidoService.class);
+
     private final PedidoRepository repo;
     private final PedidoItemRepository itemRepo;
     private final ProdutoRepository produtos;
@@ -365,9 +367,21 @@ public class PedidoService {
         return salvo;
     }
 
+    /**
+     * Exclusao definitiva — para pedido de teste ou lancado errado; pedido de verdade que nao vai sair
+     * se cancela. Leva junto itens e historico (nao ha chave estrangeira: antes ficavam orfaos) e
+     * desconta o contador do card do marketplace, que so subia.
+     */
+    @Transactional
     public void excluir(Long id) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA"); // RN06
-        repo.delete(buscarDaLoja(id));
+        Pedido p = buscarDaLoja(id);
+        itemRepo.deleteByLojaIdAndPedidoId(p.lojaId, p.id);
+        logs.deleteByLojaIdAndPedidoId(p.lojaId, p.id);
+        if (p.canalExterno != null) integracoes.descontarRecebido(p.lojaId, p.canalExterno);
+        repo.delete(p);
+        AUDITORIA.warn("AUDITORIA pedido: usuario {} EXCLUIU o pedido {} (codigo {}, origem {}, status {}, R$ {}) da loja {}",
+                ctx.atual().userId(), p.id, p.codigo, p.origem, p.status, p.valorTotal, p.lojaId);
     }
 
     public List<LogStatus> historico(Long pedidoId) {

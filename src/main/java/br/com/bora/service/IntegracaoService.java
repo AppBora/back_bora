@@ -195,6 +195,17 @@ public class IntegracaoService {
         repo.save(i);
     }
 
+    /** Pedido do canal excluido (teste ou lancado errado): o card deixa de conta-lo. */
+    public void descontarRecebido(Long lojaId, String canal) {
+        if (canal == null) return;
+        repo.findByLojaIdAndCanal(lojaId, canal.toUpperCase()).ifPresent(i -> {
+            if (i.pedidosRecebidos != null && i.pedidosRecebidos > 0) {
+                i.pedidosRecebidos = i.pedidosRecebidos - 1;
+                repo.save(i);
+            }
+        });
+    }
+
     /** Sincroniza o novo status do pedido de volta ao marketplace (push). No-op sem credenciais. */
     public void notificarStatus(Pedido p, String novoStatus) {
         if (p == null || p.canalExterno == null) return;
