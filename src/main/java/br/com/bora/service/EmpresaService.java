@@ -28,6 +28,13 @@ public class EmpresaService {
         return d.isBlank() ? null : d;
     }
 
+    /** Razão social por id — o painel da plataforma agrupa as lojas pelo cliente dono delas. */
+    public java.util.Map<Long, String> nomes() {
+        java.util.Map<Long, String> m = new java.util.HashMap<>();
+        empresas.findAll().forEach(e -> m.put(e.getId(), e.getRazaoSocial()));
+        return m;
+    }
+
     /** Empresa da loja: reaproveita a do CNPJ quando já existe, senão cria. */
     public Empresa paraDocumento(String documento, String nomeFallback) {
         String cnpj = normalizar(documento);

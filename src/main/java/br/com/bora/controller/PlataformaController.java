@@ -204,6 +204,8 @@ public class PlataformaController {
         pedidos.ultimoPedidoPorLoja().forEach(r ->
                 ultimoPedido.put((Long) r[0], (java.time.OffsetDateTime) r[1]));
 
+        Map<Long, String> nomesEmpresa = empresas.nomes();
+
         return lojas.findAll().stream()
                 .filter(l -> incluirArquivadas || !l.arquivada())
                 .map(l -> new br.com.bora.dto.ClienteView(
@@ -221,7 +223,9 @@ public class PlataformaController {
                         usuariosAtivos.getOrDefault(l.id, 0L),
                         (l.plano == null ? Plano.UNICO : l.plano).maxUsuarios,
                         l.criadoEm,
-                        ultimoPedido.get(l.id)))
+                        ultimoPedido.get(l.id),
+                        l.empresaId,
+                        l.empresaId == null ? null : nomesEmpresa.get(l.empresaId)))
                 .toList();
     }
 
@@ -324,25 +328,34 @@ public class PlataformaController {
         String motivo = body == null ? null : str(body.get("motivo"));
 
         Map<String, Object> resp = new java.util.LinkedHashMap<>();
-        if (ativo) {
-            loja.suspensaPelaPlataforma = false;
-            loja.suspensaEm = null;
-            loja.motivoSuspensao = null;
-            loja.setAtivo(true);
-        } else {
-            loja.suspensaPelaPlataforma = true;
-            loja.suspensaEm = java.time.OffsetDateTime.now();
-            loja.motivoSuspensao = motivo;
-            loja.setAtivo(false);
-            resp.put("assinatura", assinaturas.cancelarPorAdministracao(lojaId));
-        }
-        lojas.save(loja);
-        log.warn("AUDITORIA plataforma: usuario {} {} a loja {} ({}). Motivo: {}",
-                ctx.atual().userId(), ativo ? "REATIVOU" : "SUSPENDEU", lojaId, loja.getNome(), motivo);
+        if (ativo) reativar(loja);
+        else resp.put("assinatura", suspender(loja, motivo));
         resp.put("lojaId", lojaId);
         resp.put("ativo", ativo);
         resp.put("suspensa", loja.suspensaPelaPlataforma);
         return resp;
+    }
+
+    private String suspender(Loja loja, String motivo) {
+        loja.suspensaPelaPlataforma = true;
+        loja.suspensaEm = java.time.OffsetDateTime.now();
+        loja.motivoSuspensao = motivo;
+        loja.setAtivo(false);
+        String assinatura = assinaturas.cancelarPorAdministracao(loja.id);
+        lojas.save(loja);
+        log.warn("AUDITORIA plataforma: usuario {} SUSPENDEU a loja {} ({}). Motivo: {}",
+                ctx.atual().userId(), loja.id, loja.getNome(), motivo);
+        return assinatura;
+    }
+
+    private void reativar(Loja loja) {
+        loja.suspensaPelaPlataforma = false;
+        loja.suspensaEm = null;
+        loja.motivoSuspensao = null;
+        loja.setAtivo(true);
+        lojas.save(loja);
+        log.warn("AUDITORIA plataforma: usuario {} REATIVOU a loja {} ({})",
+                ctx.atual().userId(), loja.id, loja.getNome());
     }
 
     /**
@@ -359,8 +372,12 @@ public class PlataformaController {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Loja já está arquivada");
         }
         String motivo = body == null ? null : str(body.get("motivo"));
-        String assinatura = assinaturas.cancelarPorAdministracao(lojaId);
+        String assinatura = arquivar(loja, motivo);
+        return Map.of("lojaId", lojaId, "arquivadaEm", loja.excluidaEm.toString(), "assinatura", assinatura);
+    }
 
+    private String arquivar(Loja loja, String motivo) {
+        String assinatura = assinaturas.cancelarPorAdministracao(loja.id);
         loja.excluidaEm = java.time.OffsetDateTime.now();
         loja.excluidaPor = ctx.atual().userId();
         loja.motivoExclusao = motivo;
@@ -369,8 +386,8 @@ public class PlataformaController {
         loja.setAtivo(false);
         lojas.save(loja);
         log.warn("AUDITORIA plataforma: usuario {} ARQUIVOU a loja {} ({}). Motivo: {}. Assinatura: {}",
-                loja.excluidaPor, lojaId, loja.getNome(), motivo, assinatura);
-        return Map.of("lojaId", lojaId, "arquivadaEm", loja.excluidaEm.toString(), "assinatura", assinatura);
+                loja.excluidaPor, loja.id, loja.getNome(), motivo, assinatura);
+        return assinatura;
     }
 
     /** Tira o cliente da lixeira. Continua suspenso: reativar é uma segunda decisão, explícita. */
@@ -382,14 +399,134 @@ public class PlataformaController {
         if (!loja.arquivada()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Loja não está arquivada");
         }
+        restaurar(loja);
+        return Map.of("lojaId", lojaId, "arquivada", false, "suspensa", true,
+                "aviso", "A loja continua suspensa e sem assinatura ativa. Reative e peça uma nova assinatura.");
+    }
+
+    private void restaurar(Loja loja) {
         loja.excluidaEm = null;
         loja.excluidaPor = null;
         loja.motivoExclusao = null;
         lojas.save(loja);
         log.warn("AUDITORIA plataforma: usuario {} RESTAUROU a loja {} ({}) — segue suspensa",
-                ctx.atual().userId(), lojaId, loja.getNome());
-        return Map.of("lojaId", lojaId, "arquivada", false, "suspensa", true,
-                "aviso", "A loja continua suspensa e sem assinatura ativa. Reative e peça uma nova assinatura.");
+                ctx.atual().userId(), loja.id, loja.getNome());
+    }
+
+    // ------------------------------------------------------------------ empresa (cliente com várias lojas)
+
+    /**
+     * O cliente da plataforma é a empresa (mesmo CNPJ), que pode ter várias lojas — a Zirá tem três.
+     * Suspende ou reativa TODAS de uma vez, com a regra de cada loja: suspender corta o acesso, fecha
+     * o cardápio e cancela a assinatura no Asaas. Reativar só volta a loja que NÓS suspendemos: a que
+     * está "sem pagamento" (o Asaas derrubou) continua fora, senão voltaria ao ar sem pagar.
+     */
+    @PutMapping("/empresas/{empresaId}/ativo")
+    @Transactional
+    public Map<String, Object> definirAtivoEmpresa(@PathVariable Long empresaId, @RequestBody Map<String, Object> body) {
+        ctx.requireAdminBora();
+        List<Loja> daEmpresa = exigirLojasDaEmpresa(empresaId);
+        boolean ativo = !Boolean.FALSE.equals(body == null ? null : body.get("ativo"));
+        String motivo = body == null ? null : str(body.get("motivo"));
+        List<Map<String, Object>> resultado = new java.util.ArrayList<>();
+        int mexidas = 0;
+        for (Loja l : daEmpresa) {
+            String r;
+            if (l.arquivada()) {
+                r = "arquivada — não mexi";
+            } else if (ativo) {
+                if (Boolean.TRUE.equals(l.suspensaPelaPlataforma)) { reativar(l); r = "reativada"; mexidas++; }
+                else r = "não estava suspensa — não mexi";
+            } else if (Boolean.TRUE.equals(l.suspensaPelaPlataforma)) {
+                r = "já estava suspensa";
+            } else {
+                r = "suspensa · " + suspender(l, motivo);
+                mexidas++;
+            }
+            resultado.add(linhaDaEmpresa(l, r));
+        }
+        if (mexidas == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ativo
+                    ? "Nenhuma loja desta empresa está suspensa"
+                    : "Todas as lojas desta empresa já estão suspensas ou arquivadas");
+        }
+        log.warn("AUDITORIA plataforma: usuario {} {} a empresa {} ({} de {} lojas). Motivo: {}",
+                ctx.atual().userId(), ativo ? "REATIVOU" : "SUSPENDEU", empresaId, mexidas, daEmpresa.size(), motivo);
+        return respostaDaEmpresa(empresaId, resultado);
+    }
+
+    /** Arquiva ("exclui") a empresa inteira. Nunca apaga — mesma regra da loja: dá para restaurar. */
+    @PutMapping("/empresas/{empresaId}/arquivar")
+    @Transactional
+    public Map<String, Object> arquivarEmpresa(@PathVariable Long empresaId, @RequestBody(required = false) Map<String, Object> body) {
+        ctx.requireAdminBora();
+        List<Loja> daEmpresa = exigirLojasDaEmpresa(empresaId);
+        String motivo = body == null ? null : str(body.get("motivo"));
+        List<Map<String, Object>> resultado = new java.util.ArrayList<>();
+        int mexidas = 0;
+        for (Loja l : daEmpresa) {
+            if (l.arquivada()) {
+                resultado.add(linhaDaEmpresa(l, "já estava arquivada"));
+            } else {
+                resultado.add(linhaDaEmpresa(l, "arquivada · " + arquivar(l, motivo)));
+                mexidas++;
+            }
+        }
+        if (mexidas == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Todas as lojas desta empresa já estão arquivadas");
+        }
+        log.warn("AUDITORIA plataforma: usuario {} ARQUIVOU a empresa {} ({} de {} lojas). Motivo: {}",
+                ctx.atual().userId(), empresaId, mexidas, daEmpresa.size(), motivo);
+        return respostaDaEmpresa(empresaId, resultado);
+    }
+
+    /** Tira da lixeira as lojas arquivadas da empresa. Seguem suspensas: reativar é outra decisão. */
+    @PutMapping("/empresas/{empresaId}/restaurar")
+    @Transactional
+    public Map<String, Object> restaurarEmpresa(@PathVariable Long empresaId) {
+        ctx.requireAdminBora();
+        List<Loja> daEmpresa = exigirLojasDaEmpresa(empresaId);
+        List<Map<String, Object>> resultado = new java.util.ArrayList<>();
+        int mexidas = 0;
+        for (Loja l : daEmpresa) {
+            if (l.arquivada()) {
+                restaurar(l);
+                resultado.add(linhaDaEmpresa(l, "restaurada (continua suspensa)"));
+                mexidas++;
+            } else {
+                resultado.add(linhaDaEmpresa(l, "não estava arquivada"));
+            }
+        }
+        if (mexidas == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Nenhuma loja desta empresa está arquivada");
+        }
+        log.warn("AUDITORIA plataforma: usuario {} RESTAUROU a empresa {} ({} de {} lojas) — seguem suspensas",
+                ctx.atual().userId(), empresaId, mexidas, daEmpresa.size());
+        return respostaDaEmpresa(empresaId, resultado);
+    }
+
+    private List<Loja> exigirLojasDaEmpresa(Long empresaId) {
+        List<Loja> daEmpresa = lojas.findByEmpresaIdOrderByIdAsc(empresaId);
+        if (daEmpresa.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Empresa não encontrada");
+        }
+        return daEmpresa;
+    }
+
+    private Map<String, Object> linhaDaEmpresa(Loja l, String resultado) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("lojaId", l.id);
+        m.put("nome", l.getNome());
+        m.put("resultado", resultado);
+        return m;
+    }
+
+    private Map<String, Object> respostaDaEmpresa(Long empresaId, List<Map<String, Object>> resultado) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("empresaId", empresaId);
+        m.put("empresa", empresas.nomes().get(empresaId));
+        m.put("lojas", resultado);
+        return m;
     }
 
     private Loja exigirLoja(Long lojaId) {

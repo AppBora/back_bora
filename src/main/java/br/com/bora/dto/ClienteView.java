@@ -25,5 +25,7 @@ public record ClienteView(
         long usuariosAtivos,
         int maxUsuarios,
         OffsetDateTime criadoEm,
-        OffsetDateTime ultimoPedidoEm) {
+        OffsetDateTime ultimoPedidoEm,
+        Long empresaId,
+        String empresaNome) {
 }
