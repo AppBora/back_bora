@@ -115,12 +115,23 @@ public class IntegracaoService {
         List<Map<String, Object>> out = new ArrayList<>();
         for (var e : CATALOGO.entrySet()) {
             IntegracaoCanal i = existentes.get(e.getKey());
+            var client = clientDe(e.getKey());
+            boolean oficial = client.isPresent();
+            // Canal oficial so conta como conectado quando o marketplace aceitou o vinculo (devolveu token).
+            // Antes bastava ligar a chave ou receber um "Simular pedido" e o card dizia CONECTADO e
+            // "Recebendo pedidos" sem a loja estar ligada ao marketplace (caso da Zira no 99, 15/09).
+            boolean vinculado = i != null && "CONECTADO".equals(i.status) && i.accessToken != null
+                    && client.map(c -> c.configurado(i)).orElse(false);
+            String status = i == null ? "DESCONECTADO"
+                    : (!oficial || !"CONECTADO".equals(i.status)) ? i.status
+                    : vinculado ? "CONECTADO" : "DESCONECTADO";
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("canal", e.getKey());
             m.put("label", e.getValue());
             m.put("configurado", i != null);
             m.put("ativo", i != null && Boolean.TRUE.equals(i.ativo));
-            m.put("status", i == null ? "DESCONECTADO" : i.status);
+            m.put("status", status);
+            m.put("recebendo", i != null && Boolean.TRUE.equals(i.ativo) && (!oficial || vinculado));
             m.put("merchantId", i == null ? null : i.merchantId);
             m.put("clientId", i == null ? null : i.clientId);
             m.put("temSecret", i != null && i.clientSecret != null && !i.clientSecret.isBlank());
@@ -130,8 +141,7 @@ public class IntegracaoService {
             m.put("webhookPath", i == null || i.webhookToken == null ? null
                     : "/webhooks/" + e.getKey().toLowerCase() + "?loja=" + lojaId + "&token=" + i.webhookToken);
             // Canais com integração oficial não pedem credencial ao lojista: o app é da plataforma.
-            var client = clientDe(e.getKey());
-            m.put("oficial", client.isPresent());
+            m.put("oficial", oficial);
             m.put("appConfigurado", client.map(c -> c.configurado()).orElse(false));
             m.put("userCode", i == null ? null : i.userCode);
             m.put("verificationUrl", i == null ? null : i.verificationUrl);
@@ -179,7 +189,9 @@ public class IntegracaoService {
     public void registrarRecebido(IntegracaoCanal i) {
         i.pedidosRecebidos = (i.pedidosRecebidos == null ? 0 : i.pedidosRecebidos) + 1;
         i.ultimaSync = OffsetDateTime.now();
-        if (Boolean.TRUE.equals(i.ativo)) i.status = "CONECTADO";
+        // Em canal oficial quem conecta e o vinculo com o marketplace, nao um pedido que chegou
+        // (o "Simular pedido" da tela passa por aqui).
+        if (Boolean.TRUE.equals(i.ativo) && clientDe(i.canal).isEmpty()) i.status = "CONECTADO";
         repo.save(i);
     }
 
