@@ -10,4 +10,7 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
     Optional<IntegracaoCanal> findByLojaIdAndCanal(Long lojaId, String canal);
     Optional<IntegracaoCanal> findByIdAndLojaId(Long id, Long lojaId);
     List<IntegracaoCanal> findByAtivoTrue();
+
+    /** Webhook do Open Delivery: a 99 identifica a loja pelo header X-App-MerchantId. */
+    Optional<IntegracaoCanal> findFirstByCanalAndMerchantId(String canal, String merchantId);
 }

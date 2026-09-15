@@ -250,10 +250,14 @@ public class IfoodClient implements MarketplaceClient {
     }
 
     @Override
-    public void acknowledge(IntegracaoCanal i, List<String> eventIds) {
-        if (eventIds == null || eventIds.isEmpty()) return;
+    public void acknowledge(IntegracaoCanal i, List<Map<String, Object>> eventos) {
+        if (eventos == null || eventos.isEmpty()) return;
         List<Map<String, String>> corpo = new ArrayList<>();
-        for (String id : eventIds) corpo.add(Map.of("id", id));
+        for (Map<String, Object> ev : eventos) {
+            String id = eventoId(ev);
+            if (id != null) corpo.add(Map.of("id", id));
+        }
+        if (corpo.isEmpty()) return;
         try {
             autenticado(i).post().uri(EVENTS + "/acknowledgment")
                     .contentType(MediaType.APPLICATION_JSON)

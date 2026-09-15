@@ -63,20 +63,138 @@ public class MarketplaceNormalizer {
     }
 
     // ---------- 99Food ----------
+    /**
+     * 99Food no padrao Open Delivery v1.7.1 (GET /v1/orders/{id}). O parser anterior, de 30/06, lia
+     * um snake_case que a 99 nunca mandou (order_id, consumer, products, qty): todo pedido real
+     * entraria em branco. Os campos abaixo sao os da especificacao oficial.
+     *
+     * <p>A checklist de homologacao da 99 cobra ver no pedido: valor dos itens, da entrega,
+     * descontos (e de quem), quanto ja foi pago, quanto falta, quem entrega e a observacao. O que
+     * nao tem coluna propria no pedido vai escrito na observacao e no pagamento — que e o que
+     * aparece na tela e na comanda.</p>
+     */
     private InboundOrder noveNove(Map<String, Object> r) {
-        Map<String, Object> cliente = mapOf(r.get("consumer"));
-        Map<String, Object> end = mapOf(r.get("address"));
+        Map<String, Object> cliente = mapOf(r.get("customer"));
+        Map<String, Object> fone = mapOf(cliente.get("phone"));
+        Map<String, Object> delivery = mapOf(r.get("delivery"));
+        Map<String, Object> end = mapOf(delivery.get("deliveryAddress"));
+        Map<String, Object> total = mapOf(r.get("total"));
+        Map<String, Object> pagamentos = mapOf(r.get("payments"));
+
         List<InboundOrder.InboundItem> itens = new ArrayList<>();
-        for (Object o : listOf(r.get("products"))) {
+        for (Object o : listOf(r.get("items"))) {
             Map<String, Object> i = mapOf(o);
-            itens.add(new InboundOrder.InboundItem(firstNonBlank(str(i.get("name")), str(i.get("title"))),
-                    intg(i.get("qty")), num(i.get("price"))));
+            StringBuilder nome = new StringBuilder(firstNonBlank(str(i.get("name")), "Item"));
+            List<String> opcoes = new ArrayList<>();
+            for (Object op : listOf(i.get("options"))) {
+                Map<String, Object> m = mapOf(op);
+                String n = str(m.get("name"));
+                if (n == null || n.isBlank()) continue;
+                Integer q = intg(m.get("quantity"));
+                opcoes.add(q != null && q > 1 ? q + "x " + n : n);
+            }
+            if (!opcoes.isEmpty()) nome.append(" (+ ").append(String.join(", ", opcoes)).append(")");
+            String instrucao = str(i.get("specialInstructions"));
+            if (instrucao != null && !instrucao.isBlank()) nome.append(" — obs: ").append(instrucao.trim());
+            Integer qtd = intg(i.get("quantity"));
+            BigDecimal unitario = preco(i.get("unitPrice"));
+            // Com opcional pago o unitario sozinho nao fecha a conta: usa o total do item dividido.
+            BigDecimal totalItem = preco(i.get("totalPrice"));
+            if (totalItem != null && qtd != null && qtd > 0) {
+                unitario = totalItem.divide(BigDecimal.valueOf(qtd), 2, java.math.RoundingMode.HALF_UP);
+            }
+            itens.add(new InboundOrder.InboundItem(nome.toString(), qtd, unitario));
         }
-        return new InboundOrder(str(r.get("order_id")), firstNonBlank(str(cliente.get("name")), str(r.get("customer_name"))),
-                firstNonBlank(str(cliente.get("phone")), str(r.get("phone"))),
-                join(str(end.get("street")), str(end.get("number"))), str(end.get("district")),
-                firstNonBlank(str(r.get("payment_method")), "Pago no app"),
-                str(r.get("note")), firstNum(num(r.get("total_amount")), num(r.get("total"))), itens);
+
+        boolean pelaPlataforma = "MARKETPLACE".equalsIgnoreCase(str(delivery.get("deliveredBy")));
+        BigDecimal valorPedido = preco(total.get("orderAmount"));
+        BigDecimal taxa = preco(total.get("otherFees"));
+        BigDecimal desconto = preco(total.get("discount"));
+        BigDecimal pago = num(pagamentos.get("prepaid"));
+        BigDecimal aPagar = num(pagamentos.get("pending"));
+        // Roteiro da 99, pag. 21: com entrega pela plataforma a loja recebe tudo online, mesmo
+        // pedido pago em dinheiro — nao ha nada a cobrar do entregador.
+        if (pelaPlataforma) {
+            pago = valorPedido;
+            aPagar = BigDecimal.ZERO;
+        }
+
+        String endereco = juntarComVirgula(join(str(end.get("street")), str(end.get("number"))),
+                str(end.get("complement")), str(end.get("reference")));
+
+        List<String> obs = new ArrayList<>();
+        String numero = str(r.get("displayId"));
+        if (numero != null && !numero.isBlank()) obs.add("Pedido 99 #" + numero);
+        obs.add(pelaPlataforma ? "Entrega pela 99" : "Entrega pela loja");
+        String extra = str(r.get("extraInfo"));
+        if (extra != null && !extra.isBlank()) obs.add("Obs: " + extra.trim());
+        if (desconto != null && desconto.signum() > 0) obs.add("Desconto " + reais(desconto) + quemDeu(r));
+        if (taxa != null && taxa.signum() > 0) obs.add("Taxa de entrega " + reais(taxa));
+        obs.add("Ja pago " + reais(pago) + " · falta pagar " + reais(aPagar));
+
+        return new InboundOrder(str(r.get("id")),
+                firstNonBlank(str(cliente.get("name")), "Cliente 99Food"),
+                str(fone.get("number")),
+                endereco, str(end.get("district")),
+                pagamentoOpenDelivery(pagamentos, pelaPlataforma, aPagar),
+                String.join(" | ", obs), valorPedido, itens, taxa, numero);
+    }
+
+    /** Como o cliente paga, do jeito que o caixa e o entregador precisam ler. */
+    private String pagamentoOpenDelivery(Map<String, Object> pagamentos, boolean pelaPlataforma, BigDecimal aPagar) {
+        if (pelaPlataforma || aPagar == null || aPagar.signum() == 0) return "Pago online (99Food)";
+        for (Object o : listOf(pagamentos.get("methods"))) {
+            Map<String, Object> m = mapOf(o);
+            if (!"PENDING".equalsIgnoreCase(str(m.get("type")))) continue;
+            String metodo = str(m.get("method"));
+            if ("CASH".equalsIgnoreCase(metodo)) {
+                BigDecimal troco = num(m.get("changeFor"));
+                return troco != null && troco.signum() > 0
+                        ? "Dinheiro na entrega — troco para " + reais(troco)
+                        : "Dinheiro na entrega";
+            }
+            return "Na entrega: " + nomeDoMetodo(metodo);
+        }
+        return "Na entrega: " + reais(aPagar);
+    }
+
+    private String nomeDoMetodo(String m) {
+        if (m == null) return "a combinar";
+        return switch (m.toUpperCase()) {
+            case "CREDIT" -> "cartao de credito";
+            case "DEBIT" -> "cartao de debito";
+            case "CREDIT_DEBIT" -> "cartao";
+            case "MEAL_VOUCHER" -> "vale-refeicao";
+            case "FOOD_VOUCHER" -> "vale-alimentacao";
+            case "PIX" -> "PIX";
+            default -> m.toLowerCase();
+        };
+    }
+
+    /** Checklist da 99: distinguir cupom dado pela loja do cupom dado pela 99. */
+    private String quemDeu(Map<String, Object> r) {
+        List<String> quem = new ArrayList<>();
+        for (Object d : listOf(r.get("discounts"))) {
+            for (Object sp : listOf(mapOf(d).get("sponsorshipValues"))) {
+                String n = str(mapOf(sp).get("name"));
+                String rotulo = "MARKETPLACE".equalsIgnoreCase(n) ? "pago pela 99"
+                        : "MERCHANT".equalsIgnoreCase(n) ? "pago pela loja"
+                        : "CHAIN".equalsIgnoreCase(n) ? "pago pela rede" : null;
+                if (rotulo != null && !quem.contains(rotulo)) quem.add(rotulo);
+            }
+        }
+        return quem.isEmpty() ? "" : " (" + String.join(", ", quem) + ")";
+    }
+
+    /** Price do Open Delivery e {value, currency}; aceita numero solto por robustez. */
+    private BigDecimal preco(Object o) {
+        Map<String, Object> m = mapOf(o);
+        return m.isEmpty() ? num(o) : num(m.get("value"));
+    }
+
+    private String reais(BigDecimal v) {
+        BigDecimal x = v == null ? BigDecimal.ZERO : v.setScale(2, java.math.RoundingMode.HALF_UP);
+        return "R$ " + x.toPlainString().replace('.', ',');
     }
 
     // ---------- Rappi ----------

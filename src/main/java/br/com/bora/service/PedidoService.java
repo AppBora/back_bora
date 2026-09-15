@@ -240,12 +240,15 @@ public class PedidoService {
         Pedido p = new Pedido();
         p.lojaId = lojaId;
         p.clienteId = upsertCliente(lojaId, in);
-        p.codigo = in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000);
+        // O id do Open Delivery e um UUID: inutil para o atendente. Usa o numero que o cliente ve.
+        p.codigo = in.numeroExibicao() != null && !in.numeroExibicao().isBlank() ? in.numeroExibicao()
+                : in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000);
         p.formaPagamento = in.pagamento();
         p.origem = origemLabel;
         p.canalExterno = canalCodigo;
         p.idExterno = in.externalId();
         p.observacao = in.observacao();
+        if (in.taxaEntrega() != null) p.taxaEntrega = in.taxaEntrega();
         p.status = StatusPedido.RECEBIDO;
         p.criadoEm = OffsetDateTime.now();
         p.atualizadoEm = OffsetDateTime.now();
@@ -274,6 +277,43 @@ public class PedidoService {
     }
 
     /** Encontra o cliente pelo telefone (ou cria) — base do CRM com pedidos de marketplace. */
+    /** Pedido que veio de marketplace, pelo id que o canal deu a ele. Nao depende de login. */
+    public java.util.Optional<Pedido> buscarExterno(Long lojaId, String canalCodigo, String idExterno) {
+        if (idExterno == null || idExterno.isBlank()) return java.util.Optional.empty();
+        return repo.findFirstByLojaIdAndCanalExternoAndIdExterno(lojaId, canalCodigo, idExterno);
+    }
+
+    /**
+     * Cancelamento que CHEGOU do marketplace — o cliente cancelou no app, ou o canal confirmou um
+     * cancelamento nosso. Nao passa pelo alterarStatus por dois motivos: aquele exige usuario logado
+     * (o poller roda sem ninguem) e empurra o status de volta ao canal, o que mandaria cancelar de
+     * novo um pedido que o proprio canal acabou de cancelar.
+     *
+     * <p>Devolve false quando nao ha o que fazer (pedido desconhecido ou ja encerrado). E idempotente
+     * de proposito: o mesmo cancelamento pode chegar pelo polling e pelo webhook.</p>
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public boolean cancelarPorMarketplace(Long lojaId, String canalCodigo, String idExterno, String motivo) {
+        var achado = buscarExterno(lojaId, canalCodigo, idExterno);
+        if (achado.isEmpty()) return false;
+        Pedido p = achado.get();
+        if (p.status == StatusPedido.CANCELADO || p.status == StatusPedido.ENTREGUE) return false;
+        StatusPedido anterior = p.status;
+        p.status = StatusPedido.CANCELADO;
+        p.canceladoEm = OffsetDateTime.now();
+        p.atualizadoEm = OffsetDateTime.now();
+        p.motivoCancelamento = motivo == null || motivo.isBlank() ? "Cancelado pelo marketplace" : motivo;
+        Pedido salvo = repo.save(p);
+        LogStatus registro = new LogStatus();
+        registro.setLojaId(salvo.lojaId);
+        registro.setPedidoId(salvo.id);
+        registro.setStatusAnterior(anterior == null ? null : anterior.name());
+        registro.setStatusNovo(StatusPedido.CANCELADO.name());
+        registro.setUsuarioId(null); // quem cancelou foi o marketplace, nao um usuario do painel (coluna nula na V2)
+        logs.save(registro);
+        return true;
+    }
+
     private Long upsertCliente(Long lojaId, br.com.bora.dto.InboundOrder in) {
         String tel = in.clienteTelefone();
         if (tel != null && !tel.isBlank()) {

@@ -37,9 +37,6 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class MarketplacePoller {
 
-    /** Eventos que representam um pedido novo a ser criado aqui dentro. */
-    private static final List<String> EVENTOS_DE_PEDIDO = List.of("PLACED", "CREATED", "ORDER_PLACED", "CONFIRMED");
-
     private final List<MarketplaceClient> clients;
     private final IntegracaoCanalRepository repo;
     private final MarketplaceNormalizer normalizer;
@@ -114,39 +111,69 @@ public class MarketplacePoller {
         List<Map<String, Object>> eventos = client.polling(i);
         if (eventos.isEmpty()) return;
 
-        List<String> paraConfirmar = new ArrayList<>();
+        List<Map<String, Object>> paraConfirmar = new ArrayList<>();
         for (Map<String, Object> ev : eventos) {
-            String eventoId = str(ev.get("id"));
-            if (eventoId == null) continue;
-
-            String tipo = str(firstNonNull(ev.get("code"), ev.get("fullCode"), ev.get("eventType")));
-            String orderId = str(firstNonNull(ev.get("orderId"), ev.get("correlationId"), ev.get("resourceId")));
-            boolean ehPedidoNovo = orderId != null && tipo != null
-                    && EVENTOS_DE_PEDIDO.contains(tipo.toUpperCase());
-
-            if (!ehPedidoNovo) {
-                // Evento que não nos interessa ainda precisa ser confirmado, senão volta para sempre.
-                paraConfirmar.add(eventoId);
-                continue;
-            }
-
+            // Cada canal nomeia o id do evento do seu jeito (iFood "id", Open Delivery "eventId").
+            // Ler o campo errado fazia TODO evento do 99 cair aqui e sumir sem ser importado.
+            if (client.eventoId(ev) == null) continue;
             try {
-                criarPedido(client, i, orderId);
-                paraConfirmar.add(eventoId);
+                tratarEvento(client, i, ev);
+                paraConfirmar.add(ev);
             } catch (Exception e) {
-                // NÃO confirma: falha transitória (banco fora, timeout) faria o pedido sumir para
-                // sempre, porque o marketplace só reenvia o que não foi confirmado.
-                log.warn("[{}] loja {}: falha ao importar o pedido {} — evento mantido para a próxima tentativa: {}",
-                        client.canal(), i.lojaId, orderId, e.getMessage());
+                // NAO confirma: falha transitoria (banco fora, timeout) faria o pedido sumir para
+                // sempre, porque o marketplace so reenvia o que nao foi confirmado.
+                log.warn("[{}] loja {}: falha ao tratar o evento {} — mantido para a proxima tentativa: {}",
+                        client.canal(), i.lojaId, client.eventoId(ev), e.getMessage());
             }
         }
 
         client.acknowledge(i, paraConfirmar);
     }
 
+    /**
+     * Um evento do marketplace, venha do polling ou do webhook. Lanca excecao quando a falha e
+     * transitoria: quem chamou nao confirma, e o evento volta.
+     */
+    public void tratarEvento(MarketplaceClient client, IntegracaoCanal i, Map<String, Object> ev) {
+        String tipo = client.tipoEvento(ev);
+        String orderId = client.pedidoDoEvento(ev);
+        if (tipo == null || orderId == null) return;
+
+        if (client.ehPedidoNovo(tipo)) {
+            criarPedido(client, i, orderId);
+        } else if (client.ehCancelamento(tipo)) {
+            // Cancelado do lado do marketplace — pelo cliente, ou confirmando um cancelamento nosso.
+            // Antes este evento era confirmado e descartado, e o pedido seguia ativo no painel.
+            if (pedidos.cancelarPorMarketplace(i.lojaId, i.canal, orderId, client.motivoDoCancelamento(ev))) {
+                log.info("[{}] loja {}: pedido externo {} cancelado pelo marketplace", i.canal, i.lojaId, orderId);
+            }
+        } else if (client.ehPedidoDeCancelamento(tipo)) {
+            responderPedidoDeCancelamento(client, i, orderId, ev);
+        }
+    }
+
+    /**
+     * O cliente pediu para cancelar. Aceita enquanto a cozinha ainda pode parar; depois de pronto
+     * ou despachado, nega com o motivo da lista do canal.
+     */
+    private void responderPedidoDeCancelamento(MarketplaceClient client, IntegracaoCanal i, String orderId,
+                                               Map<String, Object> ev) {
+        String status = pedidos.buscarExterno(i.lojaId, i.canal, orderId)
+                .map(p -> p.status == null ? null : p.status.name()).orElse(null);
+        boolean aceitar = status == null || List.of("RECEBIDO", "CONFIRMADO", "EM_PREPARO", "CANCELADO").contains(status);
+        client.responderPedidoDeCancelamento(i, orderId, aceitar, status);
+        if (aceitar) pedidos.cancelarPorMarketplace(i.lojaId, i.canal, orderId, client.motivoDoCancelamento(ev));
+        log.info("[{}] loja {}: pedido de cancelamento do cliente {} para o pedido {} (status {})",
+                i.canal, i.lojaId, aceitar ? "ACEITO" : "NEGADO", orderId, status);
+    }
+
     private void criarPedido(MarketplaceClient client, IntegracaoCanal i, String orderId) {
         Map<String, Object> detalhe = client.detalhePedido(i, orderId);
-        if (detalhe.isEmpty()) return;
+        // Detalhe vazio e falha (o cliente engole a excecao e devolve vazio). Antes isto era um
+        // "return" silencioso: o evento era confirmado e o pedido se perdia para sempre.
+        if (detalhe.isEmpty()) {
+            throw new IllegalStateException("o detalhe do pedido " + orderId + " veio vazio");
+        }
 
         InboundOrder normalizado = normalizer.normalizar(i.canal, detalhe);
         Pedido criado = pedidos.criarExterno(i.lojaId, i.canal, IntegracaoService.label(i.canal), normalizado);
@@ -155,7 +182,7 @@ public class MarketplacePoller {
         repo.save(i);
         log.info("[{}] loja {}: pedido externo {} importado como #{}", i.canal, i.lojaId, orderId, criado.id);
 
-        // Aceite automático: confirma no marketplace assim que o pedido entra aqui.
+        // Aceite automatico: confirma no marketplace assim que o pedido entra aqui.
         if (Boolean.TRUE.equals(i.autoAceitar)) {
             client.enviarStatus(i, orderId, MarketplaceClient.ACEITE_INICIAL);
         }
