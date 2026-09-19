@@ -112,10 +112,20 @@ public class FidelidadeService {
      * novo sobre o valor efetivamente pago.
      */
     public void registrar(Long lojaId, Long clienteId, BigDecimal totalPago, BigDecimal resgate) {
+        registrar(lojaId, clienteId, totalPago, resgate, true);
+    }
+
+    /**
+     * {@code creditarCashback=false}: soma a compra no histórico do cliente sem gerar saldo. É o caso do
+     * cliente de marketplace sem telefone de verdade — ele nunca conseguiria usar esse saldo aqui.
+     */
+    public void registrar(Long lojaId, Long clienteId, BigDecimal totalPago, BigDecimal resgate, boolean creditarCashback) {
         if (clienteId == null) return;
         BigDecimal usado = resgate == null ? BigDecimal.ZERO : resgate;
         BigDecimal pago = totalPago == null ? BigDecimal.ZERO : totalPago;
-        BigDecimal taxa = percentual(lojaId).divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP);
+        BigDecimal taxa = creditarCashback
+                ? percentual(lojaId).divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
         clientes.findByIdAndLojaId(clienteId, lojaId).ifPresent(c -> {
             BigDecimal gasto = c.totalGasto == null ? BigDecimal.ZERO : c.totalGasto;
             BigDecimal saldo = c.cashback == null ? BigDecimal.ZERO : c.cashback;

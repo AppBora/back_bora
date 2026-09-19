@@ -137,7 +137,7 @@ public class PedidoService {
                     p.id, p.codigo, p.status == null ? null : p.status.name(), p.valorTotal,
                     p.formaPagamento, p.origem, p.observacao, p.criadoEm, p.atualizadoEm,
                     c == null ? null : c.nome,
-                    c == null ? null : c.telefone,
+                    c != null && c.telefone != null && !c.telefone.isBlank() ? c.telefone : p.clienteTelefone,
                     c == null ? null : c.endereco,
                     c == null ? null : c.bairro,
                     p.entregador,
@@ -241,7 +241,10 @@ public class PedidoService {
         }
         Pedido p = new Pedido();
         p.lojaId = lojaId;
-        p.clienteId = upsertCliente(lojaId, in);
+        String telReal = telefoneDePessoa(in.clienteTelefone());
+        p.clienteId = upsertCliente(lojaId, canalCodigo, in, telReal);
+        // O telefone do pedido fica no pedido: no iFood é a central + código, que não vai para o cadastro.
+        p.clienteTelefone = in.clienteTelefone();
         // O id do Open Delivery e um UUID: inutil para o atendente. Usa o numero que o cliente ve.
         p.codigo = in.numeroExibicao() != null && !in.numeroExibicao().isBlank() ? in.numeroExibicao()
                 : in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000);
@@ -274,7 +277,8 @@ public class PedidoService {
         Pedido salvo = repo.save(p);
         itens.forEach(it -> it.setPedidoId(salvo.id));
         itemRepo.saveAll(itens);
-        acumularFidelidade(lojaId, salvo.clienteId, p.valorTotal, BigDecimal.ZERO);
+        // Sem telefone de verdade o cliente nunca usaria o cashback aqui: registra a compra, sem saldo.
+        fidelidade.registrar(lojaId, salvo.clienteId, p.valorTotal, BigDecimal.ZERO, telReal != null);
         return salvo;
     }
 
@@ -316,20 +320,46 @@ public class PedidoService {
         return true;
     }
 
-    private Long upsertCliente(Long lojaId, br.com.bora.dto.InboundOrder in) {
-        String tel = in.clienteTelefone();
-        if (tel != null && !tel.isBlank()) {
-            var existente = clientes.findFirstByLojaIdAndTelefone(lojaId, tel);
-            if (existente.isPresent()) return existente.get().id;
+    /**
+     * Encontra (ou cria) o cliente do pedido de marketplace. Ordem: o id que o marketplace dá ao cliente;
+     * depois o telefone, só se for de uma pessoa. O iFood manda a CENTRAL dele (0800 + localizador) no
+     * lugar do celular — casar por ela juntava todos os clientes do iFood da loja num cadastro só.
+     */
+    private Long upsertCliente(Long lojaId, String canalCodigo, br.com.bora.dto.InboundOrder in, String telReal) {
+        String ext = in.clienteIdExterno();
+        if (ext != null) {
+            var doMarketplace = clientes.findFirstByLojaIdAndCanalExternoAndIdExterno(lojaId, canalCodigo, ext);
+            if (doMarketplace.isPresent()) return doMarketplace.get().id;
         }
-        if ((tel == null || tel.isBlank()) && (in.clienteNome() == null || in.clienteNome().isBlank())) return null;
+        if (telReal != null) {
+            var existente = clientes.findFirstByLojaIdAndTelefone(lojaId, telReal);
+            if (existente.isPresent()) {
+                Cliente c = existente.get();
+                if (ext != null && c.idExterno == null) { c.canalExterno = canalCodigo; c.idExterno = ext; clientes.save(c); }
+                return c.id;
+            }
+        }
+        if (telReal == null && ext == null && (in.clienteNome() == null || in.clienteNome().isBlank())) return null;
         Cliente c = new Cliente();
         c.lojaId = lojaId;
         c.nome = in.clienteNome() == null || in.clienteNome().isBlank() ? "Cliente marketplace" : in.clienteNome();
-        c.telefone = tel;
+        c.telefone = telReal;
         c.endereco = in.endereco();
         c.bairro = in.bairro();
+        c.canalExterno = ext == null ? null : canalCodigo;
+        c.idExterno = ext;
         return clientes.save(c).id;
+    }
+
+    /** Telefone de pessoa, ou null para vazio e para central (0800/0300/0500/0900 ou curto demais). */
+    static String telefoneDePessoa(String tel) {
+        if (tel == null || tel.isBlank()) return null;
+        String d = tel.replaceAll("\\D", "");
+        if (d.length() < 10) return null;
+        for (String central : new String[] {"0800", "0300", "0500", "0900"}) {
+            if (d.startsWith(central)) return null;
+        }
+        return tel;
     }
 
     public Pedido definirEntregador(Long id, String entregador) {

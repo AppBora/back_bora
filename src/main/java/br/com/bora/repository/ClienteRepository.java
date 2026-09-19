@@ -9,4 +9,5 @@ public interface ClienteRepository extends JpaRepository<Cliente, Long> {
     List<Cliente> findByLojaIdOrderByNomeAsc(Long lojaId);
     Optional<Cliente> findByIdAndLojaId(Long id, Long lojaId);
     Optional<Cliente> findFirstByLojaIdAndTelefone(Long lojaId, String telefone);
+    Optional<Cliente> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno);
 }

@@ -48,9 +48,17 @@ public class MarketplaceNormalizer {
         String endereco = join(str(end.get("streetName")), str(end.get("streetNumber")));
         endereco = juntarComVirgula(endereco, str(end.get("complement")), str(end.get("reference")));
         return new InboundOrder(firstNonBlank(str(r.get("id")), str(r.get("externalId"))), str(cliente.get("name")),
-                firstNonBlank(str(fone.get("number")), str(cliente.get("phone"))),
+                // O iFood manda a CENTRAL dele + um localizador: para falar com o cliente o entregador liga
+                // na central e digita o código. Sem o código na tela o número não serve para nada.
+                comLocalizador(firstNonBlank(str(fone.get("number")), str(cliente.get("phone"))), str(fone.get("localizer"))),
                 endereco, str(end.get("neighborhood")), pagamentoIfood(r),
-                observacaoIfood(r, delivery), firstNum(num(orderAmount.get("value")), num(total.get("value"))), itens);
+                observacaoIfood(r, delivery), firstNum(num(orderAmount.get("value")), num(total.get("value"))), itens)
+                .comClienteExterno(str(cliente.get("id")));
+    }
+
+    private static String comLocalizador(String numero, String localizador) {
+        if (numero == null || localizador == null || localizador.isBlank()) return numero;
+        return numero + " · código " + localizador.trim();
     }
 
     @SuppressWarnings("unchecked")
@@ -137,7 +145,8 @@ public class MarketplaceNormalizer {
                 str(fone.get("number")),
                 endereco, str(end.get("district")),
                 pagamentoOpenDelivery(pagamentos, pelaPlataforma, aPagar),
-                String.join(" | ", obs), valorPedido, itens, taxa, numero);
+                String.join(" | ", obs), valorPedido, itens, taxa, numero)
+                .comClienteExterno(str(cliente.get("id")));
     }
 
     /** Como o cliente paga, do jeito que o caixa e o entregador precisam ler. */

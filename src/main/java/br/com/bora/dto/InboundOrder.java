@@ -15,7 +15,25 @@ public record InboundOrder(
         BigDecimal total,
         List<InboundItem> itens,
         BigDecimal taxaEntrega,
-        String numeroExibicao) {
+        String numeroExibicao,
+        String clienteIdExterno) {
+
+    /** Sem o id do cliente no marketplace (canais que ainda nao o leem). */
+    public InboundOrder(String externalId, String clienteNome, String clienteTelefone, String endereco, String bairro,
+                        String pagamento, String observacao, BigDecimal total, List<InboundItem> itens,
+                        BigDecimal taxaEntrega, String numeroExibicao) {
+        this(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao, total, itens,
+                taxaEntrega, numeroExibicao, null);
+    }
+
+    /**
+     * O mesmo pedido com o id que o marketplace da ao cliente. E por ele que o cadastro reconhece o
+     * cliente que volta: o telefone do iFood e a central do iFood, igual para todos.
+     */
+    public InboundOrder comClienteExterno(String id) {
+        return new InboundOrder(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao,
+                total, itens, taxaEntrega, numeroExibicao, id == null || id.isBlank() ? null : id.trim());
+    }
 
     /**
      * Formato sem taxa de entrega nem numero de exibicao — os canais que ainda nao os leem.
@@ -24,7 +42,7 @@ public record InboundOrder(
      */
     public InboundOrder(String externalId, String clienteNome, String clienteTelefone, String endereco, String bairro,
                         String pagamento, String observacao, BigDecimal total, List<InboundItem> itens) {
-        this(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao, total, itens, null, null);
+        this(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao, total, itens, null, null, null);
     }
 
     public record InboundItem(String nome, Integer quantidade, BigDecimal precoUnitario) {}
