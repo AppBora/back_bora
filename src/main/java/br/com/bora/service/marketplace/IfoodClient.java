@@ -312,6 +312,12 @@ public class IfoodClient implements MarketplaceClient {
     public void enviarStatus(IntegracaoCanal i, String orderId, String statusInterno) {
         String verbo = verbo(i, statusInterno);
         if (verbo == null) return; // status sem correspondência no iFood
+        // Retirada no balcão não sai para entrega, e na entrega pelo iFood quem sai é o entregador dele:
+        // nos dois casos o "dispatch" não se aplica e o iFood recusaria.
+        if ("dispatch".equals(verbo) && semDespacho(i, orderId)) {
+            log.info("iFood: pedido {} é retirada ou entrega do iFood; dispatch não se aplica e não foi enviado", orderId);
+            return;
+        }
         try {
             autenticado(i).post().uri(ORDERS + "/{id}/{verbo}", orderId, verbo)
                     .retrieve().toBodilessEntity();
@@ -407,6 +413,14 @@ public class IfoodClient implements MarketplaceClient {
      * confirmar de novo quando o operador move o card seria uma segunda chamada de confirmação
      * para um pedido já confirmado, que o iFood recusa.</p>
      */
+    @SuppressWarnings("unchecked")
+    private boolean semDespacho(IntegracaoCanal i, String orderId) {
+        Map<String, Object> d = detalhePedido(i, orderId);
+        if ("TAKEOUT".equalsIgnoreCase(str(d.get("orderType")))) return true;
+        Object delivery = d.get("delivery");
+        return delivery instanceof Map && "IFOOD".equalsIgnoreCase(str(((Map<String, Object>) delivery).get("deliveredBy")));
+    }
+
     private String verbo(IntegracaoCanal i, String statusInterno) {
         if (statusInterno == null) return null;
         return switch (statusInterno) {

@@ -31,28 +31,99 @@ public class MarketplaceNormalizer {
 
     // ---------- iFood (estrutura v3) ----------
     @SuppressWarnings("unchecked")
+    /**
+     * Pedido do iFood (GET /order/v1.0/orders/{id}). Reescrito em 19/09/2026 sobre um pedido REAL da loja
+     * de teste (consultado pela ferramenta de suporte), não sobre suposição: o total vem em número
+     * (total.orderAmount) e o preço do item com complementos em totalPrice. Antes o Bora não achava o
+     * total, somava só o preço base dos itens e um pedido de R$ 27,00 aparecia como R$ 10,00.
+     *
+     * <p>O que a homologação do iFood cobra na tela e vai escrito aqui: observação e complementos de cada
+     * item, bandeira do cartão, troco, cupons e quem paga, retirada no balcão, pedido agendado.</p>
+     */
     private InboundOrder ifood(Map<String, Object> r) {
         Map<String, Object> cliente = mapOf(r.get("customer"));
         Map<String, Object> fone = mapOf(cliente.get("phone"));
         Map<String, Object> delivery = mapOf(r.get("delivery"));
         Map<String, Object> end = mapOf(delivery.get("deliveryAddress"));
         Map<String, Object> total = mapOf(r.get("total"));
-        Map<String, Object> orderAmount = mapOf(total.get("orderAmount"));
+        Map<String, Object> pagamentos = mapOf(r.get("payments"));
+
         List<InboundOrder.InboundItem> itens = new ArrayList<>();
         for (Object o : listOf(r.get("items"))) {
             Map<String, Object> i = mapOf(o);
-            itens.add(new InboundOrder.InboundItem(str(i.get("name")), intg(i.get("quantity")), num(i.get("unitPrice"))));
+            StringBuilder nome = new StringBuilder(firstNonBlank(str(i.get("name")), "Item"));
+            List<String> opcoes = new ArrayList<>();
+            for (Object op : listOf(i.get("options"))) {
+                Map<String, Object> m = mapOf(op);
+                String n = str(m.get("name"));
+                if (n == null || n.isBlank()) continue;
+                Integer q = intg(m.get("quantity"));
+                StringBuilder um = new StringBuilder(q != null && q > 1 ? q + "x " + n : n);
+                List<String> sub = new ArrayList<>();
+                for (Object cz : listOf(m.get("customizations"))) {
+                    String cn = str(mapOf(cz).get("name"));
+                    if (cn != null && !cn.isBlank()) sub.add(cn);
+                }
+                if (!sub.isEmpty()) um.append(" [").append(String.join(", ", sub)).append("]");
+                opcoes.add(um.toString());
+            }
+            if (!opcoes.isEmpty()) nome.append(" (+ ").append(String.join(", ", opcoes)).append(")");
+            String obsItem = str(i.get("observations"));
+            if (obsItem != null && !obsItem.isBlank()) nome.append(" — obs: ").append(obsItem.trim());
+            Integer qtd = intg(i.get("quantity"));
+            BigDecimal unitario = num(i.get("unitPrice"));
+            // Com complemento o preço base não fecha a conta: usa o total do item dividido pela quantidade.
+            BigDecimal totalItem = num(i.get("totalPrice"));
+            if (totalItem != null && qtd != null && qtd > 0) {
+                unitario = totalItem.divide(BigDecimal.valueOf(qtd), 2, java.math.RoundingMode.HALF_UP);
+            }
+            itens.add(new InboundOrder.InboundItem(nome.toString(), qtd, unitario));
         }
-        // Complemento e referencia decidem se o entregador acha a casa; sem eles o endereco vira
-        // so "rua e numero" e o motoboy liga para o cliente.
-        String endereco = join(str(end.get("streetName")), str(end.get("streetNumber")));
-        endereco = juntarComVirgula(endereco, str(end.get("complement")), str(end.get("reference")));
+
+        boolean retirada = "TAKEOUT".equalsIgnoreCase(str(r.get("orderType")));
+        boolean entregaIfood = "IFOOD".equalsIgnoreCase(str(delivery.get("deliveredBy")));
+        BigDecimal valorPedido = firstNum(num(total.get("orderAmount")), num(mapOf(total.get("orderAmount")).get("value")));
+        BigDecimal taxa = num(total.get("deliveryFee"));
+        BigDecimal pago = num(pagamentos.get("prepaid"));
+        BigDecimal aPagar = num(pagamentos.get("pending"));
+
+        List<String> obs = new ArrayList<>();
+        String numero = str(r.get("displayId"));
+        if (numero != null && !numero.isBlank()) obs.add("Pedido iFood #" + numero);
+        if (retirada) {
+            String hora = hora(str(mapOf(r.get("takeout")).get("takeoutDateTime")));
+            obs.add("RETIRADA NO BALCÃO" + (hora == null ? "" : " — cliente vem buscar às " + hora));
+        } else {
+            obs.add(entregaIfood ? "Entrega pelo iFood" : "Entrega pela loja");
+        }
+        if ("SCHEDULED".equalsIgnoreCase(str(r.get("orderTiming")))) {
+            String quando = hora(str(mapOf(r.get("schedule")).get("deliveryDateTimeStart")));
+            obs.add("AGENDADO" + (quando == null ? "" : " para " + quando));
+        }
+        String obsPedido = str(r.get("observations"));
+        if (obsPedido != null && !obsPedido.isBlank()) obs.add(obsPedido.trim());
+        String obsEntrega = str(delivery.get("observations"));
+        if (obsEntrega != null && !obsEntrega.isBlank()) obs.add("Entrega: " + obsEntrega.trim());
+        for (Object b : listOf(r.get("benefits"))) {
+            Map<String, Object> cupom = mapOf(b);
+            BigDecimal valor = num(cupom.get("value"));
+            if (valor == null || valor.signum() <= 0) continue;
+            obs.add("Cupom " + reais(valor) + quemPagaCupom(cupom));
+        }
+        if (taxa != null && taxa.signum() > 0) obs.add("Taxa de entrega " + reais(taxa));
+        String coleta = str(delivery.get("pickupCode"));
+        if (entregaIfood && coleta != null && !coleta.isBlank()) obs.add("Código de coleta " + coleta);
+        if (pago != null || aPagar != null) obs.add("Já pago " + reais(pago) + " · falta pagar " + reais(aPagar));
+
+        String endereco = retirada ? null : juntarComVirgula(join(str(end.get("streetName")), str(end.get("streetNumber"))),
+                str(end.get("complement")), str(end.get("reference")));
+
         return new InboundOrder(firstNonBlank(str(r.get("id")), str(r.get("externalId"))), str(cliente.get("name")),
                 // O iFood manda a CENTRAL dele + um localizador: para falar com o cliente o entregador liga
                 // na central e digita o código. Sem o código na tela o número não serve para nada.
                 comLocalizador(firstNonBlank(str(fone.get("number")), str(cliente.get("phone"))), str(fone.get("localizer"))),
-                endereco, str(end.get("neighborhood")), pagamentoIfood(r),
-                observacaoIfood(r, delivery), firstNum(num(orderAmount.get("value")), num(total.get("value"))), itens)
+                endereco, retirada ? null : str(end.get("neighborhood")), pagamentoIfood(pagamentos),
+                String.join(" | ", obs), valorPedido, itens, taxa, numero)
                 .comClienteExterno(str(cliente.get("id")));
     }
 
@@ -62,12 +133,74 @@ public class MarketplaceNormalizer {
     }
 
     @SuppressWarnings("unchecked")
-    private String pagamentoIfood(Map<String, Object> r) {
-        for (Object o : listOf(mapOf(r.get("payments")).get("methods"))) {
+    /** Cada forma de pagamento com bandeira, se é online ou na entrega, e o troco do dinheiro. */
+    private String pagamentoIfood(Map<String, Object> pagamentos) {
+        List<String> partes = new ArrayList<>();
+        List<Object> metodos = listOf(pagamentos.get("methods"));
+        for (Object o : metodos) {
             Map<String, Object> m = mapOf(o);
-            String t = str(m.get("method")); if (t != null) return t;
+            String metodo = str(m.get("method"));
+            String nome = nomeDoMetodoIfood(metodo);
+            String bandeira = str(mapOf(m.get("card")).get("brand"));
+            if (bandeira != null && !bandeira.isBlank()) nome += " " + bandeira.trim();
+            boolean online = Boolean.TRUE.equals(m.get("prepaid")) || "ONLINE".equalsIgnoreCase(str(m.get("type")));
+            BigDecimal valor = num(m.get("value"));
+            String texto;
+            if (online) {
+                texto = "Pago online: " + nome;
+            } else if ("CASH".equalsIgnoreCase(metodo)) {
+                BigDecimal troco = num(mapOf(m.get("cash")).get("changeFor"));
+                texto = "Dinheiro na entrega" + (troco != null && troco.signum() > 0 ? " — troco para " + reais(troco) : " — sem troco");
+            } else {
+                texto = "Na entrega: " + nome + " (maquininha)";
+            }
+            if (valor != null && metodos.size() > 1) texto += " " + reais(valor);
+            partes.add(texto);
         }
-        return "Pago no app";
+        return partes.isEmpty() ? "Pago no app" : String.join(" + ", partes);
+    }
+
+    private String nomeDoMetodoIfood(String m) {
+        if (m == null) return "pagamento";
+        return switch (m.toUpperCase()) {
+            case "CREDIT" -> "Crédito";
+            case "DEBIT" -> "Débito";
+            case "MEAL_VOUCHER" -> "Vale-refeição";
+            case "FOOD_VOUCHER" -> "Vale-alimentação";
+            case "PIX" -> "PIX";
+            case "CASH" -> "Dinheiro";
+            case "DIGITAL_WALLET" -> "Carteira digital";
+            case "GIFT_CARD" -> "Vale-presente";
+            default -> m.toLowerCase();
+        };
+    }
+
+    /** Checklist do iFood: mostrar quem paga o cupom — o iFood ou a loja. */
+    private String quemPagaCupom(Map<String, Object> cupom) {
+        List<String> quem = new ArrayList<>();
+        for (Object sp : listOf(cupom.get("sponsorshipValues"))) {
+            Map<String, Object> s = mapOf(sp);
+            BigDecimal v = num(s.get("value"));
+            if (v != null && v.signum() == 0) continue;
+            String n = str(s.get("name"));
+            String rotulo = "IFOOD".equalsIgnoreCase(n) ? "pago pelo iFood"
+                    : "MERCHANT".equalsIgnoreCase(n) ? "pago pela loja"
+                    : "CHAIN".equalsIgnoreCase(n) ? "pago pela rede"
+                    : n == null ? null : "pago por " + n.toLowerCase();
+            if (rotulo != null && !quem.contains(rotulo)) quem.add(rotulo);
+        }
+        return quem.isEmpty() ? "" : " (" + String.join(", ", quem) + ")";
+    }
+
+    /** "dd/MM HH:mm" no horário de Brasília, a partir do ISO que o iFood manda. */
+    private String hora(String iso) {
+        if (iso == null || iso.isBlank()) return null;
+        try {
+            return java.time.OffsetDateTime.parse(iso).atZoneSameInstant(java.time.ZoneId.of("America/Sao_Paulo"))
+                    .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm"));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ---------- 99Food ----------
@@ -247,14 +380,6 @@ public class MarketplaceNormalizer {
      * ("interfone quebrado"), dentro de delivery. Ler so a primeira - como estava - perde a segunda,
      * e exibir a observacao de entrega e criterio de homologacao do modulo de pedidos.
      */
-    private String observacaoIfood(Map<String, Object> r, Map<String, Object> delivery) {
-        String doPedido = str(r.get("observations"));
-        String daEntrega = str(delivery.get("observations"));
-        if (daEntrega == null || daEntrega.isBlank()) return doPedido;
-        String prefixado = "Entrega: " + daEntrega;
-        return doPedido == null || doPedido.isBlank() ? prefixado : doPedido + " | " + prefixado;
-    }
-
     private String juntarComVirgula(String base, String... extras) {
         StringBuilder sb = new StringBuilder(base == null ? "" : base);
         for (String e : extras) {

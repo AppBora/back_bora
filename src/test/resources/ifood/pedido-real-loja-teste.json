@@ -1,0 +1,76 @@
+{
+  "id": "2494bfce-e155-474f-baa7-13105325d067",
+  "displayId": "1022",
+  "createdAt": "2026-09-19T19:57:40.847Z",
+  "category": "FOOD",
+  "orderTiming": "IMMEDIATE",
+  "orderType": "DELIVERY",
+  "delivery": {
+    "mode": "DEFAULT",
+    "description": "Padrão",
+    "deliveredBy": "MERCHANT",
+    "deliveryDateTime": "2026-09-19T20:42:40.846Z",
+    "observations": "Este pedido foi gerado automaticamente pelo Developer Portal.",
+    "deliveryAddress": {
+      "streetName": "Rua TESTE",
+      "streetNumber": "999999",
+      "formattedAddress": "Rua TESTE, 999999",
+      "neighborhood": "Bairro TESTE",
+      "complement": "Complemento TESTE",
+      "postalCode": "99999999",
+      "city": "TESTE",
+      "state": "XX",
+      "country": "XX",
+      "reference": "TESTE",
+      "coordinates": { "latitude": 0, "longitude": 0 }
+    },
+    "pickupCode": "1057"
+  },
+  "isTest": true,
+  "salesChannel": "IFOOD",
+  "merchant": { "id": "a092eec4-f8e4-4300-b135-2073fb5ceed3", "name": "Teste - ADF SISTEMAS E TECNOLOGIAS LTDA" },
+  "customer": {
+    "id": "dace8b15-e2be-408e-9b98-91b4e72e029f",
+    "name": "Pedido de teste de integracao",
+    "phone": { "number": "0800 705 3040", "localizer": "94013236", "localizerExpiration": "2026-09-19T23:57:40.847Z" },
+    "ordersCountOnMerchant": 0
+  },
+  "items": [
+    {
+      "index": 1, "id": "632975ab-af07-4efa-9657-4a23bbb57dc1",
+      "name": "PRODUTO 1 - NÃO ENTREGAR - Primeiro Nível", "externalCode": "7470",
+      "quantity": 1, "unit": "UN", "unitPrice": 5, "optionsPrice": 0, "customizationPrice": 0,
+      "totalPrice": 5, "price": 5, "observations": "", "options": []
+    },
+    {
+      "index": 2, "id": "6e92fd42-af58-49ba-b692-69fe8ed17935",
+      "name": "PRODUTO 2 (COMBO) - NÃO ENTREGAR - Primeiro Nível", "type": "COMBO_V2", "externalCode": "5307",
+      "quantity": 1, "unit": "UN", "unitPrice": 5, "optionsPrice": 8, "customizationPrice": 3,
+      "totalPrice": 16, "price": 5, "observations": "",
+      "options": [
+        { "index": 3, "name": "Complemento 1 - Segundo Nível", "type": "SPECIFICATION", "groupName": "Adicione mais ingredientes", "quantity": 1, "unitPrice": 2, "addition": 0, "price": 2 },
+        { "index": 4, "name": "Complemento 2 - Segundo Nível", "type": "OFFER_UNIT", "groupName": "Deseja adicionar molhos?", "quantity": 1, "unitPrice": 2, "addition": 0, "price": 2 },
+        { "index": 5, "name": "Complemento 3 - Segundo Nível", "type": "OFFER_UNIT", "groupName": "Escolha seu acompanhamento", "quantity": 1, "unitPrice": 2, "addition": 0, "price": 2 },
+        { "index": 6, "name": "Complemento 4 - Segundo Nível", "type": "MAIN", "groupName": "Meu sanduíche favorito",
+          "customizations": [
+            { "name": "Customização 1 do Complemento 4 - Terceiro Nível", "groupName": "Grupo de Complemento Obrigatório", "quantity": 1, "unitPrice": 1, "price": 1 },
+            { "name": "Customização 2 do Complemento 4 - Terceiro Nível", "groupName": "Grupo de Complemento Opcional", "quantity": 1, "unitPrice": 1, "price": 1 },
+            { "name": "Customização 3 do Complemento 4 - Terceiro Nível", "groupName": "Escolha seu acompanhamento", "quantity": 1, "unitPrice": 1, "price": 1 }
+          ],
+          "quantity": 1, "unitPrice": 2, "addition": 0, "price": 2 }
+      ]
+    }
+  ],
+  "total": { "additionalFees": 1, "subTotal": 21, "deliveryFee": 5, "benefits": 0, "orderAmount": 27 },
+  "payments": {
+    "prepaid": 27,
+    "pending": 0,
+    "methods": [
+      { "value": 17, "currency": "BRL", "method": "CREDIT", "prepaid": true, "type": "ONLINE", "card": { "brand": "Visa" } },
+      { "value": 10, "currency": "BRL", "method": "CREDIT", "prepaid": true, "type": "ONLINE", "card": { "brand": "Master" } }
+    ]
+  },
+  "additionalFees": [
+    { "type": "SMALL_ORDER_FEE_35_PROMOTIONS", "description": "Taxa de Serviço", "value": 1, "liabilities": [ { "name": "IFOOD", "percentage": 100 } ] }
+  ]
+}
