@@ -146,9 +146,21 @@ public class MarketplacePoller {
             // Antes este evento era confirmado e descartado, e o pedido seguia ativo no painel.
             if (pedidos.cancelarPorMarketplace(i.lojaId, i.canal, orderId, client.motivoDoCancelamento(ev))) {
                 log.info("[{}] loja {}: pedido externo {} cancelado pelo marketplace", i.canal, i.lojaId, orderId);
+            } else {
+                // Cancelamento que a loja pediu aqui: o pedido já estava cancelado no Bora e este evento é a
+                // confirmação final do marketplace. Registrar é o que prova que os dois lados fecharam.
+                pedidos.buscarExterno(i.lojaId, i.canal, orderId)
+                        .filter(p -> p.status == br.com.bora.entity.StatusPedido.CANCELADO)
+                        .ifPresent(p -> log.info("[{}] loja {}: marketplace confirmou o cancelamento do pedido externo {} (#{})",
+                                i.canal, i.lojaId, orderId, p.id));
             }
         } else if (client.ehPedidoDeCancelamento(tipo)) {
             responderPedidoDeCancelamento(client, i, orderId, ev);
+        } else if (tipo != null && tipo.toUpperCase().contains("CANCELLATION_REQUEST_FAILED")) {
+            // O marketplace aceitou o pedido de cancelamento (202) e depois recusou. O pedido segue ativo lá
+            // e cancelado aqui: precisa de gente olhando.
+            log.warn("[{}] loja {}: o marketplace RECUSOU o cancelamento do pedido externo {} depois de aceitar o pedido; "
+                    + "confira no portal do marketplace", i.canal, i.lojaId, orderId);
         }
     }
 

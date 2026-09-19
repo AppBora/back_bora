@@ -377,7 +377,7 @@ public class IfoodClient implements MarketplaceClient {
                     "Não consegui falar com o iFood para cancelar. Tente de novo em instantes.");
         }
         // 202: o iFood confirma pelo evento CANCELLED no polling seguinte.
-        log.info("iFood: cancelamento do pedido {} solicitado (codigo {})", orderId, codigo);
+        log.info("iFood: cancelamento do pedido {} solicitado (codigo {} - {})", orderId, codigo, descricao);
     }
 
     private static String curto(String v) {
