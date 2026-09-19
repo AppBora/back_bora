@@ -145,6 +145,7 @@ public class IntegracaoService {
             m.put("appConfigurado", client.map(c -> c.configurado()).orElse(false));
             m.put("userCode", i == null ? null : i.userCode);
             m.put("verificationUrl", i == null ? null : i.verificationUrl);
+            m.put("vinculoExpiraEm", i == null ? null : i.vinculoExpiraEm);
             m.put("ultimoPollingEm", i == null ? null : i.ultimoPollingEm);
             m.put("ultimoErro", i == null ? null : i.ultimoErro);
             out.add(m);
@@ -164,14 +165,50 @@ public class IntegracaoService {
             IntegracaoCanal n = new IntegracaoCanal();
             n.lojaId = lojaId; n.canal = code; return n;
         });
-        if (body.containsKey("merchantId")) i.merchantId = str(body.get("merchantId"));
+        boolean oficial = clientDe(code).isPresent();
+        if (body.containsKey("merchantId")) {
+            String novo = limpo(str(body.get("merchantId")));
+            if (!java.util.Objects.equals(novo, limpo(i.merchantId))) {
+                // No iFood e na 99 o código da loja decide DE QUEM são os pedidos que entram aqui (na 99
+                // ele vira parte da credencial). Um lojista digitando o código de outro receberia os
+                // pedidos do outro: só a plataforma liga uma loja a esse código.
+                if (oficial && !ctx.isAdminBora()) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                            "O código da loja no " + label(code) + " é definido pelo suporte do BoraHapp.");
+                }
+                if (novo != null && repo.findByCanal(code).stream()
+                        .anyMatch(o -> !lojaId.equals(o.lojaId) && novo.equalsIgnoreCase(limpo(o.merchantId)))) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "Este código já está ligado a outra loja do BoraHapp no " + label(code) + ".");
+                }
+                i.merchantId = novo;
+                if (oficial) {
+                    // Loja trocada: o vínculo antigo não vale para a nova — conecta de novo.
+                    i.accessToken = null;
+                    i.refreshToken = null;
+                    i.tokenExpiraEm = null;
+                    i.userCode = null;
+                    i.codeVerifier = null;
+                    i.verificationUrl = null;
+                    i.vinculoExpiraEm = null;
+                    i.status = novo == null ? "DESCONECTADO" : "PRONTO";
+                }
+            }
+        }
         if (body.containsKey("clientId")) i.clientId = str(body.get("clientId"));
         if (body.containsKey("clientSecret")) { String s = str(body.get("clientSecret")); if (s != null && !s.isBlank()) i.clientSecret = s; }
         if (body.containsKey("autoAceitar")) i.autoAceitar = Boolean.parseBoolean(str(body.get("autoAceitar")));
         if (body.containsKey("ativo")) i.ativo = Boolean.parseBoolean(str(body.get("ativo")));
         if (i.webhookToken == null) i.webhookToken = UUID.randomUUID().toString().replace("-", "");
         boolean temCred = i.clientSecret != null && !i.clientSecret.isBlank();
-        i.status = Boolean.TRUE.equals(i.ativo) ? (temCred ? "CONECTADO" : "PRONTO") : (temCred ? "PRONTO" : "DESCONECTADO");
+        // Nos canais oficiais quem diz se está conectado é o vínculo com o marketplace, não esta tela.
+        // Antes, salvar o card de uma loja JÁ conectada rebaixava o status para PRONTO e o envio de
+        // status (aceitar, pronto, cancelar) parava de ir para o iFood sem ninguém perceber.
+        if (!oficial) {
+            i.status = Boolean.TRUE.equals(i.ativo) ? (temCred ? "CONECTADO" : "PRONTO") : (temCred ? "PRONTO" : "DESCONECTADO");
+        } else if ("DESCONECTADO".equals(i.status) && limpo(i.merchantId) != null) {
+            i.status = "PRONTO";
+        }
         // PIX: ao ativar com a chave Asaas do lojista, cria automaticamente o webhook na conta dele.
         if ("PIX".equals(code) && Boolean.TRUE.equals(i.ativo) && temCred) {
             pix.provisionarWebhook(i, "https://borahapp.com.br");
@@ -231,4 +268,6 @@ public class IntegracaoService {
     }
 
     private String str(Object o) { return o == null ? null : String.valueOf(o); }
+
+    private static String limpo(String v) { return v == null || v.isBlank() ? null : v.trim(); }
 }

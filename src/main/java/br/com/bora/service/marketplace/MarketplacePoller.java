@@ -168,6 +168,13 @@ public class MarketplacePoller {
     }
 
     private void criarPedido(MarketplaceClient client, IntegracaoCanal i, String orderId) {
+        // O mesmo pedido volta em mais de um evento (no iFood: PLACED e depois CONFIRMED). Já existindo,
+        // não há nada a importar — e reenviar o aceite ao marketplace é o que não pode: era o "confirm"
+        // em dobro visto no primeiro pedido real (19/09).
+        if (pedidos.buscarExterno(i.lojaId, i.canal, orderId).isPresent()) {
+            log.debug("[{}] loja {}: pedido externo {} já importado; evento ignorado", i.canal, i.lojaId, orderId);
+            return;
+        }
         Map<String, Object> detalhe = client.detalhePedido(i, orderId);
         // Detalhe vazio e falha (o cliente engole a excecao e devolve vazio). Antes isto era um
         // "return" silencioso: o evento era confirmado e o pedido se perdia para sempre.
