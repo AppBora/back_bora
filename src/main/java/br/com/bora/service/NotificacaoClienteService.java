@@ -33,6 +33,10 @@ public class NotificacaoClienteService {
     }
 
     public void notificarFase(Pedido p, StatusPedido status) {
+        // Pedido de marketplace (iFood, 99…): quem avisa o cliente é o app do marketplace, e o telefone
+        // que vem no pedido é a CENTRAL dele (no iFood, 0800 + localizador), não o celular da pessoa.
+        // Mandar WhatsApp ali não chega a ninguém — visto no 1º pedido real do iFood (19/09).
+        if (p.canalExterno != null && !p.canalExterno.isBlank()) return;
         try {
             Loja loja = lojas.findById(p.lojaId).orElse(null);
             if (loja == null || !Boolean.TRUE.equals(loja.moduloIa)) return; // add-on não contratado
