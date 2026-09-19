@@ -44,18 +44,15 @@ public class IfoodClient implements MarketplaceClient {
     private static final long RENOVAR_ANTES_MIN = 30;
 
     private final String baseUrl;
-    private final String clientId;
-    private final String clientSecret;
+    private final CredenciaisMarketplace credenciais;
     private final IntegracaoCanalRepository repo;
     private final MarketplaceHttp http;
 
     public IfoodClient(@Value("${marketplace.ifood.base-url:https://merchant-api.ifood.com.br}") String baseUrl,
-                       @Value("${marketplace.ifood.client-id:}") String clientId,
-                       @Value("${marketplace.ifood.client-secret:}") String clientSecret,
+                       CredenciaisMarketplace credenciais,
                        IntegracaoCanalRepository repo, MarketplaceHttp http) {
         this.baseUrl = baseUrl;
-        this.clientId = clientId;
-        this.clientSecret = clientSecret;
+        this.credenciais = credenciais;
         this.repo = repo;
         this.http = http;
     }
@@ -65,9 +62,18 @@ public class IfoodClient implements MarketplaceClient {
         return "IFOOD";
     }
 
+    /** Credencial do app da plataforma: a colada na tela vale mais que a do servidor. */
+    private String clientId() {
+        return credenciais.clientId(canal());
+    }
+
+    private String clientSecret() {
+        return credenciais.clientSecret(canal());
+    }
+
     @Override
     public boolean configurado() {
-        return clientId != null && !clientId.isBlank() && clientSecret != null && !clientSecret.isBlank();
+        return clientId() != null && clientSecret() != null;
     }
 
     private RestClient client() {
@@ -81,7 +87,8 @@ public class IfoodClient implements MarketplaceClient {
     private void exigirConfigurado() {
         if (!configurado()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Aplicativo do iFood não configurado na plataforma. Defina BORA_IFOOD_CLIENT_ID e BORA_IFOOD_CLIENT_SECRET.");
+                    "Aplicativo do iFood não configurado na plataforma. Cadastre o Client ID e o Client Secret em "
+                            + "Configurações → Plataforma → Credenciais dos marketplaces.");
         }
     }
 
@@ -92,7 +99,7 @@ public class IfoodClient implements MarketplaceClient {
     public Map<String, Object> iniciarVinculo(IntegracaoCanal i) {
         exigirConfigurado();
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("clientId", clientId);
+        form.add("clientId", clientId());
 
         Map<String, Object> resp;
         try {
@@ -137,8 +144,8 @@ public class IfoodClient implements MarketplaceClient {
 
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grantType", "authorization_code");
-        form.add("clientId", clientId);
-        form.add("clientSecret", clientSecret);
+        form.add("clientId", clientId());
+        form.add("clientSecret", clientSecret());
         form.add("authorizationCode", autorizacao.trim());
         form.add("authorizationCodeVerifier", i.codeVerifier);
 
@@ -194,8 +201,8 @@ public class IfoodClient implements MarketplaceClient {
 
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grantType", "refresh_token");
-        form.add("clientId", clientId);
-        form.add("clientSecret", clientSecret);
+        form.add("clientId", clientId());
+        form.add("clientSecret", clientSecret());
         form.add("refreshToken", i.refreshToken);
 
         Map<String, Object> resp;

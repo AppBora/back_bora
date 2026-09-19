@@ -54,18 +54,15 @@ public class OpenDeliveryClient implements MarketplaceClient {
     private static final long RENOVAR_ANTES_MIN = 5;
 
     private final String baseUrl;
-    private final String appId;
-    private final String appSecret;
+    private final CredenciaisMarketplace credenciais;
     private final IntegracaoCanalRepository repo;
     private final MarketplaceHttp http;
 
     public OpenDeliveryClient(@Value("${marketplace.opendelivery.base-url:https://openapi.99food.com/v4/opendelivery}") String baseUrl,
-                              @Value("${marketplace.opendelivery.client-id:}") String appId,
-                              @Value("${marketplace.opendelivery.client-secret:}") String appSecret,
+                              CredenciaisMarketplace credenciais,
                               IntegracaoCanalRepository repo, MarketplaceHttp http) {
         this.baseUrl = baseUrl;
-        this.appId = appId;
-        this.appSecret = appSecret;
+        this.credenciais = credenciais;
         this.repo = repo;
         this.http = http;
     }
@@ -78,7 +75,16 @@ public class OpenDeliveryClient implements MarketplaceClient {
     /** O aplicativo da plataforma (App ID + App Secret) esta configurado. */
     @Override
     public boolean configurado() {
-        return preenchida(appId, appSecret);
+        return preenchida(appId(), appSecret());
+    }
+
+    /** App ID/Secret da plataforma na 99: o colado na tela vale mais que o do servidor. */
+    private String appId() {
+        return credenciais.clientId(canal());
+    }
+
+    private String appSecret() {
+        return credenciais.clientSecret(canal());
     }
 
     /**
@@ -96,12 +102,12 @@ public class OpenDeliveryClient implements MarketplaceClient {
 
     /** client_id = {app_id}_{app_shop_id} (roteiro, pag. 17). */
     String clientIdDaLoja(IntegracaoCanal i) {
-        return credencialDaLoja(i) ? i.clientId : appId + "_" + i.merchantId;
+        return credencialDaLoja(i) ? i.clientId : appId() + "_" + i.merchantId;
     }
 
     /** client_secret = {app_secret}. E tambem a chave que assina o webhook. */
     private String secretDaLoja(IntegracaoCanal i) {
-        return credencialDaLoja(i) ? i.clientSecret : appSecret;
+        return credencialDaLoja(i) ? i.clientSecret : appSecret();
     }
 
     private static boolean preenchida(String id, String secret) {
@@ -115,9 +121,9 @@ public class OpenDeliveryClient implements MarketplaceClient {
     private void exigirConfigurado(IntegracaoCanal i) {
         if (!configurado(i)) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Sem credencial para conectar na 99Food. A plataforma precisa do App ID e do App Secret "
-                            + "(BORA_OPENDELIVERY_CLIENT_ID / _SECRET), ou a loja informa o Client ID e o "
-                            + "Client Secret do aplicativo proprio dela.");
+                    "Sem credencial para conectar na 99Food. Cadastre o App ID e o App Secret da plataforma em "
+                            + "Configurações → Plataforma → Credenciais dos marketplaces, ou a loja informa o "
+                            + "Client ID e o Client Secret do aplicativo próprio dela.");
         }
     }
 

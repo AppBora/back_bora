@@ -35,6 +35,7 @@ public class PlataformaController {
     private final br.com.bora.service.EmpresaService empresas;
     private final br.com.bora.security.JwtService jwt;
     private final br.com.bora.repository.ConfiguracaoLojaRepository configLoja;
+    private final br.com.bora.service.marketplace.CredenciaisMarketplace credenciais;
     private final String splitPadrao;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
@@ -49,8 +50,10 @@ public class PlataformaController {
                                 br.com.bora.service.EmpresaService empresas,
                                 br.com.bora.security.JwtService jwt,
                                 br.com.bora.repository.ConfiguracaoLojaRepository configLoja,
+                                br.com.bora.service.marketplace.CredenciaisMarketplace credenciais,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
         this.splitPadrao = splitPadrao;
+        this.credenciais = credenciais;
         this.assinaturas = assinaturas;
         this.assinaturaRepo = assinaturaRepo;
         this.pedidos = pedidos;
@@ -666,11 +669,93 @@ public class PlataformaController {
     }
 
     /** Configurações globais da plataforma — restrito ao ADMINISTRADOR_BORA. */
+    // ------------------------------------------------------------------ credenciais dos marketplaces
+
+    /**
+     * Credenciais do aplicativo da plataforma no iFood e na 99. O dono cola o que copiou do portal de
+     * desenvolvedores de cada um — antes só dava para configurar digitando segredo no servidor.
+     * O segredo NUNCA volta: a tela só fica sabendo se ele está salvo.
+     */
+    @GetMapping("/credenciais")
+    public List<Map<String, Object>> credenciais() {
+        ctx.requireAdminBora();
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (String canal : br.com.bora.service.marketplace.CredenciaisMarketplace.CANAIS.keySet()) {
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("canal", canal);
+            m.put("label", br.com.bora.service.IntegracaoService.label(canal));
+            m.put("clientId", credenciais.clientId(canal));
+            m.put("temSecret", credenciais.clientSecret(canal) != null);
+            m.put("origem", credenciais.origem(canal));
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** Salva as credenciais de um marketplace. Segredo em branco mantém o que já estava salvo. */
+    @PutMapping("/credenciais/{canal}")
+    @Transactional
+    public Map<String, Object> salvarCredenciais(@PathVariable String canal, @RequestBody(required = false) Map<String, String> body) {
+        ctx.requireAdminBora();
+        String c = canalDeCredencial(canal);
+        String id = body == null ? null : str(body.get("clientId"));
+        String segredo = body == null ? null : str(body.get("clientSecret"));
+        if (id == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o Client ID");
+        }
+        if (id.length() > 300 || (segredo != null && segredo.length() > 500)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Valor longo demais — confira o que foi colado");
+        }
+        if (segredo == null && !credenciais.secretNaTela(c)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o Client Secret");
+        }
+        credenciais.salvar(c, id, segredo);
+        log.warn("AUDITORIA plataforma: usuario {} SALVOU as credenciais do app {} (client id terminando em {}){}",
+                ctx.atual().userId(), c, finalDe(id), segredo == null ? " — segredo mantido" : "");
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("canal", c);
+        m.put("clientId", id);
+        m.put("temSecret", true);
+        m.put("origem", "TELA");
+        return m;
+    }
+
+    /** Apaga as credenciais salvas pela tela — volta a valer a do servidor, se houver. */
+    @DeleteMapping("/credenciais/{canal}")
+    @Transactional
+    public Map<String, Object> apagarCredenciais(@PathVariable String canal) {
+        ctx.requireAdminBora();
+        String c = canalDeCredencial(canal);
+        credenciais.limpar(c);
+        log.warn("AUDITORIA plataforma: usuario {} APAGOU as credenciais do app {} salvas pela tela",
+                ctx.atual().userId(), c);
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("canal", c);
+        m.put("origem", credenciais.origem(c));
+        m.put("temSecret", credenciais.clientSecret(c) != null);
+        return m;
+    }
+
+    private String canalDeCredencial(String canal) {
+        String c = canal == null ? "" : canal.trim().toUpperCase();
+        if (!br.com.bora.service.marketplace.CredenciaisMarketplace.CANAIS.containsKey(c)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Marketplace sem credencial de plataforma: " + canal);
+        }
+        return c;
+    }
+
+    private static String finalDe(String v) {
+        return v.length() <= 4 ? "****" : v.substring(v.length() - 4);
+    }
+
     @GetMapping("/config")
     public Map<String, String> configuracoes() {
         ctx.requireAdminBora();
         Map<String, String> out = new java.util.LinkedHashMap<>();
-        configs.findAll().forEach(c -> out.put(c.getChave(), c.getValor()));
+        // Credencial de marketplace NUNCA sai por aqui: esta listagem vai inteira para a tela.
+        configs.findAll().stream()
+                .filter(c -> !br.com.bora.service.marketplace.CredenciaisMarketplace.ehChaveDeCredencial(c.getChave()))
+                .forEach(c -> out.put(c.getChave(), c.getValor()));
         out.put("split.padrao", splitPadrao);
         return out;
     }
