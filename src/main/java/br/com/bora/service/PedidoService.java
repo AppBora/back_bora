@@ -248,7 +248,9 @@ public class PedidoService {
         // O id do Open Delivery e um UUID: inutil para o atendente. Usa o numero que o cliente ve.
         p.codigo = in.numeroExibicao() != null && !in.numeroExibicao().isBlank() ? in.numeroExibicao()
                 : in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000);
-        p.formaPagamento = in.pagamento();
+        // Texto do marketplace pode crescer (varias formas de pagamento): corta em vez de recusar o pedido.
+        p.formaPagamento = cortar(in.pagamento(), 255);
+        p.clienteTelefone = cortar(p.clienteTelefone, 60);
         p.origem = origemLabel;
         p.canalExterno = canalCodigo;
         p.idExterno = in.externalId();
@@ -349,6 +351,10 @@ public class PedidoService {
         c.canalExterno = ext == null ? null : canalCodigo;
         c.idExterno = ext;
         return clientes.save(c).id;
+    }
+
+    private static String cortar(String v, int max) {
+        return v == null || v.length() <= max ? v : v.substring(0, max);
     }
 
     /** Telefone de pessoa, ou null para vazio e para central (0800/0300/0500/0900 ou curto demais). */
