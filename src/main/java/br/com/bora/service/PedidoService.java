@@ -382,6 +382,9 @@ public class PedidoService {
         if (status == StatusPedido.CANCELADO && (motivo == null || motivo.isBlank())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Motivo do cancelamento é obrigatório"); // RN05
         }
+        // Pedido de marketplace: cancela lá primeiro. Se o marketplace recusar, o erro volta para a tela
+        // e o pedido NÃO é cancelado aqui.
+        if (status == StatusPedido.CANCELADO) integracoes.cancelarNoMarketplace(p, motivo);
         StatusPedido anterior = p.status;
         p.status = status;
         p.atualizadoEm = OffsetDateTime.now();

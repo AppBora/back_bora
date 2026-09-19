@@ -243,6 +243,20 @@ public class IntegracaoService {
         });
     }
 
+    /**
+     * Cancela no marketplace ANTES de cancelar no Bora e deixa o erro subir se ele recusar — assim os dois
+     * lados nunca ficam diferentes (antes o pedido ficava cancelado aqui e ativo no iFood). Loja não
+     * conectada ou canal sem integração oficial: nada a fazer, o cancelamento é só local.
+     */
+    public void cancelarNoMarketplace(Pedido p, String motivo) {
+        if (p == null || p.canalExterno == null || p.idExterno == null) return;
+        var client = clientDe(p.canalExterno);
+        if (client.isEmpty()) return;
+        repo.findByLojaIdAndCanal(p.lojaId, p.canalExterno.toUpperCase())
+                .filter(i -> Boolean.TRUE.equals(i.ativo) && i.prontaParaSincronizar())
+                .ifPresent(i -> client.get().enviarCancelamento(i, p.idExterno, motivo));
+    }
+
     /** Sincroniza o novo status do pedido de volta ao marketplace (push). No-op sem credenciais. */
     public void notificarStatus(Pedido p, String novoStatus) {
         if (p == null || p.canalExterno == null) return;
@@ -259,8 +273,8 @@ public class IntegracaoService {
                     c -> {
                         // O motivo so existe no cancelamento e o marketplace exige ele; mandar
                         // "CANCELADO" seco faz o iFood recusar e o pedido fica aberto la dentro.
-                        if ("CANCELADO".equals(novoStatus)) c.enviarCancelamento(i, p.idExterno, p.motivoCancelamento);
-                        else c.enviarStatus(i, p.idExterno, novoStatus);
+                        // CANCELADO já foi pedido ao marketplace ANTES de salvar (cancelarNoMarketplace).
+                        if (!"CANCELADO".equals(novoStatus)) c.enviarStatus(i, p.idExterno, novoStatus);
                     },
                     () -> log.debug("[{}] canal sem integração oficial; status {} não propagado",
                             p.canalExterno, novoStatus));

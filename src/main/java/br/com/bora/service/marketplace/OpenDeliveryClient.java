@@ -368,7 +368,24 @@ public class OpenDeliveryClient implements MarketplaceClient {
         corpo.put("reason", motivo == null || motivo.isBlank() ? "Cancelado pela loja" : motivo.trim());
         corpo.put("code", codigoDeCancelamento(motivo));
         corpo.put("mode", "MANUAL");
-        post(i, orderId, "requestCancellation", corpo);
+        // Diferente dos outros status, aqui a falha NÃO pode ser só logada: quem chama só cancela no Bora
+        // se a 99 aceitar, senão o pedido fica cancelado aqui e ativo lá.
+        try {
+            autenticado(i).post().uri(ORDERS + "/{id}/requestCancellation", orderId)
+                    .contentType(MediaType.APPLICATION_JSON).body(corpo)
+                    .retrieve().toBodilessEntity();
+            log.info("Open Delivery: pedido {} -> requestCancellation ({})", orderId, corpo.get("code"));
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (HttpClientErrorException e) {
+            log.warn("Open Delivery: cancelamento do pedido {} recusado: {}", orderId, e.getResponseBodyAsString());
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A 99Food recusou o cancelamento: "
+                    + resumo(e));
+        } catch (Exception e) {
+            log.warn("Open Delivery: falha ao cancelar o pedido {}: {}", orderId, e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Não consegui falar com a 99Food para cancelar. Tente de novo em instantes.");
+        }
     }
 
     /**

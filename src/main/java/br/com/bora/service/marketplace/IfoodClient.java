@@ -333,41 +333,71 @@ public class IfoodClient implements MarketplaceClient {
     @Override
     @SuppressWarnings("unchecked")
     public void enviarCancelamento(IntegracaoCanal i, String orderId, String motivo) {
+        // LANÇA erro se o iFood não aceitar: quem chama só cancela no Bora depois disto. Antes a falha
+        // virava só uma linha de log e o pedido ficava cancelado aqui e ativo no iFood. Corpo
+        // {reason, cancellationCode}: o nome do campo foi confirmado no 1º cancelamento real (19/09),
+        // quando o iFood respondeu "Field 'cancellationCode' is required" ao corpo que mandávamos.
+        List<Map<String, Object>> motivos;
         try {
-            List<Map<String, Object>> motivos = autenticado(i).get()
+            motivos = autenticado(i).get()
                     .uri(ORDERS + "/{id}/cancellationReasons", orderId)
                     .retrieve().body(List.class);
-            String codigo = escolherMotivo(motivos, motivo);
-            if (codigo == null) {
-                log.warn("iFood: pedido {} sem motivo de cancelamento aceito; cancelamento nao enviado", orderId);
-                return;
-            }
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("iFood: nao consegui buscar os motivos de cancelamento do pedido {}: {}", orderId, e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Não consegui falar com o iFood para cancelar. Tente de novo em instantes.");
+        }
+        Map<String, Object> escolhido = escolherMotivo(motivos, motivo);
+        if (escolhido == null) {
+            // Lista vazia = o iFood não deixa a loja cancelar nesta etapa (visto com pedido já "pronto").
+            log.warn("iFood: pedido {} sem motivo de cancelamento aceito nesta etapa", orderId);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "O iFood não aceita cancelar este pedido nesta etapa. Cancele pelo Portal do Parceiro do iFood.");
+        }
+        String codigo = str(firstNonNull(escolhido.get("cancelCodeId"), firstNonNull(escolhido.get("code"), escolhido.get("codigo"))));
+        String descricao = str(firstNonNull(escolhido.get("description"), escolhido.get("descricao")));
+        String texto = motivo == null || motivo.isBlank() ? descricao : motivo.trim();
+        Map<String, Object> corpo = new java.util.LinkedHashMap<>();
+        corpo.put("reason", texto != null && texto.length() > 250 ? texto.substring(0, 250) : texto);
+        corpo.put("cancellationCode", codigo);
+        try {
             autenticado(i).post().uri(ORDERS + "/{id}/requestCancellation", orderId)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of("reason", codigo))
+                    .body(corpo)
                     .retrieve().toBodilessEntity();
-            // 202: o iFood confirma (ou recusa) pelo evento CANCELLED / CANCELLATION_REQUEST_FAILED
-            // no polling seguinte - nao tratar a resposta daqui como "cancelado".
-            log.info("iFood: cancelamento do pedido {} solicitado (motivo {})", orderId, codigo);
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            log.warn("iFood: cancelamento do pedido {} recusado: {}", orderId, e.getResponseBodyAsString());
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "O iFood recusou o cancelamento: " + curto(e.getResponseBodyAsString()));
         } catch (Exception e) {
             log.warn("iFood: falha ao cancelar o pedido {}: {}", orderId, e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Não consegui falar com o iFood para cancelar. Tente de novo em instantes.");
         }
+        // 202: o iFood confirma pelo evento CANCELLED no polling seguinte.
+        log.info("iFood: cancelamento do pedido {} solicitado (codigo {})", orderId, codigo);
+    }
+
+    private static String curto(String v) {
+        if (v == null) return "";
+        return v.length() > 300 ? v.substring(0, 300) : v;
     }
 
     /** Casa o motivo escrito pelo lojista com a descricao do iFood; sem casar, usa o primeiro da lista. */
-    private String escolherMotivo(List<Map<String, Object>> motivos, String motivo) {
+    private Map<String, Object> escolherMotivo(List<Map<String, Object>> motivos, String motivo) {
         if (motivos == null || motivos.isEmpty()) return null;
         String alvo = motivo == null ? "" : motivo.trim().toLowerCase();
         if (!alvo.isBlank()) {
             for (Map<String, Object> m : motivos) {
                 String desc = str(firstNonNull(m.get("description"), m.get("descricao")));
                 if (desc != null && (desc.toLowerCase().contains(alvo) || alvo.contains(desc.toLowerCase()))) {
-                    return str(firstNonNull(m.get("cancelCodeId"), firstNonNull(m.get("code"), m.get("codigo"))));
+                    return m;
                 }
             }
         }
-        Map<String, Object> primeiro = motivos.get(0);
-        return str(firstNonNull(primeiro.get("cancelCodeId"), firstNonNull(primeiro.get("code"), primeiro.get("codigo"))));
+        return motivos.get(0);
     }
 
     /**
