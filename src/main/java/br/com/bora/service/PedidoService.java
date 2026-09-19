@@ -246,8 +246,8 @@ public class PedidoService {
         // O telefone do pedido fica no pedido: no iFood é a central + código, que não vai para o cadastro.
         p.clienteTelefone = in.clienteTelefone();
         // O id do Open Delivery e um UUID: inutil para o atendente. Usa o numero que o cliente ve.
-        p.codigo = in.numeroExibicao() != null && !in.numeroExibicao().isBlank() ? in.numeroExibicao()
-                : in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000);
+        p.codigo = cortar(in.numeroExibicao() != null && !in.numeroExibicao().isBlank() ? in.numeroExibicao()
+                : in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000), 40);
         // Texto do marketplace pode crescer (varias formas de pagamento): corta em vez de recusar o pedido.
         p.formaPagamento = cortar(in.pagamento(), 255);
         p.clienteTelefone = cortar(p.clienteTelefone, 60);
@@ -344,10 +344,11 @@ public class PedidoService {
         if (telReal == null && ext == null && (in.clienteNome() == null || in.clienteNome().isBlank())) return null;
         Cliente c = new Cliente();
         c.lojaId = lojaId;
-        c.nome = in.clienteNome() == null || in.clienteNome().isBlank() ? "Cliente marketplace" : in.clienteNome();
-        c.telefone = telReal;
-        c.endereco = in.endereco();
-        c.bairro = in.bairro();
+        // Texto do marketplace não pode recusar o pedido por tamanho: corta no limite de cada coluna.
+        c.nome = cortar(in.clienteNome() == null || in.clienteNome().isBlank() ? "Cliente marketplace" : in.clienteNome(), 160);
+        c.telefone = cortar(telReal, 40);
+        c.endereco = cortar(in.endereco(), 500);
+        c.bairro = cortar(in.bairro(), 100);
         c.canalExterno = ext == null ? null : canalCodigo;
         c.idExterno = ext;
         return clientes.save(c).id;
