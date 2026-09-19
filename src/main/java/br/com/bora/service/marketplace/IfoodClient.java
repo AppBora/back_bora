@@ -62,6 +62,26 @@ public class IfoodClient implements MarketplaceClient {
         return "IFOOD";
     }
 
+    /**
+     * O iFood manda o tipo do evento duas vezes: {@code code} abreviado (PLC, CFM, CAN…) e
+     * {@code fullCode} por extenso (PLACED, CONFIRMED, CANCELLED…). Líamos o {@code code}: todo pedido
+     * novo chegava como "PLC", não era reconhecido, era confirmado e DESCARTADO. O mock mandava PLACED
+     * nos dois campos e escondeu isso até o primeiro pedido real da loja de teste (19/09/2026).
+     */
+    @Override
+    public String tipoEvento(Map<String, Object> ev) {
+        Object cheio = ev.get("fullCode");
+        if (cheio != null && !String.valueOf(cheio).isBlank()) return String.valueOf(cheio);
+        Object curto = ev.get("code");
+        if (curto == null) return null;
+        return switch (String.valueOf(curto)) {
+            case "PLC" -> "PLACED";
+            case "CFM" -> "CONFIRMED";
+            case "CAN" -> "CANCELLED";
+            default -> String.valueOf(curto);
+        };
+    }
+
     /** Credencial do app da plataforma: a colada na tela vale mais que a do servidor. */
     private String clientId() {
         return credenciais.clientId(canal());
