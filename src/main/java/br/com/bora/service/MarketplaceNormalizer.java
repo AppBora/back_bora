@@ -247,7 +247,10 @@ public class MarketplaceNormalizer {
             itens.add(new InboundOrder.InboundItem(nome.toString(), qtd, unitario));
         }
 
-        boolean pelaPlataforma = "MARKETPLACE".equalsIgnoreCase(str(delivery.get("deliveredBy")));
+        // Retirada (Open Delivery type TAKEOUT; a 99 liberou em 22/09): o objeto delivery nao vem e vem
+        // takeout {mode, takeoutDateTime}. Sem isso o pedido aparecia como "Entrega pela loja".
+        boolean retirada = "TAKEOUT".equalsIgnoreCase(str(r.get("type")));
+        boolean pelaPlataforma = !retirada && "MARKETPLACE".equalsIgnoreCase(str(delivery.get("deliveredBy")));
         BigDecimal valorPedido = preco(total.get("orderAmount"));
         BigDecimal taxa = preco(total.get("otherFees"));
         BigDecimal desconto = preco(total.get("discount"));
@@ -260,13 +263,18 @@ public class MarketplaceNormalizer {
             aPagar = BigDecimal.ZERO;
         }
 
-        String endereco = juntarComVirgula(join(str(end.get("street")), str(end.get("number"))),
+        String endereco = retirada ? null : juntarComVirgula(join(str(end.get("street")), str(end.get("number"))),
                 str(end.get("complement")), str(end.get("reference")));
 
         List<String> obs = new ArrayList<>();
         String numero = str(r.get("displayId"));
         if (numero != null && !numero.isBlank()) obs.add("Pedido 99 #" + numero);
-        obs.add(pelaPlataforma ? "Entrega pela 99" : "Entrega pela loja");
+        if (retirada) {
+            String quando = hora(str(mapOf(r.get("takeout")).get("takeoutDateTime")));
+            obs.add("RETIRADA NO BALCÃO" + (quando == null ? "" : " — cliente vem buscar às " + quando));
+        } else {
+            obs.add(pelaPlataforma ? "Entrega pela 99" : "Entrega pela loja");
+        }
         String extra = str(r.get("extraInfo"));
         if (extra != null && !extra.isBlank()) obs.add("Obs: " + extra.trim());
         if (desconto != null && desconto.signum() > 0) obs.add("Desconto " + reais(desconto) + quemDeu(r));
@@ -276,7 +284,7 @@ public class MarketplaceNormalizer {
         return new InboundOrder(str(r.get("id")),
                 firstNonBlank(str(cliente.get("name")), "Cliente 99Food"),
                 str(fone.get("number")),
-                endereco, str(end.get("district")),
+                endereco, retirada ? null : str(end.get("district")),
                 pagamentoOpenDelivery(pagamentos, pelaPlataforma, aPagar),
                 String.join(" | ", obs), valorPedido, itens, taxa, numero)
                 .comClienteExterno(str(cliente.get("id")));

@@ -329,14 +329,25 @@ public class OpenDeliveryClient implements MarketplaceClient {
     /**
      * Fluxo que a 99 espera (roteiro, pag. 23): entrega pela LOJA confirm > readyForPickup >
      * dispatch > delivered; entrega pela 99 confirm > readyForPickup e PARA — quem finaliza e a 99.
+     * RETIRADA (type TAKEOUT): nao ha entrega — sem dispatch, e o "entregue" do painel vira pickedUp
+     * (cliente retirou), que a especificacao so aceita em pedido TAKEOUT.
      */
     @Override
     public void enviarStatus(IntegracaoCanal i, String orderId, String statusInterno) {
         String verbo = verbo(i, statusInterno);
         if (verbo == null) return;
-        if (("dispatch".equals(verbo) || "delivered".equals(verbo)) && entregaPelaPlataforma(i, orderId)) {
-            log.info("Open Delivery: pedido {} e entregue pela 99; {} nao se aplica e nao foi enviado", orderId, verbo);
-            return;
+        if ("dispatch".equals(verbo) || "delivered".equals(verbo)) {
+            Map<String, Object> pedido = detalhePedido(i, orderId);
+            if ("TAKEOUT".equalsIgnoreCase(str(pedido.get("type")))) {
+                if ("dispatch".equals(verbo)) {
+                    log.info("Open Delivery: pedido {} e retirada; dispatch nao se aplica e nao foi enviado", orderId);
+                    return;
+                }
+                verbo = "pickedUp";
+            } else if (entregaPelaPlataforma(pedido)) {
+                log.info("Open Delivery: pedido {} e entregue pela 99; {} nao se aplica e nao foi enviado", orderId, verbo);
+                return;
+            }
         }
         post(i, orderId, verbo, null);
     }
@@ -355,8 +366,8 @@ public class OpenDeliveryClient implements MarketplaceClient {
     }
 
     @SuppressWarnings("unchecked")
-    private boolean entregaPelaPlataforma(IntegracaoCanal i, String orderId) {
-        Object delivery = detalhePedido(i, orderId).get("delivery");
+    private boolean entregaPelaPlataforma(Map<String, Object> pedido) {
+        Object delivery = pedido.get("delivery");
         return delivery instanceof Map
                 && "MARKETPLACE".equalsIgnoreCase(str(((Map<String, Object>) delivery).get("deliveredBy")));
     }
