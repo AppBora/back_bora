@@ -53,6 +53,10 @@ public class RelatorioService {
     }
 
     public Map<String, Object> gerar(int dias, Long lojaPedida) {
+        // Faturamento, CMV, margem e lucro sao numeros de dono, nao de balcao: sem esta linha qualquer
+        // usuario da loja (atendente, entregador) via o resultado financeiro. As telas irmas
+        // (DesempenhoService, RedeService.balancete) ja exigiam o mesmo.
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
         Long lojaId = lojaDoRelatorio(lojaPedida);
         int janela = dias <= 0 ? 30 : Math.min(dias, 365);
         OffsetDateTime corte = OffsetDateTime.now().minusDays(janela);
