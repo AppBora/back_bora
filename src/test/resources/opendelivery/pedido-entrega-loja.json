@@ -1,0 +1,82 @@
+{
+  "id": "0d2e7f3a-1c44-4f5b-9a10-6b8f2c7d9e01",
+  "type": "DELIVERY",
+  "displayId": "4321",
+  "createdAt": "2026-09-28T18:40:00Z",
+  "orderTiming": "INSTANT",
+  "merchant": { "id": "boraloja1", "name": "Loja Teste BoraHapp" },
+  "items": [
+    {
+      "id": "b1",
+      "index": 1,
+      "name": "Pizza Calabresa",
+      "externalCode": "PIZZA-CAL",
+      "quantity": 1,
+      "specialInstructions": "sem cebola",
+      "unitPrice": { "value": 47.0, "currency": "BRL" },
+      "optionsPrice": { "value": 12.0, "currency": "BRL" },
+      "totalPrice": { "value": 59.0, "currency": "BRL" },
+      "options": [
+        {
+          "index": 1,
+          "id": "o1",
+          "name": "Borda Catupiry",
+          "externalCode": "BORDA-CAT",
+          "quantity": 1,
+          "unitPrice": { "value": 12.0, "currency": "BRL" },
+          "totalPrice": { "value": 12.0, "currency": "BRL" }
+        }
+      ]
+    }
+  ],
+  "otherFees": [
+    {
+      "name": "Taxa de entrega",
+      "type": "DELIVERY_FEE",
+      "receivedBy": "MERCHANT",
+      "price": { "value": 7.0, "currency": "BRL" }
+    }
+  ],
+  "discounts": [
+    {
+      "amount": { "value": 5.0, "currency": "BRL" },
+      "target": "CART",
+      "sponsorshipValues": [ { "name": "MARKETPLACE", "amount": { "value": 5.0, "currency": "BRL" } } ]
+    }
+  ],
+  "total": {
+    "itemsPrice": { "value": 59.0, "currency": "BRL" },
+    "otherFees": { "value": 7.0, "currency": "BRL" },
+    "discount": { "value": 5.0, "currency": "BRL" },
+    "orderAmount": { "value": 61.0, "currency": "BRL" }
+  },
+  "payments": {
+    "prepaid": 0,
+    "pending": 61.0,
+    "methods": [
+      { "value": 61.0, "currency": "BRL", "type": "PENDING", "method": "CASH", "changeFor": 100.0 }
+    ]
+  },
+  "customer": {
+    "id": "c-99-0001",
+    "name": "Cliente Teste 99",
+    "phone": { "number": "62999998888" },
+    "ordersCountOnMerchant": 3
+  },
+  "delivery": {
+    "deliveredBy": "MERCHANT",
+    "estimatedDeliveryDateTime": "2026-09-28T19:20:00Z",
+    "deliveryAddress": {
+      "country": "BR",
+      "state": "GO",
+      "city": "Goiania",
+      "district": "Setor Bueno",
+      "street": "Avenida T-2",
+      "number": "1922",
+      "complement": "Ap 301",
+      "reference": "em frente a praca",
+      "postalCode": "74215010"
+    }
+  },
+  "extraInfo": "Tocar a campainha duas vezes"
+}
