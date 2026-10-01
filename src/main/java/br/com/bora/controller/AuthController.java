@@ -23,8 +23,12 @@ public class AuthController {
     private final br.com.bora.service.RedeService rede;
     private final br.com.bora.repository.LojaRepository lojas;
 
+    private final br.com.bora.security.FreioDeTentativas freio;
+
     public AuthController(UsuarioRepository repo, PasswordEncoder encoder, JwtService jwt, AuthContext ctx,
-                          br.com.bora.service.RedeService rede, br.com.bora.repository.LojaRepository lojas) {
+                          br.com.bora.service.RedeService rede, br.com.bora.repository.LojaRepository lojas,
+                          br.com.bora.security.FreioDeTentativas freio) {
+        this.freio = freio;
         this.lojas = lojas;
         this.repo = repo;
         this.encoder = encoder;
@@ -34,13 +38,18 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public LoginResponse login(@RequestBody LoginRequest req) {
+    public LoginResponse login(@RequestBody LoginRequest req, jakarta.servlet.http.HttpServletRequest http) {
+        String chave = br.com.bora.security.FreioDeTentativas.chave(req.email(), br.com.bora.security.FreioDeTentativas.origem(http));
+        freio.conferir(chave);
         Usuario u = repo.findByEmail(req.email() == null ? "" : req.email().trim().toLowerCase())
                 .filter(Usuario::getAtivo)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais inválidas"));
-        if (!encoder.matches(req.senha(), u.getSenhaHash())) {
+                .orElse(null);
+        // Senha nula estourava IllegalArgumentException no BCrypt e virava 500 em vez de 401.
+        if (u == null || req.senha() == null || !encoder.matches(req.senha(), u.getSenhaHash())) {
+            freio.errou(chave);
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais inválidas");
         }
+        freio.acertou(chave);
         // Cliente suspenso ou arquivado pela plataforma não entra no painel. Mensagem separada da
         // de credencial: a senha está certa, quem está bloqueado é a loja — o suporte precisa
         // conseguir distinguir os dois casos. O ADMINISTRADOR_BORA não tem loja e passa direto.

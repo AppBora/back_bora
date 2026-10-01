@@ -35,6 +35,19 @@ public class EmpresaService {
         return m;
     }
 
+    /**
+     * Esse CNPJ já pertence a alguma empresa?
+     *
+     * <p>Existe para o cadastro público: lá, repetir o CNPJ de outro cliente entrava na empresa dele
+     * e, pela rede multi-lojas, dava acesso ao painel da loja dele. CNPJ não é segredo — está na nota
+     * e na fachada —, então ele não serve como prova de que a pessoa é a dona. Quem já tem conta prova
+     * com a senha; quem não tem, fala com a gente.</p>
+     */
+    public boolean documentoJaUsado(String documento) {
+        String cnpj = normalizar(documento);
+        return cnpj != null && empresas.findByCnpj(cnpj).isPresent();
+    }
+
     /** Empresa da loja: reaproveita a do CNPJ quando já existe, senão cria. */
     public Empresa paraDocumento(String documento, String nomeFallback) {
         String cnpj = normalizar(documento);

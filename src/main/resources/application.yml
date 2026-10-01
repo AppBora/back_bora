@@ -29,7 +29,13 @@ server:
   error:
     include-message: always
 springdoc:
+  # Fechada por padrão: na internet, a documentação entregava o mapa das 138 rotas — inclusive as de
+  # administrador da plataforma — para qualquer um. Para abrir no desenvolvimento, exporte
+  # SPRINGDOC_API_DOCS_ENABLED=true e SPRINGDOC_SWAGGER_UI_ENABLED=true.
+  api-docs:
+    enabled: ${SPRINGDOC_API_DOCS_ENABLED:false}
   swagger-ui:
+    enabled: ${SPRINGDOC_SWAGGER_UI_ENABLED:false}
     path: /swagger-ui.html
 asaas:
   base-url: ${ASAAS_BASE_URL:https://sandbox.asaas.com/api/v3}

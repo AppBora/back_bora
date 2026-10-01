@@ -47,7 +47,9 @@ public class WhatsAppController {
     @PostMapping("/{lojaId}")
     @SuppressWarnings("unchecked")
     public Map<String, String> receber(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
-        log.info("WhatsApp loja {} payload: {}", lojaId, body); // raio-X temporário de diagnóstico
+        // Não logamos o corpo: ele traz o telefone e o texto do cliente final da loja. Era um raio-X
+        // temporário de diagnóstico que ficou, e guardava dado pessoal em log sem necessidade (LGPD).
+        log.debug("WhatsApp loja {}: aviso recebido", lojaId);
         try {
             IntegracaoCanal i = integracoes.findByLojaIdAndCanal(lojaId, "WHATSAPP")
                     .filter(x -> Boolean.TRUE.equals(x.ativo) && x.clientSecret != null && x.clientId != null)

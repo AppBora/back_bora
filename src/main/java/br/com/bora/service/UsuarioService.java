@@ -40,8 +40,8 @@ public class UsuarioService {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         Long lojaId = ctx.lojaId();
         Papel papel = parsePapel(n.papel());
-        if (n.email() == null || n.email().isBlank() || n.senha() == null || n.senha().length() < 6) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "E-mail e senha (mín. 6) são obrigatórios");
+        if (n.email() == null || n.email().isBlank() || n.senha() == null || n.senha().length() < 8) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "E-mail e senha (mín. 8) são obrigatórios");
         }
         String email = n.email().trim().toLowerCase();
         repo.findByEmail(email).ifPresent(u -> {
