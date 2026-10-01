@@ -133,6 +133,7 @@ public class SignupController {
         loja.setDocumento(req.documento());
         loja.setPlano(Plano.UNICO); // plano único: R$ 299/mês por loja
         loja.empresaId = empresas.paraDocumento(req.documento(), req.nomeLoja()).getId();
+        loja.acessoAte = java.time.OffsetDateTime.now().plusDays(7); // os 7 dias gratis do site
         loja = lojas.save(loja);
         provisionamento.semear(loja.getId(), loja.getNome()); // nasce operável (defaults)
         return loja;

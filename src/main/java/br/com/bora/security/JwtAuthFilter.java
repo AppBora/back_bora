@@ -23,9 +23,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final br.com.bora.repository.LojaRepository lojas;
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
 
+    private final RegraDeAcesso regra;
+
     public JwtAuthFilter(JwtService jwt, br.com.bora.repository.UsuarioRepository usuarios,
                          br.com.bora.repository.LojaRepository lojas,
-                         br.com.bora.repository.UsuarioLojaRepository vinculos) {
+                         br.com.bora.repository.UsuarioLojaRepository vinculos,
+                         RegraDeAcesso regra) {
+        this.regra = regra;
         this.vinculos = vinculos;
         this.jwt = jwt;
         this.usuarios = usuarios;
@@ -51,8 +55,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 boolean daPlataforma = "ADMINISTRADOR_BORA".equals(c.get("papel", String.class));
                 if (ativo && loja != null && !daPlataforma) {
                     Long lojaId = loja.longValue();
+                    // Além da suspensão pela plataforma, vale o prazo de acesso (assinatura).
                     ativo = lojas.findById(lojaId)
-                            .map(l -> !l.bloqueadaPelaPlataforma())
+                            .map(regra::podeUsarOPainel)
                             .orElse(false);
                     // Token emitido para uma loja que não é a principal do usuário só vale enquanto
                     // o vínculo existir: sem isto, quem perde o acesso a uma loja da rede continua

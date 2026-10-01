@@ -581,6 +581,9 @@ public class PlataformaController {
         loja.setDocumento(req.documento());
         loja.setPlano(parsePlano(req.plano()));
         loja.empresaId = empresa.getId();
+        // Os 7 dias de cortesia que o site anuncia passam a existir no sistema: ate aqui a loja
+        // nascia sem prazo nenhum e nunca era cobrada se o dono nao clicasse em "Ativar assinatura".
+        loja.acessoAte = java.time.OffsetDateTime.now().plusDays(7);
         loja = lojas.save(loja);
 
         Usuario admin;
@@ -625,7 +628,12 @@ public class PlataformaController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
         loja.moduloIa = body != null && Boolean.TRUE.equals(body.get("habilitado"));
         lojas.save(loja);
-        return Map.of("lojaId", lojaId, "moduloIa", loja.moduloIa);
+        // O add-on custa R$ 99/mês: ligar ou desligar precisa chegar na cobrança, senão o cliente usa
+        // de graça (ou segue pagando por algo que já foi desligado).
+        boolean cobrancaAtualizada = assinaturas.sincronizarValor(lojaId);
+        return Map.of("lojaId", lojaId, "moduloIa", loja.moduloIa,
+                "mensalidade", loja.precoComModulos(),
+                "cobrancaAtualizada", cobrancaAtualizada);
     }
 
     /** Define preço negociado da loja (fundador etc.). Corpo: { "precoMensal": 149.00 } (null = tabela). */

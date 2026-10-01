@@ -24,10 +24,13 @@ public class AuthController {
     private final br.com.bora.repository.LojaRepository lojas;
 
     private final br.com.bora.security.FreioDeTentativas freio;
+    private final br.com.bora.security.RegraDeAcesso regra;
 
     public AuthController(UsuarioRepository repo, PasswordEncoder encoder, JwtService jwt, AuthContext ctx,
                           br.com.bora.service.RedeService rede, br.com.bora.repository.LojaRepository lojas,
-                          br.com.bora.security.FreioDeTentativas freio) {
+                          br.com.bora.security.FreioDeTentativas freio,
+                          br.com.bora.security.RegraDeAcesso regra) {
+        this.regra = regra;
         this.freio = freio;
         this.lojas = lojas;
         this.repo = repo;
@@ -54,12 +57,17 @@ public class AuthController {
         // de credencial: a senha está certa, quem está bloqueado é a loja — o suporte precisa
         // conseguir distinguir os dois casos. O ADMINISTRADOR_BORA não tem loja e passa direto.
         if (u.getLojaId() != null) {
-            lojas.findById(u.getLojaId())
-                    .filter(br.com.bora.entity.Loja::bloqueadaPelaPlataforma)
-                    .ifPresent(l -> {
-                        throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                                "Loja desativada pela plataforma. Fale com o suporte do BoraHapp.");
-                    });
+            br.com.bora.entity.Loja l = lojas.findById(u.getLojaId()).orElse(null);
+            if (l != null && l.bloqueadaPelaPlataforma()) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "Loja desativada pela plataforma. Fale com o suporte do BoraHapp.");
+            }
+            // Prazo de acesso vencido (sem assinatura paga) é outro caso, com outra saída: aqui o
+            // próprio lojista resolve assinando. Mensagem separada para o suporte não confundir.
+            if (l != null && !regra.podeUsarOPainel(l)) {
+                throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
+                        br.com.bora.security.RegraDeAcesso.RECADO_PRAZO);
+            }
         }
         return new LoginResponse(jwt.gerar(u), u.getNome(), u.getPapel().name(), u.getLojaId());
     }

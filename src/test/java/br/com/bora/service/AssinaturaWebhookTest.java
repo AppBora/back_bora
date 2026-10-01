@@ -35,7 +35,7 @@ class AssinaturaWebhookTest {
         repo = mock(AssinaturaRepository.class);
         lojas = mock(LojaRepository.class);
         service = new AssinaturaService(repo, lojas, mock(UsuarioRepository.class),
-                mock(AsaasClient.class), mock(AuthContext.class));
+                mock(AsaasClient.class), mock(AuthContext.class), 10);
         when(repo.save(any(Assinatura.class))).thenAnswer(inv -> inv.getArgument(0));
         when(lojas.save(any(Loja.class))).thenAnswer(inv -> inv.getArgument(0));
     }
@@ -121,5 +121,41 @@ class AssinaturaWebhookTest {
 
         verifyNoInteractions(repo);
         verifyNoInteractions(lojas);
+    }
+
+    @Test
+    void cobrancaAvulsaApagadaNaoCancelaAAssinaturaNemDerrubaALoja() {
+        Assinatura a = assinatura(StatusAssinatura.ATIVA);
+        Loja l = loja(true, false);
+
+        service.processarWebhook("PAYMENT_DELETED", "sub_0001");
+
+        // Apagar uma cobranca avulsa no painel do Asaas derrubava o cliente que estava em dia.
+        assertEquals(StatusAssinatura.ATIVA, a.getStatus(), "apagar uma cobranca nao encerra a assinatura");
+        assertTrue(l.ativo, "e nao pode tirar a loja do ar");
+    }
+
+    @Test
+    void faturaVencidaComecaACarencia() {
+        assinatura(StatusAssinatura.ATIVA);
+        Loja l = loja(true, false);
+
+        service.processarWebhook("PAYMENT_OVERDUE", "sub_0001");
+
+        assertNotNull(l.acessoAte, "sem prazo, 'inadimplente' era so uma palavra no banco");
+        long dias = java.time.Duration.between(java.time.OffsetDateTime.now(), l.acessoAte).toDays();
+        assertTrue(dias >= 9 && dias <= 10, "a carencia dos Termos e de 10 dias, veio " + dias);
+        assertTrue(l.ativo, "a carencia existe justamente para nao cortar na hora");
+    }
+
+    @Test
+    void pagamentoConfirmadoTiraOPrazoDeAcesso() {
+        assinatura(StatusAssinatura.INADIMPLENTE);
+        Loja l = loja(true, false);
+        l.acessoAte = java.time.OffsetDateTime.now().plusDays(3);
+
+        service.processarWebhook("PAYMENT_CONFIRMED", "sub_0001");
+
+        assertNull(l.acessoAte, "quem esta pagando nao tem data de fim");
     }
 }

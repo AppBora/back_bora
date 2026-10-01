@@ -29,9 +29,14 @@ public class AssinaturaService {
     private final UsuarioRepository usuarios;
     private final AsaasClient asaas;
     private final AuthContext ctx;
+    /** Dias entre a fatura vencer e o acesso acabar. Os Termos publicados prometem 10. */
+    private final int carenciaDias;
 
+    // Um construtor só: com dois, o Spring não sabe qual usar e a aplicação nem sobe.
     public AssinaturaService(AssinaturaRepository repo, LojaRepository lojas, UsuarioRepository usuarios,
-                             AsaasClient asaas, AuthContext ctx) {
+                             AsaasClient asaas, AuthContext ctx,
+                             @org.springframework.beans.factory.annotation.Value("${bora.cobranca.carencia-dias:10}") int carenciaDias) {
+        this.carenciaDias = carenciaDias;
         this.repo = repo;
         this.lojas = lojas;
         this.usuarios = usuarios;
@@ -66,17 +71,48 @@ public class AssinaturaService {
             return nova;
         });
         a.setPlano(plano);
-        a.setValor(loja.precoEfetivo()); // respeita preço negociado por loja (ex.: fundador R$149)
+        // precoComModulos, não precoEfetivo: o Módulo IA (+R$ 99) precisa entrar na cobrança.
+        a.setValor(loja.precoComModulos()); // respeita preço negociado por loja (ex.: fundador R$149)
+        // Reassinando (cancelada ou inadimplente): encerra a assinatura anterior no Asaas antes de
+        // criar outra. Sem isto, o id antigo era sobrescrito e o cliente ficava com DUAS cobranças.
+        if (a.getAsaasSubscriptionId() != null && asaas.configurado()) {
+            asaas.cancelarAssinatura(a.getAsaasSubscriptionId());
+        }
         if (a.getAsaasCustomerId() == null) {
             a.setAsaasCustomerId(asaas.criarCliente(loja.getNome(), email, cpfCnpj));
         }
         String nextDue = LocalDate.now().plusDays(7).toString(); // 7 dias de cortesia antes da 1ª cobrança
-        Map<String, Object> sub = asaas.criarAssinatura(a.getAsaasCustomerId(), loja.precoEfetivo().doubleValue(),
+        Map<String, Object> sub = asaas.criarAssinatura(a.getAsaasCustomerId(), loja.precoComModulos().doubleValue(),
                 "BoraHapp " + plano.name() + " - " + loja.getNome(), nextDue);
         a.setAsaasSubscriptionId(sub == null ? null : (String) sub.get("id"));
         a.setStatus(StatusAssinatura.PENDENTE);
         a.setAtualizadoEm(OffsetDateTime.now());
         return repo.save(a);
+    }
+
+    /**
+     * Põe a cobrança do Asaas no valor que a loja paga hoje (plano + add-on).
+     *
+     * <p>Chamado quando o Módulo IA é ligado ou desligado. Sem isto, o recurso era liberado na tela e
+     * a cobrança continuava no valor antigo: o cliente usava R$ 99/mês de graça, ou pagava por um
+     * add-on que já tinha sido desligado.</p>
+     *
+     * @return true se a cobrança lá fora foi atualizada.
+     */
+    @Transactional
+    public boolean sincronizarValor(Long lojaId) {
+        Loja loja = lojas.findById(lojaId).orElse(null);
+        Assinatura a = repo.findByLojaId(lojaId).orElse(null);
+        if (loja == null || a == null) return false;
+        BigDecimal novo = loja.precoComModulos();
+        a.setValor(novo);
+        a.setAtualizadoEm(OffsetDateTime.now());
+        repo.save(a);
+        if (a.getAsaasSubscriptionId() == null || !asaas.configurado()) return false;
+        asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), novo.doubleValue(),
+                "BoraHapp " + (loja.getPlano() == null ? Plano.UNICO : loja.getPlano()).name()
+                        + " - " + loja.getNome() + (Boolean.TRUE.equals(loja.moduloIa) ? " + Modulo IA" : ""));
+        return true;
     }
 
     /** Reage aos eventos de pagamento do Asaas (webhook): ativa/suspende a loja conforme o pagamento. */
@@ -88,16 +124,34 @@ public class AssinaturaService {
                 case "PAYMENT_CONFIRMED", "PAYMENT_RECEIVED" -> {
                     a.setStatus(StatusAssinatura.ATIVA);
                     ativarLoja(a.getLojaId(), true);
+                    prazoDeAcesso(a.getLojaId(), null); // pagando, o acesso nao tem data de fim
                 }
-                case "PAYMENT_OVERDUE" -> a.setStatus(StatusAssinatura.INADIMPLENTE);
-                case "PAYMENT_DELETED", "SUBSCRIPTION_DELETED" -> {
+                case "PAYMENT_OVERDUE" -> {
+                    a.setStatus(StatusAssinatura.INADIMPLENTE);
+                    // Antes isto so trocava uma palavra no banco e ninguem perdia nada. Agora comeca a
+                    // contar a carencia que os Termos prometem, e o corte depende do interruptor.
+                    prazoDeAcesso(a.getLojaId(), OffsetDateTime.now().plusDays(carenciaDias));
+                }
+                case "SUBSCRIPTION_DELETED" -> {
                     a.setStatus(StatusAssinatura.CANCELADA);
                     ativarLoja(a.getLojaId(), false);
+                }
+                case "PAYMENT_DELETED" -> {
+                    // Uma cobranca avulsa apagada no painel do Asaas NAO e o fim da assinatura. Isto
+                    // cancelava a assinatura inteira e derrubava a loja de um cliente que estava em dia.
                 }
                 default -> { /* demais eventos: ignorados */ }
             }
             a.setAtualizadoEm(OffsetDateTime.now());
             repo.save(a);
+        });
+    }
+
+    /** Define (ou tira, com null) a data em que o acesso desta loja vence. */
+    private void prazoDeAcesso(Long lojaId, OffsetDateTime ate) {
+        lojas.findById(lojaId).ifPresent(l -> {
+            l.acessoAte = ate;
+            lojas.save(l);
         });
     }
 

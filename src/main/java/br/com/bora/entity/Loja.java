@@ -38,6 +38,16 @@ public class Loja {
     @Column(name = "preco_mensal")
     public java.math.BigDecimal precoMensal;
 
+    /**
+     * Fim do acesso enquanto não há assinatura paga. NULL = sem prazo.
+     *
+     * <p>Nasce com os 7 dias de cortesia que o site anuncia, volta a NULL quando o pagamento é
+     * confirmado e ganha a carência quando uma fatura vence. Quem decide se isso corta alguém é o
+     * interruptor {@code bora.cobranca.corte-por-assinatura}, não este campo.</p>
+     */
+    @Column(name = "acesso_ate")
+    public java.time.OffsetDateTime acessoAte;
+
     // ---- Recebimento via subconta Asaas (PIX do cliente cai direto na conta do lojista) ----
     /** Id da subconta do lojista no Asaas (acc_...). */
     @Column(name = "asaas_subconta_id")
@@ -106,9 +116,27 @@ public class Loja {
         return Boolean.TRUE.equals(suspensaPelaPlataforma) || arquivada();
     }
 
-    /** Preço efetivo da assinatura desta loja. */
+    /** O prazo de acesso venceu? NULL (sem prazo) nunca vence. */
+    public boolean acessoVencido() {
+        return acessoAte != null && java.time.OffsetDateTime.now().isAfter(acessoAte);
+    }
+
+    /** Preço efetivo da assinatura desta loja, sem add-on. */
     public java.math.BigDecimal precoEfetivo() {
         return precoMensal != null ? precoMensal
                 : java.math.BigDecimal.valueOf((plano == null ? Plano.UNICO : plano).precoMensal);
+    }
+
+    /** Quanto o Módulo IA soma na mensalidade. O site anuncia +R$ 99/mês por loja. */
+    public static final java.math.BigDecimal PRECO_MODULO_IA = new java.math.BigDecimal("99.00");
+
+    /**
+     * O que a loja paga por mês de verdade: plano + add-on contratado.
+     *
+     * <p>Até aqui o Módulo IA era um visto na tela: ligava o recurso e nunca entrava na cobrança.
+     * Quem usasse ficava com R$ 99/mês de graça, e o relatório de custo da plataforma mentia.</p>
+     */
+    public java.math.BigDecimal precoComModulos() {
+        return Boolean.TRUE.equals(moduloIa) ? precoEfetivo().add(PRECO_MODULO_IA) : precoEfetivo();
     }
 }
