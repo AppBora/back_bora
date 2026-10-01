@@ -62,7 +62,12 @@ public class RelatorioService {
         OffsetDateTime corte = OffsetDateTime.now().minusDays(janela);
 
         List<Pedido> todos = pedidos.findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(lojaId, corte);
-        List<Pedido> vendas = todos.stream().filter(p -> p.status != StatusPedido.CANCELADO).toList();
+        // Venda e o que foi vendido de verdade: pedido com PIX gerado e nao pago inflava o
+        // faturamento e a margem, e nunca saia do relatorio porque ninguem o cancelava.
+        List<Pedido> vendas = todos.stream()
+                .filter(p -> p.status != StatusPedido.CANCELADO)
+                .filter(p -> !p.pagamentoPendente())
+                .toList();
         Set<Long> idsVenda = new HashSet<>(); vendas.forEach(p -> idsVenda.add(p.id));
         Map<Long, Pedido> porId = new HashMap<>(); todos.forEach(p -> porId.put(p.id, p));
 

@@ -39,6 +39,8 @@ public class PublicController {
     private final br.com.bora.repository.ComplementoItemRepository compItens;
     private final ComplementoService complementoService;
     private final br.com.bora.repository.CupomRepository cupons;
+    private final br.com.bora.service.OperacaoService operacao;
+    private final boolean respeitarHorario;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
@@ -46,7 +48,11 @@ public class PublicController {
                             br.com.bora.repository.ComplementoItemRepository compItens,
                             ComplementoService complementoService,
                             br.com.bora.repository.CupomRepository cupons,
-                            br.com.bora.service.FidelidadeService fidelidade) {
+                            br.com.bora.service.FidelidadeService fidelidade,
+                            br.com.bora.service.OperacaoService operacao,
+                            @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
+        this.respeitarHorario = respeitarHorario;
+        this.operacao = operacao;
         this.lojas = lojas;
         this.produtos = produtos;
         this.pedidos = pedidos;
@@ -137,6 +143,17 @@ public class PublicController {
     @Transactional
     public Map<String, Object> pedirOnline(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
         Loja loja = lojaAtiva(lojaId);
+        // O horario que o lojista configura existia so na tela: abertaAgora() nao tinha um unico
+        // chamador, e o cardapio aceitava pedido as 3 da manha com a loja fechada.
+        //
+        // Nasce DESLIGADO de proposito: toda loja e semeada com 18h-23h todo dia, e na pratica esse
+        // horario quase nunca foi revisado pelo lojista. Ligar sem conferir loja por loja recusaria
+        // venda de verdade - o oposto do que queremos. Ligue com BORA_CARDAPIO_RESPEITAR_HORARIO=true
+        // depois de confirmar o horario de cada loja.
+        if (respeitarHorario && !operacao.abertaAgora(lojaId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A loja esta fechada agora. Confira o horario de funcionamento e volte depois.");
+        }
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> pedidoItens = (List<Map<String, Object>>) body.get("itens");
         if (pedidoItens == null || pedidoItens.isEmpty() || pedidoItens.size() > 50) {
@@ -253,6 +270,7 @@ public class PublicController {
                 Map<String, Object> cobranca = pix.criarCobranca(integ, loja, p, nome, cpf.replaceAll("\\D", ""));
                 p.canalExterno = "PIX_ASAAS";
                 p.idExterno = (String) cobranca.get("paymentId");
+                p.aguardandoPagamento = true; // so vira venda quando o Asaas confirmar
                 resp.put("pix", cobranca);
             } catch (ResponseStatusException e) {
                 throw e;
@@ -263,9 +281,14 @@ public class PublicController {
         p.atualizadoEm = OffsetDateTime.now();
         pedidos.save(p);
 
-        // Só credita depois que o pedido está de pé (o PIX pode falhar e abortar tudo acima).
-        fidelidade.registrar(lojaId, clienteId, p.valorTotal, resgate);
+        // Cashback só depois que o dinheiro entra. Creditar na hora do pedido deixava qualquer pessoa
+        // fabricar saldo: bastava gerar dez PIX de R$ 50 e nunca pagar para juntar R$ 25 de verdade.
+        // No PIX pendente, quem credita é o webhook do pagamento.
+        if (!p.pagamentoPendente()) {
+            fidelidade.registrar(lojaId, clienteId, p.valorTotal, resgate);
+        }
         resp.put("cashbackNovo", fidelidade.saldo(lojaId, clienteId));
+        resp.put("aguardandoPagamento", p.pagamentoPendente());
         return resp;
     }
 
@@ -320,9 +343,17 @@ public class PublicController {
         String paymentId = payment == null ? null : str(payment.get("id"));
         if (paymentId != null && ("PAYMENT_RECEIVED".equals(event) || "PAYMENT_CONFIRMED".equals(event))) {
             pedidos.findFirstByLojaIdAndCanalExternoAndIdExterno(lojaId, "PIX_ASAAS", paymentId).ifPresent(p -> {
+                boolean primeiraConfirmacao = p.pagoEm == null;
                 p.formaPagamento = "PIX (pago)";
+                p.aguardandoPagamento = false;
+                p.pagoEm = OffsetDateTime.now();
                 p.atualizadoEm = OffsetDateTime.now();
                 pedidos.save(p);
+                // O Asaas reenvia o mesmo aviso quando nao recebe 200: sem esta guarda, o cliente
+                // ganharia cashback de novo a cada reenvio.
+                if (primeiraConfirmacao && p.clienteId != null) {
+                    fidelidade.registrar(lojaId, p.clienteId, p.valorTotal, java.math.BigDecimal.ZERO);
+                }
             });
             if (integ != null) {
                 integ.ultimaSync = OffsetDateTime.now();

@@ -14,8 +14,11 @@ import java.util.Optional;
 public interface PedidoRepository extends JpaRepository<Pedido, Long> {
 
     /** Receita (não cancelada) da loja numa janela — base do termômetro de vendas. */
+    // PIX gerado e nao pago nao e faturamento: entrava na conta do dia e ficava la para sempre,
+    // porque nada expirava o pedido abandonado no checkout.
     @Query("select coalesce(sum(p.valorTotal), 0) from Pedido p " +
            "where p.lojaId = :lojaId and p.status <> br.com.bora.entity.StatusPedido.CANCELADO " +
+           "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) " +
            "and p.criadoEm >= :inicio and p.criadoEm < :fim")
     BigDecimal somaReceita(@Param("lojaId") Long lojaId,
                            @Param("inicio") OffsetDateTime inicio,
@@ -73,6 +76,9 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     /** Pedido que virou o dia sem terminar continua no quadro — senão some da vista da cozinha. */
     List<Pedido> findByLojaIdAndStatusNotInOrderByCriadoEmDesc(Long lojaId, java.util.Collection<StatusPedido> finais);
     List<Pedido> findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(Long lojaId, OffsetDateTime corte);
+
+    /** PIX gerado e nunca pago, mais velho que o corte — o cobrador cancela estes. */
+    List<Pedido> findByAguardandoPagamentoTrueAndCriadoEmBefore(OffsetDateTime corte);
     Optional<Pedido> findByIdAndLojaId(Long id, Long lojaId);
     long countByLojaIdAndCriadoEmAfter(Long lojaId, OffsetDateTime inicio); // RN09 — limite de pedidos/mês
     Optional<Pedido> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno); // idempotência webhook
