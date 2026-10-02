@@ -85,8 +85,13 @@ public class SignupController {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "E-mail já cadastrado");
             }
             freio.acertou(chave);
-            // Conta provada pela senha: é o mesmo dono, então pode entrar na empresa do CNPJ dele.
-            Loja loja = novaLoja(req, true, br.com.bora.security.FreioDeTentativas.origem(http));
+            // A senha prova que a CONTA é dela. Não prova nenhuma relação com o CNPJ digitado — e era
+            // só isso que a guarda anterior exigia. Qualquer pessoa criava uma loja própria (30 segundos),
+            // recadastrava com a MESMA conta informando o CNPJ de um cliente, e a loja nova nascia dentro
+            // da empresa dele; dali, pelos vínculos da rede, o painel do cliente ficava a dois cliques.
+            // CNPJ está na nota fiscal e na fachada: não é segredo, não prova posse.
+            Loja loja = novaLoja(req, jaPertenceAEmpresaDoDocumento(existente, req.documento()),
+                    br.com.bora.security.FreioDeTentativas.origem(http));
             UsuarioLoja v = new UsuarioLoja();
             v.setUsuarioId(existente.getId());
             v.setLojaId(loja.getId());
@@ -128,6 +133,20 @@ public class SignupController {
      */
     /** Data de revisao do texto publicado em /termos.html. Mudou o texto, muda isto aqui. */
     private static final String VERSAO_DOS_TERMOS = "2026-10-02";
+
+    /**
+     * A conta já é de dentro da empresa desse CNPJ?
+     *
+     * <p>Só quem já tem vínculo com alguma loja daquela empresa pode abrir outra loja nela. Para todo
+     * o resto, o CNPJ de terceiro é barrado como o de qualquer estranho. CNPJ inédito não tem empresa
+     * para invadir, então segue o fluxo normal.</p>
+     */
+    private boolean jaPertenceAEmpresaDoDocumento(Usuario conta, String documento) {
+        Long empresaId = empresas.idDoDocumento(documento);
+        if (empresaId == null) return true;
+        return lojas.findByEmpresaIdOrderByIdAsc(empresaId).stream()
+                .anyMatch(l -> vinculos.existsByUsuarioIdAndLojaId(conta.getId(), l.getId()));
+    }
 
     private Loja novaLoja(SignupRequest req, boolean donoProvado, String origemDoAceite) {
         if (!donoProvado && empresas.documentoJaUsado(req.documento())) {

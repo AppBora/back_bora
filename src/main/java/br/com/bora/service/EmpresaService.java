@@ -48,6 +48,18 @@ public class EmpresaService {
         return cnpj != null && empresas.findByCnpj(cnpj).isPresent();
     }
 
+    /**
+     * Id da empresa desse CNPJ, ou null se nenhuma empresa o usa ainda.
+     *
+     * <p>Diferente de {@link #paraDocumento}, esta NÃO cria nada: serve para perguntar "de quem é
+     * este CNPJ?" antes de decidir se quem está cadastrando tem direito de entrar nessa empresa.</p>
+     */
+    public Long idDoDocumento(String documento) {
+        String cnpj = normalizar(documento);
+        if (cnpj == null) return null;
+        return empresas.findByCnpj(cnpj).map(Empresa::getId).orElse(null);
+    }
+
     /** Empresa da loja: reaproveita a do CNPJ quando já existe, senão cria. */
     public Empresa paraDocumento(String documento, String nomeFallback) {
         String cnpj = normalizar(documento);

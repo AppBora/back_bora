@@ -100,8 +100,8 @@ class SignupEmpresaTest {
         verify(usuarios, never()).save(any(Usuario.class));
     }
 
-    @Test
-    void donoQueProvaASenhaPodeAbrirOutraLojaNaMesmaEmpresa() {
+    /** Conta que acerta a senha E já tem loja naquela empresa: é o dono de rede de verdade. */
+    private Usuario contaQueAcertaASenha(boolean comVinculoNaEmpresaDaVitima) {
         Usuario dono = new Usuario();
         dono.setId(42L);
         dono.setEmail("dono@zira.local");
@@ -111,12 +111,45 @@ class SignupEmpresaTest {
         when(usuarios.findByEmail("dono@zira.local")).thenReturn(Optional.of(dono));
         when(encoder.matches("senha-de-oito", "hash")).thenReturn(true);
 
+        Loja daVitima = new Loja();
+        daVitima.id = 18L;
+        daVitima.empresaId = 7L;
+        when(lojas.findByEmpresaIdOrderByIdAsc(7L)).thenReturn(java.util.List.of(daVitima));
+        when(vinculos.existsByUsuarioIdAndLojaId(42L, 18L)).thenReturn(comVinculoNaEmpresaDaVitima);
+        return dono;
+    }
+
+    @Test
+    void donoQueProvaASenhaPodeAbrirOutraLojaNaMesmaEmpresa() {
+        contaQueAcertaASenha(true); // já tem loja nessa empresa
+
         Map<String, Object> r = controller.cadastrar(new SignupRequest("Zirá Centro", CNPJ_DA_VITIMA,
                 "Dono", "dono@zira.local", "senha-de-oito", true), origem());
 
         assertEquals(true, r.get("vinculada"));
         verify(lojas).save(any(Loja.class));
         verify(empresasRepo, never()).save(any(Empresa.class)); // entrou na empresa que já existia
+    }
+
+    /**
+     * O buraco que a primeira correção deixou aberto.
+     *
+     * <p>A senha prova que a CONTA é de quem cadastra — não prova nenhuma relação com o CNPJ digitado.
+     * Bastava abrir uma loja qualquer (30 segundos), recadastrar com a MESMA conta informando o CNPJ de
+     * um cliente, e a loja nova nascia dentro da empresa dele. Dali, pelos vínculos da rede, o painel do
+     * cliente ficava a dois cliques. CNPJ está na nota fiscal e na fachada: não é segredo.</p>
+     */
+    @Test
+    void contaPropriaComOCnpjDeOutraEmpresa_ehRecusadaComoQualquerEstranho() {
+        contaQueAcertaASenha(false); // conta de verdade, mas sem nenhuma loja na empresa da vítima
+
+        ResponseStatusException e = assertThrows(ResponseStatusException.class, () ->
+                controller.cadastrar(new SignupRequest("Loja do Golpista", CNPJ_DA_VITIMA,
+                        "Golpista", "dono@zira.local", "senha-de-oito", true), origem()));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatusCode());
+        verify(lojas, never()).save(any(Loja.class));
+        verify(vinculos, never()).save(any(br.com.bora.entity.UsuarioLoja.class));
     }
 
     @Test
