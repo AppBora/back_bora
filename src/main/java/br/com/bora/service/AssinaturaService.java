@@ -107,18 +107,33 @@ public class AssinaturaService {
      */
     @Transactional
     public boolean sincronizarValor(Long lojaId) {
+        return "ATUALIZADA".equals(sincronizarValorComMotivo(lojaId));
+    }
+
+    /**
+     * O mesmo, mas dizendo POR QUE a cobrança não mudou.
+     *
+     * <p>Um "não atualizou" tem causas muito diferentes — a loja nem assinou ainda, ou assinou e a
+     * cobrança no Asaas ficou para trás. A tela do administrador mostrava a mesma frase para as duas,
+     * e a segunda é um cliente usando R$ 99/mês de graça sem ninguém perceber.</p>
+     *
+     * @return ATUALIZADA · SEM_ASSINATURA · SEM_ID_NO_ASAAS · ASAAS_NAO_CONFIGURADO
+     */
+    @Transactional
+    public String sincronizarValorComMotivo(Long lojaId) {
         Loja loja = lojas.findById(lojaId).orElse(null);
         Assinatura a = repo.findByLojaId(lojaId).orElse(null);
-        if (loja == null || a == null) return false;
+        if (loja == null || a == null) return "SEM_ASSINATURA";
         BigDecimal novo = loja.precoComModulos();
         a.setValor(novo);
         a.setAtualizadoEm(OffsetDateTime.now());
         repo.save(a);
-        if (a.getAsaasSubscriptionId() == null || !asaas.configurado()) return false;
+        if (a.getAsaasSubscriptionId() == null) return "SEM_ID_NO_ASAAS";
+        if (!asaas.configurado()) return "ASAAS_NAO_CONFIGURADO";
         asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), novo.doubleValue(),
                 "BoraHapp " + (loja.getPlano() == null ? Plano.UNICO : loja.getPlano()).name()
                         + " - " + loja.getNome() + (Boolean.TRUE.equals(loja.moduloIa) ? " + Modulo IA" : ""));
-        return true;
+        return "ATUALIZADA";
     }
 
     /** Reage aos eventos de pagamento do Asaas (webhook): ativa/suspende a loja conforme o pagamento. */

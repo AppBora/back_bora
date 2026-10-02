@@ -633,10 +633,11 @@ public class PlataformaController {
         lojas.save(loja);
         // O add-on custa R$ 99/mês: ligar ou desligar precisa chegar na cobrança, senão o cliente usa
         // de graça (ou segue pagando por algo que já foi desligado).
-        boolean cobrancaAtualizada = assinaturas.sincronizarValor(lojaId);
+        String motivo = assinaturas.sincronizarValorComMotivo(lojaId);
         return Map.of("lojaId", lojaId, "moduloIa", loja.moduloIa,
                 "mensalidade", loja.precoComModulos(),
-                "cobrancaAtualizada", cobrancaAtualizada);
+                "cobrancaAtualizada", "ATUALIZADA".equals(motivo),
+                "situacaoCobranca", motivo);
     }
 
     /** Define preço negociado da loja (fundador etc.). Corpo: { "precoMensal": 149.00 } (null = tabela). */
