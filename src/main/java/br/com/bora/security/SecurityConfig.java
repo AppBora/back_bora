@@ -13,8 +13,10 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtFilter;
+    private final BloqueioPorAssinaturaFilter bloqueio;
 
-    public SecurityConfig(JwtAuthFilter jwtFilter) {
+    public SecurityConfig(JwtAuthFilter jwtFilter, BloqueioPorAssinaturaFilter bloqueio) {
+        this.bloqueio = bloqueio;
         this.jwtFilter = jwtFilter;
     }
 
@@ -31,7 +33,10 @@ public class SecurityConfig {
                         .anyRequest().authenticated())
                 .exceptionHandling(e -> e.authenticationEntryPoint(
                         (req, res, ex) -> res.sendError(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED, "Não autenticado")))
-                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+                // Depois do JWT: so faz sentido perguntar "esta loja pode usar o painel?" quando ja
+                // sabemos de qual loja e o pedido.
+                .addFilterAfter(bloqueio, JwtAuthFilter.class);
         return http.build();
     }
 

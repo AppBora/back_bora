@@ -42,6 +42,7 @@ public class PublicController {
     private final br.com.bora.service.OperacaoService operacao;
     private final br.com.bora.repository.TaxaEntregaRepository taxas;
     private final br.com.bora.service.InsumoService insumos;
+    private final br.com.bora.security.RegraDeAcesso regra;
     private final boolean respeitarHorario;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
@@ -54,10 +55,12 @@ public class PublicController {
                             br.com.bora.service.OperacaoService operacao,
                             br.com.bora.repository.TaxaEntregaRepository taxas,
                             br.com.bora.service.InsumoService insumos,
+                            br.com.bora.security.RegraDeAcesso regra,
                             @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
         this.respeitarHorario = respeitarHorario;
         this.taxas = taxas;
         this.insumos = insumos;
+        this.regra = regra;
         this.operacao = operacao;
         this.lojas = lojas;
         this.produtos = produtos;
@@ -110,6 +113,9 @@ public class PublicController {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("loja", Map.of("id", loja.id, "nome", loja.nome == null ? "Cardápio" : loja.nome));
         resp.put("pixDisponivel", integracaoPix(lojaId).isPresent() || subcontaRecebendo(loja));
+        // A tela precisa saber ANTES: descobrir que a loja esta fechada so ao confirmar o pedido,
+        // depois de montar o carrinho inteiro, e a pior forma de contar isso ao cliente.
+        resp.put("aberta", !respeitarHorario || operacao.abertaAgora(lojaId));
         // Bairros atendidos e quanto custa entregar em cada um. Sem isto a tela nao tinha como
         // perguntar o bairro, e TODA entrega pelo cardapio saia sem frete.
         resp.put("bairros", taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(lojaId).stream().map(t -> {
@@ -414,6 +420,11 @@ public class PublicController {
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
         if (Boolean.FALSE.equals(loja.ativo)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja indisponível");
+        }
+        // Prazo de acesso vencido fecha tambem o cardapio. Deixar o cardapio no ar com o painel
+        // trancado seria pior para o cliente final: o pedido entraria e ninguem estaria olhando.
+        if (regra.cortePorAssinaturaLigado() && loja.acessoVencido()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja indisponível");
         }
         return loja;

@@ -62,12 +62,9 @@ public class AuthController {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                         "Loja desativada pela plataforma. Fale com o suporte do BoraHapp.");
             }
-            // Prazo de acesso vencido (sem assinatura paga) é outro caso, com outra saída: aqui o
-            // próprio lojista resolve assinando. Mensagem separada para o suporte não confundir.
-            if (l != null && !regra.podeUsarOPainel(l)) {
-                throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
-                        br.com.bora.security.RegraDeAcesso.RECADO_PRAZO);
-            }
+            // Prazo vencido NAO barra o login: barrar aqui seria um beco sem saida, porque a tela de
+            // pagar fica atras do login. Quem tranca o resto do painel e o BloqueioPorAssinaturaFilter,
+            // com 402, deixando passar so o caminho da assinatura.
         }
         return new LoginResponse(jwt.gerar(u), u.getNome(), u.getPapel().name(), u.getLojaId());
     }

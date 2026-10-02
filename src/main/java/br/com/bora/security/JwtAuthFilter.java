@@ -55,9 +55,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 boolean daPlataforma = "ADMINISTRADOR_BORA".equals(c.get("papel", String.class));
                 if (ativo && loja != null && !daPlataforma) {
                     Long lojaId = loja.longValue();
-                    // Além da suspensão pela plataforma, vale o prazo de acesso (assinatura).
+                    // So a decisao da plataforma derruba a sessao inteira. O prazo de acesso vencido
+                    // e tratado pelo BloqueioPorAssinaturaFilter, que responde 402 e deixa o lojista
+                    // chegar na tela de assinatura em vez de ficar sem saida.
                     ativo = lojas.findById(lojaId)
-                            .map(regra::podeUsarOPainel)
+                            .map(l -> !l.bloqueadaPelaPlataforma())
                             .orElse(false);
                     // Token emitido para uma loja que não é a principal do usuário só vale enquanto
                     // o vínculo existir: sem isto, quem perde o acesso a uma loja da rede continua
