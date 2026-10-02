@@ -65,8 +65,10 @@ public class AssinaturaService {
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
         Plano plano = loja.getPlano() == null ? Plano.UNICO : loja.getPlano();
-        String email = usuarios.findByLojaId(lojaId).stream()
-                .filter(u -> u.getPapel() == Papel.ADMINISTRADOR_LOJA)
+        // Pelos vinculos, nao so pela coluna loja_id: na rede multi-lojas o dono tem uma conta so, e da
+        // segunda loja em diante ele nao aparecia aqui. A cobranca nascia sem e-mail e o lojista nunca
+        // recebia a fatura -- e e exatamente o caso das outras duas lojas da Zira.
+        String email = usuarios.donosDaLoja(lojaId).stream()
                 .findFirst().map(Usuario::getEmail).orElse(null);
 
         Assinatura a = repo.findByLojaId(lojaId).orElseGet(() -> {

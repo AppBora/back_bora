@@ -153,8 +153,9 @@ public class AsaasSubcontaService {
 
     /** E-mail do admin da loja - e o dono da subconta no Asaas. */
     private String emailDoAdmin(Loja loja) {
-        return usuarios.findByLojaId(loja.getId()).stream()
-                .filter(u -> u.getPapel() == Papel.ADMINISTRADOR_LOJA)
+        // Mesmo motivo da cobranca: pelos vinculos, senao a 2a e a 3a loja da rede caem no endereco
+        // generico -- que nem caixa de e-mail e, e o lojista perde o acesso a propria subconta.
+        return usuarios.donosDaLoja(loja.getId()).stream()
                 .findFirst().map(Usuario::getEmail).orElse("contato@borahapp.com.br");
     }
 

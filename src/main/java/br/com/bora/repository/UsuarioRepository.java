@@ -25,6 +25,23 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
     @org.springframework.data.jpa.repository.Query("select u from Usuario u where u.papel = :papel")
     List<Usuario> findByPapelParaAtualizar(@org.springframework.data.repository.query.Param("papel") Papel papel);
 
+    /**
+     * O dono de uma loja, olhando TAMBÉM os vínculos da rede.
+     *
+     * <p>{@code findByLojaId} lê só a coluna {@code loja_id} do usuário, que aponta para a loja onde
+     * ele nasceu. Numa rede multi-lojas o dono tem uma conta só, ligada às outras lojas pelos
+     * vínculos — então da segunda loja em diante o dono simplesmente não aparecia. Quem perguntava
+     * "qual o e-mail do dono desta loja?" recebia nada, e a cobrança era criada no Asaas sem e-mail
+     * nenhum: o lojista nunca recebia a fatura.</p>
+     */
+    @org.springframework.data.jpa.repository.Query("""
+            select u from Usuario u
+            where u.papel = br.com.bora.entity.Papel.ADMINISTRADOR_LOJA and u.ativo = true
+              and (u.lojaId = :lojaId
+                   or exists (select 1 from UsuarioLoja v where v.usuarioId = u.id and v.lojaId = :lojaId))
+            order by u.id""")
+    List<Usuario> donosDaLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
     /** Usuários ativos por loja, para o painel de clientes (x/15 do plano). */
     @org.springframework.data.jpa.repository.Query("select u.lojaId, count(u) from Usuario u where u.ativo = true and u.lojaId is not null group by u.lojaId")
     List<Object[]> ativosPorLoja();
