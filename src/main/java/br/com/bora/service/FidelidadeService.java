@@ -153,6 +153,33 @@ public class FidelidadeService {
      * Fecha o ciclo do pedido: soma ao histórico, debita o que foi resgatado e credita o cashback
      * novo sobre o valor efetivamente pago.
      */
+    /**
+     * Tira do saldo o cashback que o cliente acabou de usar, sem creditar nada.
+     *
+     * <p>Serve para o PIX: ali o desconto sai do total na hora do pedido, mas quem credita o cashback
+     * novo é o webhook, depois do pagamento. Debitar só no webhook deixava o saldo intacto entre um
+     * pedido e outro — o cliente usava os mesmos R$ 20 em quantos pedidos quisesse.</p>
+     */
+    public void consumir(Long lojaId, Long clienteId, BigDecimal valor) {
+        mexerNoSaldo(lojaId, clienteId, valor, true);
+    }
+
+    /** Devolve o cashback de um pedido que não vai acontecer (PIX abandonado ou cancelado). */
+    public void devolver(Long lojaId, Long clienteId, BigDecimal valor) {
+        mexerNoSaldo(lojaId, clienteId, valor, false);
+    }
+
+    private void mexerNoSaldo(Long lojaId, Long clienteId, BigDecimal valor, boolean tirar) {
+        if (clienteId == null || valor == null || valor.signum() <= 0) return;
+        clientes.findByIdAndLojaId(clienteId, lojaId).ifPresent(c -> {
+            BigDecimal saldo = c.cashback == null ? BigDecimal.ZERO : c.cashback;
+            c.cashback = (tirar ? saldo.subtract(valor) : saldo.add(valor))
+                    .max(BigDecimal.ZERO)
+                    .setScale(2, RoundingMode.HALF_UP);
+            clientes.save(c);
+        });
+    }
+
     public void registrar(Long lojaId, Long clienteId, BigDecimal totalPago, BigDecimal resgate) {
         registrar(lojaId, clienteId, totalPago, resgate, true);
     }

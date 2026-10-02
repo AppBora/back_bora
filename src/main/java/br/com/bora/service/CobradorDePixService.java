@@ -27,11 +27,13 @@ import java.util.List;
 public class CobradorDePixService {
 
     private final PedidoRepository pedidos;
+    private final FidelidadeService fidelidade;
     private final int minutosParaExpirar;
 
-    public CobradorDePixService(PedidoRepository pedidos,
+    public CobradorDePixService(PedidoRepository pedidos, FidelidadeService fidelidade,
                                 @Value("${bora.pix.minutos-para-expirar:30}") int minutosParaExpirar) {
         this.pedidos = pedidos;
+        this.fidelidade = fidelidade;
         this.minutosParaExpirar = minutosParaExpirar;
     }
 
@@ -53,6 +55,9 @@ public class CobradorDePixService {
             p.motivoCancelamento = "PIX não pago em " + minutosParaExpirar + " minutos";
             p.aguardandoPagamento = false;
             pedidos.save(p);
+            // O cashback foi debitado quando o pedido nasceu, para o mesmo saldo não valer em dois
+            // pedidos ao mesmo tempo. Venda que não aconteceu devolve o saldo ao cliente.
+            fidelidade.devolver(p.lojaId, p.clienteId, p.cashbackUsado);
         }
         log.info("PIX abandonado: {} pedido(s) cancelado(s) depois de {} min", vencidos.size(), minutosParaExpirar);
     }

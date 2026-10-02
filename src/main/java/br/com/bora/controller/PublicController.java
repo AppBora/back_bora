@@ -340,6 +340,7 @@ public class PublicController {
             resgate = fidelidade.resgatePossivel(lojaId, clienteId, total);
             if (resgate.signum() > 0) {
                 total = total.subtract(resgate);
+                p.cashbackUsado = resgate; // em campo próprio: o texto da observação não serve para contas
                 p.observacao = p.observacao + " | Cashback usado (-R$ " + resgate + ")";
             }
         }
@@ -386,8 +387,14 @@ public class PublicController {
         // Cashback só depois que o dinheiro entra. Creditar na hora do pedido deixava qualquer pessoa
         // fabricar saldo: bastava gerar dez PIX de R$ 50 e nunca pagar para juntar R$ 25 de verdade.
         // No PIX pendente, quem credita é o webhook do pagamento.
+        //
+        // O DEBITO, porém, é na hora, sempre. O desconto já saiu do total que o cliente vai pagar; se o
+        // saldo só fosse baixado depois, o mesmo cashback valeria em quantos pedidos PIX ele abrisse
+        // ao mesmo tempo. Se o PIX não for pago, o cobrador devolve.
         if (!p.pagamentoPendente()) {
             fidelidade.registrar(lojaId, clienteId, p.valorTotal, resgate);
+        } else {
+            fidelidade.consumir(lojaId, clienteId, resgate);
         }
         resp.put("cashbackNovo", fidelidade.saldo(lojaId, clienteId));
         resp.put("aguardandoPagamento", p.pagamentoPendente());
