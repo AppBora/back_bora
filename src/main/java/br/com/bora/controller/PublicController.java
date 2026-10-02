@@ -40,6 +40,8 @@ public class PublicController {
     private final ComplementoService complementoService;
     private final br.com.bora.repository.CupomRepository cupons;
     private final br.com.bora.service.OperacaoService operacao;
+    private final br.com.bora.repository.TaxaEntregaRepository taxas;
+    private final br.com.bora.service.InsumoService insumos;
     private final boolean respeitarHorario;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
@@ -50,8 +52,12 @@ public class PublicController {
                             br.com.bora.repository.CupomRepository cupons,
                             br.com.bora.service.FidelidadeService fidelidade,
                             br.com.bora.service.OperacaoService operacao,
+                            br.com.bora.repository.TaxaEntregaRepository taxas,
+                            br.com.bora.service.InsumoService insumos,
                             @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
         this.respeitarHorario = respeitarHorario;
+        this.taxas = taxas;
+        this.insumos = insumos;
         this.operacao = operacao;
         this.lojas = lojas;
         this.produtos = produtos;
@@ -104,6 +110,15 @@ public class PublicController {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("loja", Map.of("id", loja.id, "nome", loja.nome == null ? "Cardápio" : loja.nome));
         resp.put("pixDisponivel", integracaoPix(lojaId).isPresent() || subcontaRecebendo(loja));
+        // Bairros atendidos e quanto custa entregar em cada um. Sem isto a tela nao tinha como
+        // perguntar o bairro, e TODA entrega pelo cardapio saia sem frete.
+        resp.put("bairros", taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(lojaId).stream().map(t -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("bairro", t.bairro);
+            m.put("taxa", t.taxa == null ? BigDecimal.ZERO : t.taxa);
+            m.put("tempoMin", t.tempoMin);
+            return m;
+        }).toList());
         // complementos por produto (1 consulta para grupos + 1 para itens)
         List<br.com.bora.entity.ComplementoGrupo> gs = lista.isEmpty() ? List.of()
                 : compGrupos.findByLojaIdAndProdutoIdInOrderById(lojaId, lista.stream().map(p -> p.id).toList());
@@ -165,6 +180,24 @@ public class PublicController {
         String obs = str(body.get("observacao"));
         String forma = "PIX".equalsIgnoreCase(str(body.get("formaPagamento"))) ? "PIX" : "Na entrega";
         String cpf = str(body.get("cpf"));
+        boolean retirada = "RETIRADA".equalsIgnoreCase(str(body.get("tipoEntrega")));
+        String bairro = str(body.get("bairro"));
+
+        // Frete do cardapio. Ate aqui a taxa ficava SEMPRE zero aqui, enquanto o balcao cobrava a
+        // tabela do bairro: toda entrega feita pelo cardapio saia de graca, e o acerto do motoboy
+        // ainda somava R$ 0 por ela. Quando a loja nao tem bairro cadastrado, nada muda.
+        var bairrosAtendidos = taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(lojaId);
+        BigDecimal taxaEntrega = BigDecimal.ZERO;
+        if (!retirada && !bairrosAtendidos.isEmpty()) {
+            if (bairro == null || bairro.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Escolha o bairro da entrega para calcularmos a taxa.");
+            }
+            var tabela = taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(lojaId, bairro.trim())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Ainda nao entregamos nesse bairro. Escolha um da lista ou retire no balcao."));
+            taxaEntrega = tabela.taxa == null ? BigDecimal.ZERO : tabela.taxa;
+        }
         if (nome == null || nome.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe seu nome");
         }
@@ -176,7 +209,9 @@ public class PublicController {
         if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("\\D", "");
         StringBuilder ob = new StringBuilder("Cliente: ").append(nome.trim());
         if (telefone != null && !telefone.isBlank()) ob.append(" | Tel: ").append(telefone.trim());
+        if (retirada) ob.append(" | RETIRADA NO BALCAO");
         if (endereco != null && !endereco.isBlank()) ob.append(" | End: ").append(endereco.trim());
+        if (!retirada && bairro != null && !bairro.isBlank()) ob.append(" | Bairro: ").append(bairro.trim());
         if (obs != null && !obs.isBlank()) ob.append(" | Obs: ").append(obs.trim());
         p.observacao = ob.toString();
 
@@ -208,7 +243,15 @@ public class PublicController {
             item.setQuantidade(qtd);
             BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
             item.setPrecoUnitario(unit);
-            item.setCustoUnitario(prod.custo);
+            // Mesma regra do balcao: com ficha tecnica, consome os insumos e usa o custo da ficha;
+            // sem ficha, baixa o estoque do proprio produto. O cardapio nao fazia nem um nem outro,
+            // entao estoque e CMV ficavam errados justamente no canal que mais vende.
+            BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
+            item.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+            if (custoFicha == null && prod.estoque != null) {
+                prod.estoque = prod.estoque - qtd;
+                produtos.save(prod);
+            }
             BigDecimal sub = unit.multiply(BigDecimal.valueOf(qtd));
             item.setSubtotal(sub);
             itens.save(item);
@@ -246,6 +289,8 @@ public class PublicController {
             }
         }
 
+        total = total.add(taxaEntrega);
+        p.taxaEntrega = taxaEntrega;
         p.valorTotal = total;
         p.codigo = "CD-" + p.id;
 
@@ -255,6 +300,8 @@ public class PublicController {
         resp.put("valorTotal", total);
         resp.put("desconto", descontoAplicado);
         resp.put("cashbackUsado", resgate);
+        resp.put("taxaEntrega", taxaEntrega);
+        resp.put("retirada", retirada);
 
         if ("PIX".equals(forma)) {
             // Recebimento por subconta do lojista (novo) OU integração PIX legada (chave própria).

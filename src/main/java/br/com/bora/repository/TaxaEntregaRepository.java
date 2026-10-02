@@ -4,6 +4,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List; import java.util.Optional;
 public interface TaxaEntregaRepository extends JpaRepository<TaxaEntrega, Long> {
     List<TaxaEntrega> findByLojaIdOrderByBairroAsc(Long lojaId);
+    /** Bairros que a loja atende hoje — o cardapio publico mostra so os ativos. */
+    List<TaxaEntrega> findByLojaIdAndAtivoTrueOrderByBairroAsc(Long lojaId);
     Optional<TaxaEntrega> findByIdAndLojaId(Long id, Long lojaId);
     Optional<TaxaEntrega> findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(Long lojaId, String bairro);
 }
