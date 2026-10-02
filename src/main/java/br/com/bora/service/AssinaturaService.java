@@ -85,7 +85,7 @@ public class AssinaturaService {
             asaas.cancelarAssinatura(a.getAsaasSubscriptionId());
         }
         if (a.getAsaasCustomerId() == null) {
-            a.setAsaasCustomerId(asaas.criarCliente(loja.getNome(), email, cpfCnpj));
+            a.setAsaasCustomerId(asaas.criarCliente(loja.getNome(), email, documentoDaCobranca(loja, cpfCnpj)));
         }
         String nextDue = LocalDate.now().plusDays(7).toString(); // 7 dias de cortesia antes da 1ª cobrança
         Map<String, Object> sub = asaas.criarAssinatura(a.getAsaasCustomerId(), loja.precoComModulos().doubleValue(),
@@ -203,6 +203,23 @@ public class AssinaturaService {
         p.pagoEm = pagoEm != null ? pagoEm : OffsetDateTime.now();
         p.descricao = lojas.findById(a.getLojaId()).map(Loja::getNome).orElse(null);
         pagamentos.save(p);
+    }
+
+    /**
+     * O documento que vai para a cobrança.
+     *
+     * <p>A tela pede o CPF/CNPJ do responsável num campo vazio, digitado à mão. Em branco, o cliente
+     * nascia no Asaas sem documento nenhum; digitado errado, nascia com o documento errado — foi assim
+     * que uma loja foi parar lá com um CNPJ de teste. O cadastro da loja já tem o documento certo:
+     * quando ninguém informa nada, é ele que vale.</p>
+     */
+    static String documentoDaCobranca(Loja loja, String informado) {
+        if (informado != null && !informado.isBlank()) return informado.trim();
+        String doCadastro = loja.getDocumento();
+        if (doCadastro != null && !doCadastro.isBlank()) return doCadastro.trim();
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Informe o CPF/CNPJ do responsável: esta loja não tem documento no cadastro, e a "
+                        + "cobrança não pode ser criada sem ele.");
     }
 
     /** Define (ou tira, com null) a data em que o acesso desta loja vence. */
