@@ -43,6 +43,7 @@ public class PublicController {
     private final br.com.bora.repository.TaxaEntregaRepository taxas;
     private final br.com.bora.service.InsumoService insumos;
     private final br.com.bora.security.RegraDeAcesso regra;
+    private final br.com.bora.repository.ConfiguracaoLojaRepository configuracoes;
     private final boolean respeitarHorario;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
@@ -56,11 +57,13 @@ public class PublicController {
                             br.com.bora.repository.TaxaEntregaRepository taxas,
                             br.com.bora.service.InsumoService insumos,
                             br.com.bora.security.RegraDeAcesso regra,
+                            br.com.bora.repository.ConfiguracaoLojaRepository configuracoes,
                             @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
         this.respeitarHorario = respeitarHorario;
         this.taxas = taxas;
         this.insumos = insumos;
         this.regra = regra;
+        this.configuracoes = configuracoes;
         this.operacao = operacao;
         this.lojas = lojas;
         this.produtos = produtos;
@@ -75,11 +78,54 @@ public class PublicController {
         this.cupons = cupons;
     }
 
+
+    /**
+     * A marca que o cliente final enxerga: nome, logo e cores DA LOJA.
+     *
+     * <p>Tudo isso ja existia no cadastro e morria la: o cardapio publico e a tela de acompanhamento
+     * mostravam o roxo do Bora e um sorvete fixo para qualquer loja. O site promete o contrario em
+     * dois lugares ("logo, cores e nome da sua loja no cardapio digital" e "Meus clientes vao ver a
+     * marca do BoraHapp? Nao"), entao isto era promessa quebrada, nao enfeite.</p>
+     */
+    private Map<String, Object> marcaDaLoja(Loja loja) {
+        var cfg = configuracoes.findByLojaId(loja.id).orElse(null);
+        String nome = cfg != null && cfg.nomeExibicao != null && !cfg.nomeExibicao.isBlank()
+                ? cfg.nomeExibicao : (loja.nome == null ? "Cardápio" : loja.nome);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("nome", nome);
+        m.put("logoUrl", cfg == null ? null : cfg.logoUrl);
+        m.put("bannerUrl", cfg == null ? null : cfg.bannerUrl);
+        // Sem cor escolhida, fica o roxo que o cardapio ja usava — nao queremos loja sem identidade
+        // nenhuma por causa de um cadastro em branco.
+        m.put("corPrimaria", cfg == null || cfg.corPrimaria == null || cfg.corPrimaria.isBlank()
+                ? "#7c3aed" : cfg.corPrimaria);
+        m.put("corSecundaria", cfg == null || cfg.corSecundaria == null || cfg.corSecundaria.isBlank()
+                ? "#22c55e" : cfg.corSecundaria);
+        // O lojista decide se o rodape diz que o sistema e BoraHapp.
+        m.put("mostrarMarcaBora", cfg == null || !Boolean.FALSE.equals(cfg.mostrarMarcaBora));
+        return m;
+    }
+
+    /** So a marca — a tela de acompanhamento do pedido precisa dela sem baixar o cardapio inteiro. */
+    @GetMapping("/loja/{lojaId}/marca")
+    public Map<String, Object> marca(@PathVariable Long lojaId) {
+        return marcaDaLoja(lojaAtiva(lojaId));
+    }
+
     /** Manifesto PWA da loja: o cliente instala o "app" com o nome/cara da loja (white-label). */
     @GetMapping(value = "/loja/{lojaId}/manifest", produces = "application/manifest+json")
     public Map<String, Object> manifest(@PathVariable Long lojaId) {
         Loja loja = lojaAtiva(lojaId);
-        String nome = loja.nome == null ? "Cardápio" : loja.nome;
+        Map<String, Object> marca = marcaDaLoja(loja);
+        String nome = String.valueOf(marca.get("nome"));
+        Object logo = marca.get("logoUrl");
+        // O cliente instala o "app" DA LOJA: o icone e o nome na tela inicial do celular dele eram do
+        // Bora, com o nosso roxo, em qualquer loja. Agora so caem no nosso icone quem nao subiu logo.
+        boolean temLogo = logo != null && !String.valueOf(logo).isBlank();
+        Map<String, Object> icone = temLogo
+                ? Map.of("src", String.valueOf(logo), "sizes", "any", "purpose", "any")
+                : Map.of("src", "/assets/img/icone-bora.svg", "sizes", "any",
+                        "type", "image/svg+xml", "purpose", "any");
         return Map.of(
                 "name", nome + " · Pedidos",
                 "short_name", nome.length() > 12 ? nome.substring(0, 12) : nome,
@@ -87,12 +133,8 @@ public class PublicController {
                 "scope", "/",
                 "display", "standalone",
                 "background_color", "#f6f7fb",
-                "theme_color", "#7c3aed",
-                "icons", List.of(Map.of(
-                        "src", "/assets/img/icone-bora.svg",
-                        "sizes", "any",
-                        "type", "image/svg+xml",
-                        "purpose", "any")));
+                "theme_color", String.valueOf(marca.get("corPrimaria")),
+                "icons", List.of(icone));
     }
 
     /** Valida um cupom para exibir o desconto no checkout (não reserva nada). */
@@ -112,6 +154,7 @@ public class PublicController {
         List<Produto> lista = produtos.findByLojaIdAndAtivoTrueOrderByCategoriaAscNomeAsc(lojaId);
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("loja", Map.of("id", loja.id, "nome", loja.nome == null ? "Cardápio" : loja.nome));
+        resp.put("marca", marcaDaLoja(loja));
         resp.put("pixDisponivel", integracaoPix(lojaId).isPresent() || subcontaRecebendo(loja));
         // A tela precisa saber ANTES: descobrir que a loja esta fechada so ao confirmar o pedido,
         // depois de montar o carrinho inteiro, e a pior forma de contar isso ao cliente.
