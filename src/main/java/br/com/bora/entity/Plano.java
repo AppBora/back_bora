@@ -1,7 +1,7 @@
 package br.com.bora.entity;
 
 /**
- * Plano SaaS único (decisão 2026-07-05): R$ 299/mês POR LOJA, pedidos ilimitados,
+ * Plano SaaS único: R$ 199/mês POR LOJA (preço de lançamento, decisão 2026-07-07; antes 299), pedidos ilimitados,
  * até 15 usuários por loja, todos os recursos de white-label liberados.
  * maxPedidosMes = 0 significa ilimitado (PlanoService não aplica o limite).
  */

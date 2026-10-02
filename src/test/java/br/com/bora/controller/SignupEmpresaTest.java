@@ -93,7 +93,7 @@ class SignupEmpresaTest {
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class, () ->
                 controller.cadastrar(new SignupRequest("Loja do Golpista", CNPJ_DA_VITIMA,
-                        "Golpista", "golpista@teste.local", "senha-de-oito"), origem()));
+                        "Golpista", "golpista@teste.local", "senha-de-oito", true), origem()));
 
         assertEquals(HttpStatus.CONFLICT, e.getStatusCode());
         verify(lojas, never()).save(any(Loja.class));
@@ -112,7 +112,7 @@ class SignupEmpresaTest {
         when(encoder.matches("senha-de-oito", "hash")).thenReturn(true);
 
         Map<String, Object> r = controller.cadastrar(new SignupRequest("Zirá Centro", CNPJ_DA_VITIMA,
-                "Dono", "dono@zira.local", "senha-de-oito"), origem());
+                "Dono", "dono@zira.local", "senha-de-oito", true), origem());
 
         assertEquals(true, r.get("vinculada"));
         verify(lojas).save(any(Loja.class));
@@ -125,17 +125,43 @@ class SignupEmpresaTest {
         when(empresasRepo.findByCnpj("11222333000199")).thenReturn(Optional.empty());
 
         Map<String, Object> r = controller.cadastrar(new SignupRequest("Pizzaria Nova", "11.222.333/0001-99",
-                "Dona", "dona@nova.local", "senha-de-oito"), origem());
+                "Dona", "dona@nova.local", "senha-de-oito", true), origem());
 
         assertEquals(500L, r.get("lojaId"));
         verify(empresasRepo).save(any(Empresa.class));
     }
 
     @Test
+    void semAceitarOsTermos_naoCriaConta() {
+        ResponseStatusException e = assertThrows(ResponseStatusException.class, () ->
+                controller.cadastrar(new SignupRequest("Loja nova", "11.222.333/0001-99",
+                        "Dona", "dona@nova.local", "senha-de-oito", false), origem()));
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+        verify(lojas, never()).save(any(Loja.class));
+    }
+
+    @Test
+    void aceiteFicaRegistradoComDataEVersao() {
+        when(usuarios.findByEmail(anyString())).thenReturn(Optional.empty());
+        when(empresasRepo.findByCnpj("11222333000199")).thenReturn(Optional.empty());
+        var captor = org.mockito.ArgumentCaptor.forClass(Loja.class);
+
+        controller.cadastrar(new SignupRequest("Pizzaria Nova", "11.222.333/0001-99",
+                "Dona", "dona@nova.local", "senha-de-oito", true), origem());
+
+        verify(lojas, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        Loja criada = captor.getAllValues().get(0);
+        assertNotNull(criada.termosAceitosEm, "sem data, nao ha prova de que alguem aceitou");
+        assertNotNull(criada.termosVersao, "sem versao, ninguem sabe a que texto ele disse sim");
+        assertEquals("203.0.113.9", criada.termosAceitosDe);
+    }
+
+    @Test
     void senhaCurtaEhRecusadaAntesDeQualquerCoisa() {
         ResponseStatusException e = assertThrows(ResponseStatusException.class, () ->
                 controller.cadastrar(new SignupRequest("Loja", "11.222.333/0001-99",
-                        "Alguem", "alguem@teste.local", "1234567"), origem()));
+                        "Alguem", "alguem@teste.local", "1234567", true), origem()));
 
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
         assertTrue(e.getReason() != null && e.getReason().contains("8"), e.getReason());

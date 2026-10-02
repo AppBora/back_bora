@@ -116,6 +116,18 @@ public class Loja {
         return Boolean.TRUE.equals(suspensaPelaPlataforma) || arquivada();
     }
 
+    // ---- Aceite dos Termos (prova de contrato) ----
+    /** Quando o lojista aceitou os Termos no cadastro. NULL = aceite nao registrado. */
+    @Column(name = "termos_aceitos_em")
+    public java.time.OffsetDateTime termosAceitosEm;
+
+    /** Versao do texto vigente no aceite — sem ela, ninguem sabe a que texto ele disse sim. */
+    @Column(name = "termos_versao")
+    public String termosVersao;
+
+    @Column(name = "termos_aceitos_de")
+    public String termosAceitosDe;
+
     /** O prazo de acesso venceu? NULL (sem prazo) nunca vence. */
     public boolean acessoVencido() {
         return acessoAte != null && java.time.OffsetDateTime.now().isAfter(acessoAte);

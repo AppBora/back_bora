@@ -63,6 +63,12 @@ public class SignupController {
         if (req.adminSenha() == null || req.adminSenha().length() < 8) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A senha deve ter ao menos 8 caracteres");
         }
+        if (!Boolean.TRUE.equals(req.aceiteTermos())) {
+            // Sem isto nao ha contrato aceito com ninguem - e os Termos publicados falam de pagamento,
+            // suspensao, cancelamento e reembolso.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Para criar a conta e preciso aceitar os Termos de Uso e a Política de Privacidade.");
+        }
         String email = req.adminEmail().trim().toLowerCase();
         // Este cadastro responde diferente para senha certa e errada de uma conta que existe, o que o
         // torna um adivinhador de senha. Enquanto o fluxo for esse, o freio é o que impede a varredura.
@@ -80,7 +86,7 @@ public class SignupController {
             }
             freio.acertou(chave);
             // Conta provada pela senha: é o mesmo dono, então pode entrar na empresa do CNPJ dele.
-            Loja loja = novaLoja(req, true);
+            Loja loja = novaLoja(req, true, br.com.bora.security.FreioDeTentativas.origem(http));
             UsuarioLoja v = new UsuarioLoja();
             v.setUsuarioId(existente.getId());
             v.setLojaId(loja.getId());
@@ -93,7 +99,7 @@ public class SignupController {
                     "mensagem", "Nova loja vinculada à sua conta! Entre e use o seletor de loja para alternar.");
         }
 
-        Loja loja = novaLoja(req, false);
+        Loja loja = novaLoja(req, false, br.com.bora.security.FreioDeTentativas.origem(http));
 
         Usuario admin = new Usuario();
         admin.setLojaId(loja.getId());
@@ -120,7 +126,10 @@ public class SignupController {
      * @param donoProvado a pessoa provou ser a dona da conta (acertou a senha de um administrador já
      *                    cadastrado). Só nesse caso a loja nova pode entrar numa empresa que já existe.
      */
-    private Loja novaLoja(SignupRequest req, boolean donoProvado) {
+    /** Data de revisao do texto publicado em /termos.html. Mudou o texto, muda isto aqui. */
+    private static final String VERSAO_DOS_TERMOS = "2026-10-02";
+
+    private Loja novaLoja(SignupRequest req, boolean donoProvado, String origemDoAceite) {
         if (!donoProvado && empresas.documentoJaUsado(req.documento())) {
             // Sem esta guarda, cadastrar com o CNPJ de um cliente colocava a loja nova na empresa dele —
             // e, pela rede multi-lojas, o painel dele ficava a um clique de distância.
@@ -131,9 +140,12 @@ public class SignupController {
         Loja loja = new Loja();
         loja.setNome(req.nomeLoja().trim());
         loja.setDocumento(req.documento());
-        loja.setPlano(Plano.UNICO); // plano único: R$ 299/mês por loja
+        loja.setPlano(Plano.UNICO); // plano único: R$ 199/mês por loja (preço de lançamento)
         loja.empresaId = empresas.paraDocumento(req.documento(), req.nomeLoja()).getId();
         loja.acessoAte = java.time.OffsetDateTime.now().plusDays(7); // os 7 dias gratis do site
+        loja.termosAceitosEm = java.time.OffsetDateTime.now();
+        loja.termosVersao = VERSAO_DOS_TERMOS;
+        loja.termosAceitosDe = origemDoAceite;
         loja = lojas.save(loja);
         provisionamento.semear(loja.getId(), loja.getNome()); // nasce operável (defaults)
         return loja;

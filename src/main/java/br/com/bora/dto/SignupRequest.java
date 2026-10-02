@@ -6,4 +6,6 @@ public record SignupRequest(
         String documento,
         String adminNome,
         String adminEmail,
-        String adminSenha) {}
+        String adminSenha,
+        /** Caixa "Li e aceito" marcada na tela de cadastro. */
+        Boolean aceiteTermos) {}
