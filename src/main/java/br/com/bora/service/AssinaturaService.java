@@ -2,6 +2,7 @@ package br.com.bora.service;
 
 import br.com.bora.entity.Assinatura;
 import br.com.bora.entity.Loja;
+import br.com.bora.entity.PagamentoAssinatura;
 import br.com.bora.entity.Papel;
 import br.com.bora.entity.Plano;
 import br.com.bora.entity.StatusAssinatura;
@@ -29,14 +30,17 @@ public class AssinaturaService {
     private final UsuarioRepository usuarios;
     private final AsaasClient asaas;
     private final AuthContext ctx;
+    private final br.com.bora.repository.PagamentoAssinaturaRepository pagamentos;
     /** Dias entre a fatura vencer e o acesso acabar. Os Termos publicados prometem 10. */
     private final int carenciaDias;
 
     // Um construtor só: com dois, o Spring não sabe qual usar e a aplicação nem sobe.
     public AssinaturaService(AssinaturaRepository repo, LojaRepository lojas, UsuarioRepository usuarios,
                              AsaasClient asaas, AuthContext ctx,
+                             br.com.bora.repository.PagamentoAssinaturaRepository pagamentos,
                              @org.springframework.beans.factory.annotation.Value("${bora.cobranca.carencia-dias:10}") int carenciaDias) {
         this.carenciaDias = carenciaDias;
+        this.pagamentos = pagamentos;
         this.repo = repo;
         this.lojas = lojas;
         this.usuarios = usuarios;
@@ -118,7 +122,24 @@ public class AssinaturaService {
     /** Reage aos eventos de pagamento do Asaas (webhook): ativa/suspende a loja conforme o pagamento. */
     @Transactional
     public void processarWebhook(String event, String subscriptionId) {
+        processarWebhook(event, subscriptionId, null, null, null);
+    }
+
+    /**
+     * Mesma coisa, mas também guarda a mensalidade recebida.
+     *
+     * <p>O pagamento não deixava rastro nenhum: virava um status e acabou. Sem o identificador da
+     * cobrança, o valor e a data, não havia como dizer o que faturamos no mês nem onde pendurar a
+     * nota fiscal de cada mensalidade.</p>
+     */
+    @Transactional
+    public void processarWebhook(String event, String subscriptionId, String paymentId,
+                                 BigDecimal valor, OffsetDateTime pagoEm) {
         if (event == null || subscriptionId == null) return;
+        if ("PAYMENT_CONFIRMED".equals(event) || "PAYMENT_RECEIVED".equals(event)) {
+            repo.findByAsaasSubscriptionId(subscriptionId)
+                    .ifPresent(a -> registrarPagamento(a, paymentId, valor, pagoEm));
+        }
         repo.findByAsaasSubscriptionId(subscriptionId).ifPresent(a -> {
             switch (event) {
                 case "PAYMENT_CONFIRMED", "PAYMENT_RECEIVED" -> {
@@ -145,6 +166,26 @@ public class AssinaturaService {
             a.setAtualizadoEm(OffsetDateTime.now());
             repo.save(a);
         });
+    }
+
+    /**
+     * Guarda a mensalidade recebida, uma linha por cobrança paga.
+     *
+     * <p>O Asaas reenvia o mesmo aviso enquanto não recebe 200, então o mesmo pagamento chega mais de
+     * uma vez. Sem a trava do identificador, a mesma mensalidade entraria duas vezes no faturamento do
+     * mês — e dois pedidos de nota fiscal sairiam para o mesmo cliente.</p>
+     */
+    private void registrarPagamento(Assinatura a, String paymentId, BigDecimal valor, OffsetDateTime pagoEm) {
+        if (paymentId == null || paymentId.isBlank()) return; // aviso sem cobrança: nada a guardar
+        if (pagamentos.existsByAsaasPaymentId(paymentId)) return;
+        PagamentoAssinatura p = new PagamentoAssinatura();
+        p.lojaId = a.getLojaId();
+        p.assinaturaId = a.getId();
+        p.asaasPaymentId = paymentId;
+        p.valor = valor != null ? valor : a.getValor();
+        p.pagoEm = pagoEm != null ? pagoEm : OffsetDateTime.now();
+        p.descricao = lojas.findById(a.getLojaId()).map(Loja::getNome).orElse(null);
+        pagamentos.save(p);
     }
 
     /** Define (ou tira, com null) a data em que o acesso desta loja vence. */

@@ -31,6 +31,7 @@ public class PlataformaController {
     private final br.com.bora.service.ProvisionamentoService provisionamento;
     private final br.com.bora.service.AssinaturaService assinaturas;
     private final br.com.bora.repository.AssinaturaRepository assinaturaRepo;
+    private final br.com.bora.repository.PagamentoAssinaturaRepository pagamentos;
     private final br.com.bora.repository.PedidoRepository pedidos;
     private final br.com.bora.service.EmpresaService empresas;
     private final br.com.bora.security.JwtService jwt;
@@ -46,6 +47,7 @@ public class PlataformaController {
                                 br.com.bora.service.ProvisionamentoService provisionamento,
                                 br.com.bora.service.AssinaturaService assinaturas,
                                 br.com.bora.repository.AssinaturaRepository assinaturaRepo,
+                                br.com.bora.repository.PagamentoAssinaturaRepository pagamentos,
                                 br.com.bora.repository.PedidoRepository pedidos,
                                 br.com.bora.service.EmpresaService empresas,
                                 br.com.bora.security.JwtService jwt,
@@ -56,6 +58,7 @@ public class PlataformaController {
         this.credenciais = credenciais;
         this.assinaturas = assinaturas;
         this.assinaturaRepo = assinaturaRepo;
+        this.pagamentos = pagamentos;
         this.pedidos = pedidos;
         this.empresas = empresas;
         this.jwt = jwt;
@@ -792,5 +795,85 @@ public class PlataformaController {
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Plano inválido (use UNICO)");
         }
+    }
+
+    // ================= Faturamento do mes (base da nota fiscal da mensalidade) =================
+
+    /**
+     * O que entrou de mensalidade no mes, loja por loja, e quais ainda estao sem nota fiscal.
+     *
+     * <p>Antes disto a unica forma de saber o que faturamos era entrar no painel do Asaas, e nao havia
+     * onde registrar a nota de cada mensalidade. Cliente com CNPJ pede nota; sem esta lista ninguem
+     * sabe de quem, de quanto, nem se ja foi emitida.</p>
+     *
+     * @param mes no formato AAAA-MM. Em branco, o mes corrente.
+     */
+    @GetMapping("/faturamento")
+    public Map<String, Object> faturamento(@RequestParam(required = false) String mes) {
+        ctx.requirePapel("ADMINISTRADOR_BORA");
+        java.time.YearMonth ym;
+        try {
+            ym = (mes == null || mes.isBlank()) ? java.time.YearMonth.now() : java.time.YearMonth.parse(mes);
+        } catch (RuntimeException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mes invalido. Use AAAA-MM, por exemplo 2026-10.");
+        }
+        java.time.ZoneId z = java.time.ZoneId.systemDefault();
+        java.time.OffsetDateTime de = ym.atDay(1).atStartOfDay(z).toOffsetDateTime();
+        java.time.OffsetDateTime ate = ym.plusMonths(1).atDay(1).atStartOfDay(z).toOffsetDateTime();
+
+        List<br.com.bora.entity.PagamentoAssinatura> lista =
+                pagamentos.findByPagoEmGreaterThanEqualAndPagoEmLessThanOrderByPagoEmAsc(de, ate);
+
+        java.math.BigDecimal total = java.math.BigDecimal.ZERO;
+        java.math.BigDecimal semNota = java.math.BigDecimal.ZERO;
+        List<Map<String, Object>> itens = new java.util.ArrayList<>();
+        for (br.com.bora.entity.PagamentoAssinatura p : lista) {
+            Loja l = lojas.findById(p.lojaId).orElse(null);
+            java.math.BigDecimal v = p.valor == null ? java.math.BigDecimal.ZERO : p.valor;
+            total = total.add(v);
+            if (!p.temNota()) semNota = semNota.add(v);
+            Map<String, Object> item = new java.util.LinkedHashMap<>();
+            item.put("id", p.id);
+            item.put("lojaId", p.lojaId);
+            item.put("loja", l == null ? p.descricao : l.getNome());
+            item.put("documento", l == null ? null : l.getDocumento());
+            item.put("valor", v);
+            item.put("pagoEm", p.pagoEm);
+            item.put("cobrancaAsaas", p.asaasPaymentId);
+            item.put("notaNumero", p.notaNumero);
+            item.put("notaUrl", p.notaUrl);
+            item.put("notaEmitidaEm", p.notaEmitidaEm);
+            itens.add(item);
+        }
+        Map<String, Object> r = new java.util.LinkedHashMap<>();
+        r.put("mes", ym.toString());
+        r.put("quantidade", lista.size());
+        r.put("total", total);
+        r.put("totalSemNota", semNota);
+        r.put("itens", itens);
+        return r;
+    }
+
+    /**
+     * Registra a nota fiscal ja emitida para uma mensalidade.
+     *
+     * <p>Enquanto a emissao automatica nao estiver homologada na prefeitura, a nota sai no emissor do
+     * municipio e o numero volta para ca — assim o mes fecha sabendo o que ficou sem nota.</p>
+     */
+    @PutMapping("/faturamento/{id}/nota")
+    @Transactional
+    public Map<String, Object> registrarNota(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        ctx.requirePapel("ADMINISTRADOR_BORA");
+        br.com.bora.entity.PagamentoAssinatura p = pagamentos.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pagamento nao encontrado"));
+        String numero = body == null ? null : body.get("numero");
+        if (numero == null || numero.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o numero da nota");
+        }
+        p.notaNumero = numero.trim();
+        p.notaUrl = body.get("url") == null || body.get("url").isBlank() ? null : body.get("url").trim();
+        p.notaEmitidaEm = java.time.OffsetDateTime.now();
+        pagamentos.save(p);
+        return Map.of("id", p.id, "notaNumero", p.notaNumero, "notaEmitidaEm", p.notaEmitidaEm);
     }
 }

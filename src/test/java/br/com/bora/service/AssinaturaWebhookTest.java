@@ -28,14 +28,16 @@ class AssinaturaWebhookTest {
 
     private AssinaturaRepository repo;
     private LojaRepository lojas;
+    private br.com.bora.repository.PagamentoAssinaturaRepository pagamentos;
     private AssinaturaService service;
 
     @BeforeEach
     void montar() {
         repo = mock(AssinaturaRepository.class);
         lojas = mock(LojaRepository.class);
+        pagamentos = mock(br.com.bora.repository.PagamentoAssinaturaRepository.class);
         service = new AssinaturaService(repo, lojas, mock(UsuarioRepository.class),
-                mock(AsaasClient.class), mock(AuthContext.class), 10);
+                mock(AsaasClient.class), mock(AuthContext.class), pagamentos, 10);
         when(repo.save(any(Assinatura.class))).thenAnswer(inv -> inv.getArgument(0));
         when(lojas.save(any(Loja.class))).thenAnswer(inv -> inv.getArgument(0));
     }
