@@ -88,6 +88,18 @@ public class AcertoEntregadorService {
         BigDecimal aPagar = taxas;
         BigDecimal pago = req.valorPago() == null ? aPagar : req.valorPago();
         BigDecimal descontos = req.descontos() == null ? BigDecimal.ZERO : req.descontos();
+        // Isto aqui registra pagamento de gente de verdade e nao tinha validacao nenhuma: valor
+        // negativo passava, e desconto maior que a divida tambem.
+        if (pago.signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O valor pago não pode ser negativo");
+        }
+        if (descontos.signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O desconto não pode ser negativo");
+        }
+        if (descontos.compareTo(aPagar) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "O desconto (R$ " + descontos + ") é maior que o valor devido ao entregador (R$ " + aPagar + ")");
+        }
         BigDecimal saldo = aPagar.subtract(pago).subtract(descontos);
 
         AcertoEntregador a = new AcertoEntregador();
@@ -109,8 +121,14 @@ public class AcertoEntregadorService {
         a.criadoPor = ctx.atual().userId();
         AcertoEntregador salvo = acertos.save(a);
 
-        peds.forEach(p -> p.acertoId = salvo.id); // trava as entregas nesse acerto (não entram de novo)
-        pedidos.saveAll(peds);
+        // Trava as entregas NESTE acerto, e so as que ainda estavam livres. Se outra pessoa fechou o
+        // acerto deste entregador entre a nossa leitura e agora, o banco devolve menos linhas e a
+        // transacao inteira volta atras — melhor um erro na tela do que pagar duas vezes a mesma corrida.
+        int amarradas = pedidos.amarrarAoAcerto(salvo.id, peds.stream().map(p -> p.id).toList());
+        if (amarradas != peds.size()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Outro acerto de " + entregador + " foi fechado agora mesmo. Confira o histórico e refaça.");
+        }
         return salvo;
     }
 

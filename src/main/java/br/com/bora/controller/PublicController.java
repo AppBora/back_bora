@@ -331,6 +331,12 @@ public class PublicController {
 
         BigDecimal resgate = BigDecimal.ZERO;
         if (Boolean.TRUE.equals(body.get("usarCashback")) || "true".equals(str(body.get("usarCashback")))) {
+            // O saldo e de quem o acumulou. Telefone de cliente nao e segredo, entao exigimos que o
+            // nome informado no checkout bata com o do cadastro antes de gastar o cashback dele.
+            if (!fidelidade.ehOMesmoCliente(lojaId, clienteId, nome)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Para usar o cashback, informe o mesmo nome do seu cadastro.");
+            }
             resgate = fidelidade.resgatePossivel(lojaId, clienteId, total);
             if (resgate.signum() > 0) {
                 total = total.subtract(resgate);
@@ -393,11 +399,13 @@ public class PublicController {
      * cardápio; devolve só o valor, nunca nome ou histórico.
      */
     @GetMapping("/loja/{lojaId}/cashback")
-    public Map<String, Object> cashback(@PathVariable Long lojaId, @RequestParam String telefone) {
+    public Map<String, Object> cashback(@PathVariable Long lojaId, @RequestParam String telefone,
+                                        @RequestParam(required = false) String nome) {
         lojaAtiva(lojaId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("percentual", fidelidade.percentual(lojaId));
-        m.put("saldo", fidelidade.saldoPeloTelefone(lojaId, telefone));
+        // Exige o nome: so com o telefone, qualquer um consultava o saldo alheio.
+        m.put("saldo", fidelidade.saldoPeloTelefone(lojaId, telefone, nome));
         return m;
     }
 

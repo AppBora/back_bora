@@ -54,14 +54,28 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                                 @Param("fim") OffsetDateTime fim);
 
     /** Entregas de um entregador (não canceladas/acertadas) na janela — base do "fazer acerto". */
+    // O nome do entregador e texto livre digitado a cada pedido: "Joao", "joao " e "JOAO" eram tres
+    // entregadores diferentes, e o acerto de um nao achava as entregas do outro.
     @Query("select p from Pedido p where p.lojaId = :lojaId " +
            "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
-           "and p.entregador = :entregador " +
+           "and lower(trim(p.entregador)) = lower(trim(:entregador)) " +
            "and p.entregueEm >= :inicio and p.entregueEm < :fim")
     List<Pedido> entregasParaAcerto(@Param("lojaId") Long lojaId,
                                     @Param("entregador") String entregador,
                                     @Param("inicio") OffsetDateTime inicio,
                                     @Param("fim") OffsetDateTime fim);
+
+    /**
+     * Amarra as entregas ao acerto, mas so as que ainda estao livres.
+     *
+     * <p>Antes isto era um save() comum: dois acertos abertos ao mesmo tempo (duas abas, duas pessoas)
+     * liam as mesmas entregas e os dois gravavam, entao o entregador podia ser pago duas vezes pelas
+     * mesmas corridas. Aqui o banco decide quem chegou primeiro, e quem perder sabe disso pelo numero
+     * de linhas afetadas.</p>
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Pedido p set p.acertoId = :acertoId where p.id in :ids and p.acertoId is null")
+    int amarrarAoAcerto(@Param("acertoId") Long acertoId, @Param("ids") java.util.Collection<Long> ids);
 
     Optional<Pedido> findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(Long lojaId, Long clienteId);
     List<Pedido> findByLojaIdAndClienteIdAndCriadoEmAfter(Long lojaId, Long clienteId, OffsetDateTime corte);

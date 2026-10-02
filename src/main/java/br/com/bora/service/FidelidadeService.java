@@ -64,8 +64,12 @@ public class FidelidadeService {
         if (tel == null) return null;
         return clientes.findFirstByLojaIdAndTelefone(lojaId, tel)
                 .map(c -> {
-                    // Mantém o cadastro fresco com o que o cliente acabou de informar.
-                    if (endereco != null && !endereco.isBlank()) c.endereco = endereco;
+                    // So completamos o que esta em branco. Antes, qualquer pessoa que digitasse o
+                    // telefone de um cliente reescrevia o endereco cadastrado dele — e a proxima
+                    // entrega ia para o lugar errado.
+                    if ((c.endereco == null || c.endereco.isBlank()) && endereco != null && !endereco.isBlank()) {
+                        c.endereco = endereco;
+                    }
                     if ((c.nome == null || c.nome.isBlank()) && nome != null) c.nome = nome;
                     return clientes.save(c).id;
                 })
@@ -86,12 +90,50 @@ public class FidelidadeService {
                 .orElse(BigDecimal.ZERO);
     }
 
-    public BigDecimal saldoPeloTelefone(Long lojaId, String telefone) {
+    /**
+     * Saldo de quem se identificou no cardapio.
+     *
+     * <p>So o telefone nao basta: telefone de cliente nao e segredo (esta no grupo do bairro, no
+     * comprovante, na agenda de muita gente), e com ele qualquer pessoa consultava o saldo alheio e
+     * gastava o cashback do vizinho. Pedir tambem o <b>primeiro nome</b> do cadastro nao transforma
+     * isto em autenticacao de verdade — isso exige um codigo por WhatsApp, que depende do numero da
+     * loja estar ligado na Meta —, mas tira o caso de quem so tem o telefone na mao.</p>
+     */
+    public BigDecimal saldoPeloTelefone(Long lojaId, String telefone, String nomeInformado) {
         String tel = normalizar(telefone);
         if (tel == null) return BigDecimal.ZERO;
         return clientes.findFirstByLojaIdAndTelefone(lojaId, tel)
+                .filter(c -> nomeConfere(c.nome, nomeInformado))
                 .map(c -> c.cashback == null ? BigDecimal.ZERO : c.cashback)
                 .orElse(BigDecimal.ZERO);
+    }
+
+    /** O saldo e deste cliente mesmo? Confere o nome informado no checkout contra o do cadastro. */
+    public boolean ehOMesmoCliente(Long lojaId, Long clienteId, String nomeInformado) {
+        if (clienteId == null) return false;
+        return clientes.findByIdAndLojaId(clienteId, lojaId)
+                .map(c -> nomeConfere(c.nome, nomeInformado))
+                .orElse(false);
+    }
+
+    /**
+     * O primeiro nome informado bate com o do cadastro? Compara sem acento, sem caixa e so o primeiro
+     * nome: quem se cadastrou como "Maria Eduarda" nao pode perder o cashback por digitar "maria".
+     */
+    public static boolean nomeConfere(String nomeCadastrado, String nomeInformado) {
+        String a = primeiroNome(nomeCadastrado), b = primeiroNome(nomeInformado);
+        return a != null && b != null && a.equals(b);
+    }
+
+    private static String primeiroNome(String nome) {
+        if (nome == null || nome.isBlank()) return null;
+        String limpo = java.text.Normalizer.normalize(nome.trim(), java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")       // tira acentos
+                .toLowerCase()
+                .replaceAll("[^a-z ]", " ")      // tira pontuacao e numeros
+                .trim();
+        if (limpo.isEmpty()) return null;
+        return limpo.split(" ")[0];
     }
 
     /**
