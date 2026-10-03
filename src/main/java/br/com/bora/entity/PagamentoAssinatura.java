@@ -49,8 +49,17 @@ public class PagamentoAssinatura {
     @Column(name = "nota_emitida_em")
     public java.time.OffsetDateTime notaEmitidaEm;
 
+    /** Quando o valor foi devolvido ao cliente (garantia, chargeback). NULL = o dinheiro ficou. */
+    @Column(name = "estornado_em")
+    public java.time.OffsetDateTime estornadoEm;
+
     @Column(name = "criado_em")
     public java.time.OffsetDateTime criadoEm = java.time.OffsetDateTime.now();
+
+    /** Dinheiro que voltou para o cliente não é faturamento e não pede nota. */
+    public boolean estornado() {
+        return estornadoEm != null;
+    }
 
     public boolean temNota() {
         return notaNumero != null && !notaNumero.isBlank();

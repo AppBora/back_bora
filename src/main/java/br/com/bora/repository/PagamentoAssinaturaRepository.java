@@ -10,6 +10,8 @@ public interface PagamentoAssinaturaRepository extends JpaRepository<PagamentoAs
 
     boolean existsByAsaasPaymentId(String asaasPaymentId);
 
+    java.util.Optional<PagamentoAssinatura> findByAsaasPaymentId(String asaasPaymentId);
+
     /** Mensalidades recebidas dentro de um intervalo (usado pelo faturamento do mês). */
     List<PagamentoAssinatura> findByPagoEmGreaterThanEqualAndPagoEmLessThanOrderByPagoEmAsc(
             OffsetDateTime de, OffsetDateTime ate);

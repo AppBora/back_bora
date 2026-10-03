@@ -354,14 +354,23 @@ public class PlataformaController {
         return assinatura;
     }
 
+    /**
+     * Devolve o acesso ao cliente.
+     *
+     * <p>Suspender sempre cancela a assinatura. Reativar só religava as chaves, então o cliente voltava
+     * <b>sem assinatura e sem prazo</b> — e, como o bloqueio só olha a data de acesso, nunca mais era
+     * cobrado nem barrado. Agora volta com o mesmo prazo da carência: ele opera, e a conversa sobre
+     * reassinar tem data para acontecer.</p>
+     */
     private void reativar(Loja loja) {
         loja.suspensaPelaPlataforma = false;
         loja.suspensaEm = null;
         loja.motivoSuspensao = null;
         loja.setAtivo(true);
         lojas.save(loja);
-        log.warn("AUDITORIA plataforma: usuario {} REATIVOU a loja {} ({})",
-                ctx.atual().userId(), loja.id, loja.getNome());
+        String prazo = assinaturas.prazoAoReativar(loja.id);
+        log.warn("AUDITORIA plataforma: usuario {} REATIVOU a loja {} ({}) — {}",
+                ctx.atual().userId(), loja.id, loja.getNome(), prazo);
     }
 
     /**
@@ -642,14 +651,34 @@ public class PlataformaController {
 
     /** Define preço negociado da loja (fundador etc.). Corpo: { "precoMensal": 149.00 } (null = tabela). */
     @PutMapping("/lojas/{lojaId}/preco")
+    @Transactional
     public Map<String, Object> definirPreco(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
         ctx.requireAdminBora();
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
         Object v = body == null ? null : body.get("precoMensal");
-        loja.precoMensal = v == null ? null : new java.math.BigDecimal(String.valueOf(v));
+        java.math.BigDecimal preco;
+        try {
+            preco = v == null ? null : new java.math.BigDecimal(String.valueOf(v));
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Preço inválido");
+        }
+        if (preco != null && preco.signum() <= 0) {
+            // Assinatura de valor zero o Asaas recusa, e a loja ficaria sem cobranca nenhuma.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "O preço precisa ser maior que zero. Para isentar a loja, deixe o campo vazio e trate como cortesia.");
+        }
+        loja.precoMensal = preco;
         lojas.save(loja);
-        return Map.of("lojaId", lojaId, "precoEfetivo", loja.precoEfetivo());
+        // Mudar o preço aqui e não avisar o Asaas deixava o fundador de R$ 149 sendo cobrado R$ 199
+        // para sempre — e a tela dizia "salvo". O preço só é real quando chega na cobrança.
+        String motivo = assinaturas.sincronizarValorComMotivo(lojaId);
+        log.warn("AUDITORIA plataforma: usuario {} mudou o preco da loja {} para {} ({})",
+                ctx.atual().userId(), lojaId, preco, motivo);
+        return Map.of("lojaId", lojaId, "precoEfetivo", loja.precoEfetivo(),
+                "mensalidade", loja.precoComModulos(),
+                "cobrancaAtualizada", "ATUALIZADA".equals(motivo),
+                "situacaoCobranca", motivo);
     }
 
     /** Define a taxa de split da loja no PIX online, em %. Corpo: { "percentual": 0 }
@@ -827,12 +856,19 @@ public class PlataformaController {
 
         java.math.BigDecimal total = java.math.BigDecimal.ZERO;
         java.math.BigDecimal semNota = java.math.BigDecimal.ZERO;
+        java.math.BigDecimal estornado = java.math.BigDecimal.ZERO;
         List<Map<String, Object>> itens = new java.util.ArrayList<>();
         for (br.com.bora.entity.PagamentoAssinatura p : lista) {
             Loja l = lojas.findById(p.lojaId).orElse(null);
             java.math.BigDecimal v = p.valor == null ? java.math.BigDecimal.ZERO : p.valor;
-            total = total.add(v);
-            if (!p.temNota()) semNota = semNota.add(v);
+            // Dinheiro devolvido ao cliente nao e faturamento e nao pede nota. Continua na lista, em
+            // separado, porque sumir com ele esconderia um estorno de quem precisa conferir o mes.
+            if (p.estornado()) {
+                estornado = estornado.add(v);
+            } else {
+                total = total.add(v);
+                if (!p.temNota()) semNota = semNota.add(v);
+            }
             Map<String, Object> item = new java.util.LinkedHashMap<>();
             item.put("id", p.id);
             item.put("lojaId", p.lojaId);
@@ -844,6 +880,7 @@ public class PlataformaController {
             item.put("notaNumero", p.notaNumero);
             item.put("notaUrl", p.notaUrl);
             item.put("notaEmitidaEm", p.notaEmitidaEm);
+            item.put("estornadoEm", p.estornadoEm);
             itens.add(item);
         }
         Map<String, Object> r = new java.util.LinkedHashMap<>();
@@ -851,6 +888,7 @@ public class PlataformaController {
         r.put("quantidade", lista.size());
         r.put("total", total);
         r.put("totalSemNota", semNota);
+        r.put("totalEstornado", estornado);
         r.put("itens", itens);
         return r;
     }

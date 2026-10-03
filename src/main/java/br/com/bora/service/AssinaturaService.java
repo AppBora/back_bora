@@ -12,6 +12,7 @@ import br.com.bora.repository.LojaRepository;
 import br.com.bora.repository.UsuarioRepository;
 import br.com.bora.security.AuthContext;
 import org.springframework.http.HttpStatus;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -22,6 +23,7 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 
 /** Cobrança recorrente via Asaas: cria a assinatura e reage aos webhooks de pagamento. */
+@Slf4j
 @Service
 public class AssinaturaService {
 
@@ -124,15 +126,22 @@ public class AssinaturaService {
         Loja loja = lojas.findById(lojaId).orElse(null);
         Assinatura a = repo.findByLojaId(lojaId).orElse(null);
         if (loja == null || a == null) return "SEM_ASSINATURA";
+        if (a.getAsaasSubscriptionId() == null) return "SEM_ID_NO_ASAAS";
+        if (!asaas.configurado()) return "ASAAS_NAO_CONFIGURADO";
         BigDecimal novo = loja.precoComModulos();
+        try {
+            asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), novo.doubleValue(),
+                    "BoraHapp " + (loja.getPlano() == null ? Plano.UNICO : loja.getPlano()).name()
+                            + " - " + loja.getNome() + (Boolean.TRUE.equals(loja.moduloIa) ? " + Modulo IA" : ""));
+        } catch (Exception e) {
+            log.warn("Loja {}: o Asaas recusou a troca de valor para {}: {}", lojaId, novo, e.getMessage());
+            return "FALHA_NO_ASAAS";
+        }
+        // Só agora. Gravar antes fazia o nosso banco dizer R$ 298 enquanto o Asaas seguia cobrando
+        // R$ 199 — exatamente a divergência que este método existe para evitar.
         a.setValor(novo);
         a.setAtualizadoEm(OffsetDateTime.now());
         repo.save(a);
-        if (a.getAsaasSubscriptionId() == null) return "SEM_ID_NO_ASAAS";
-        if (!asaas.configurado()) return "ASAAS_NAO_CONFIGURADO";
-        asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), novo.doubleValue(),
-                "BoraHapp " + (loja.getPlano() == null ? Plano.UNICO : loja.getPlano()).name()
-                        + " - " + loja.getNome() + (Boolean.TRUE.equals(loja.moduloIa) ? " + Modulo IA" : ""));
         return "ATUALIZADA";
     }
 
@@ -152,7 +161,16 @@ public class AssinaturaService {
     @Transactional
     public void processarWebhook(String event, String subscriptionId, String paymentId,
                                  BigDecimal valor, OffsetDateTime pagoEm) {
-        if (event == null || subscriptionId == null) return;
+        if (event == null) return;
+        // O estorno e tratado ANTES, e so pela cobranca: o aviso de devolucao nem sempre carrega o
+        // numero da assinatura, e sem isto ele caia fora na linha seguinte. Dinheiro que voltou nao e
+        // faturamento e nao pede nota fiscal.
+        if ("PAYMENT_REFUNDED".equals(event) || "PAYMENT_CHARGEBACK_REQUESTED".equals(event)
+                || "PAYMENT_CHARGEBACK_DISPUTE".equals(event)) {
+            marcarEstorno(paymentId, event);
+            return;
+        }
+        if (subscriptionId == null) return;
         if ("PAYMENT_CONFIRMED".equals(event) || "PAYMENT_RECEIVED".equals(event)) {
             repo.findByAsaasSubscriptionId(subscriptionId)
                     .ifPresent(a -> registrarPagamento(a, paymentId, valor, pagoEm));
@@ -166,13 +184,23 @@ public class AssinaturaService {
                 }
                 case "PAYMENT_OVERDUE" -> {
                     a.setStatus(StatusAssinatura.INADIMPLENTE);
-                    // Antes isto so trocava uma palavra no banco e ninguem perdia nada. Agora comeca a
-                    // contar a carencia que os Termos prometem, e o corte depende do interruptor.
-                    prazoDeAcesso(a.getLojaId(), OffsetDateTime.now().plusDays(carenciaDias));
+                    // A carencia comeca UMA vez, no primeiro atraso. Antes, cada aviso regravava
+                    // "agora + 10 dias" -- e o Asaas reenvia o aviso, e a fatura do mes seguinte gera
+                    // outro. Na pratica quem nunca pagava ganhava uns 10 dias de graca todo mes, para
+                    // sempre. So define quando ainda nao ha prazo nenhum.
+                    boolean semPrazo = lojas.findById(a.getLojaId())
+                            .map(l -> l.acessoAte == null).orElse(false);
+                    if (semPrazo) {
+                        prazoDeAcesso(a.getLojaId(), OffsetDateTime.now().plusDays(carenciaDias));
+                    }
                 }
                 case "SUBSCRIPTION_DELETED" -> {
                     a.setStatus(StatusAssinatura.CANCELADA);
                     ativarLoja(a.getLojaId(), false);
+                    // Fechar so o cardapio nao bastava: o painel continuava aberto para sempre, porque
+                    // quem estava pagando tem acessoAte NULL e o bloqueio so olha essa data. Cancelou,
+                    // ganha o mesmo prazo da carencia e depois para -- em vez de usar de graca sem fim.
+                    prazoDeAcesso(a.getLojaId(), OffsetDateTime.now().plusDays(carenciaDias));
                 }
                 case "PAYMENT_DELETED" -> {
                     // Uma cobranca avulsa apagada no painel do Asaas NAO e o fim da assinatura. Isto
@@ -220,6 +248,34 @@ public class AssinaturaService {
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Informe o CPF/CNPJ do responsável: esta loja não tem documento no cadastro, e a "
                         + "cobrança não pode ser criada sem ele.");
+    }
+
+    /** Marca a mensalidade como devolvida, para ela sair do faturamento e da fila de notas. */
+    private void marcarEstorno(String paymentId, String evento) {
+        if (paymentId == null || paymentId.isBlank()) return;
+        pagamentos.findByAsaasPaymentId(paymentId).ifPresentOrElse(pg -> {
+            if (pg.estornado()) return; // o Asaas reenvia o aviso; marcar duas vezes nao muda nada
+            pg.estornadoEm = OffsetDateTime.now();
+            pagamentos.save(pg);
+            log.warn("Mensalidade {} da loja {} ESTORNADA ({}): saiu do faturamento. Se a nota fiscal "
+                    + "ja foi emitida, ela precisa ser cancelada.", paymentId, pg.lojaId, evento);
+        }, () -> log.warn("Estorno {} chegou para a cobranca {}, que nao esta no nosso faturamento",
+                evento, paymentId));
+    }
+
+    /**
+     * Prazo de acesso de uma loja que acabou de ser reativada pela plataforma.
+     *
+     * <p>Se ela voltou com assinatura viva, nada muda. Se a assinatura foi cancelada na suspensão (o
+     * caso normal), ela ganha a carência: usa o sistema, mas com data para reassinar. Sem isto a loja
+     * voltava com acesso sem fim e sem cobrança nenhuma.</p>
+     */
+    @Transactional
+    public String prazoAoReativar(Long lojaId) {
+        Assinatura a = repo.findByLojaId(lojaId).orElse(null);
+        if (a != null && a.getStatus() == StatusAssinatura.ATIVA) return "assinatura ativa, sem prazo";
+        prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias));
+        return "sem assinatura ativa: acesso liberado por " + carenciaDias + " dias";
     }
 
     /** Define (ou tira, com null) a data em que o acesso desta loja vence. */

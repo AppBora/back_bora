@@ -22,14 +22,17 @@ public class PlanoService {
     private final PedidoRepository pedidos;
     private final br.com.bora.repository.AssinaturaRepository assinaturas;
     private final AsaasClient asaas;
+    private final AssinaturaService assinaturaService;
 
     public PlanoService(LojaRepository lojas, UsuarioRepository usuarios, PedidoRepository pedidos,
-                        br.com.bora.repository.AssinaturaRepository assinaturas, AsaasClient asaas) {
+                        br.com.bora.repository.AssinaturaRepository assinaturas, AsaasClient asaas,
+                        @org.springframework.context.annotation.Lazy AssinaturaService assinaturaService) {
         this.lojas = lojas;
         this.usuarios = usuarios;
         this.pedidos = pedidos;
         this.assinaturas = assinaturas;
         this.asaas = asaas;
+        this.assinaturaService = assinaturaService;
     }
 
     public Plano plano(Long lojaId) {
@@ -74,15 +77,14 @@ public class PlanoService {
         loja.setPlano(novo);
         lojas.save(loja);
         assinaturas.findByLojaId(lojaId).ifPresent(a -> {
-            if (a.getAsaasSubscriptionId() != null && asaas.configurado()) {
-                asaas.atualizarAssinatura(a.getAsaasSubscriptionId(), loja.precoEfetivo().doubleValue(),
-                        "BoraHapp " + novo.name() + " - " + loja.getNome());
-            }
             a.setPlano(novo);
-            a.setValor(loja.precoEfetivo());
-            a.setAtualizadoEm(java.time.OffsetDateTime.now());
             assinaturas.save(a);
         });
+        // O valor NAO e calculado aqui. Esta classe usava precoEfetivo(), que nao inclui o Modulo IA:
+        // um lojista com o add-on ligado chamava este endpoint e derrubava a propria mensalidade de
+        // R$ 298 para R$ 199, com a IA seguindo ligada. Quem decide o valor e quem fala com o Asaas e
+        // um lugar so, que sempre usa precoComModulos().
+        assinaturaService.sincronizarValorComMotivo(lojaId);
         return resumo(lojaId);
     }
 

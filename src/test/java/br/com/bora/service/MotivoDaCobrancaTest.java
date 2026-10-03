@@ -80,8 +80,11 @@ class MotivoDaCobrancaTest {
         when(asaas.configurado()).thenReturn(true);
 
         assertEquals("SEM_ID_NO_ASAAS", service.sincronizarValorComMotivo(18L));
-        assertEquals(0, new java.math.BigDecimal("298.00").compareTo(a.getValor()),
-                "o valor guardado aqui tem que subir mesmo sem o Asaas, senao o proximo acerto erra");
+        // CORRIGIDO EM 03/10. A versao anterior deste teste exigia o contrario -- que o valor subisse
+        // aqui mesmo sem o Asaas aceitar. Estava errado, e era meu: gravar R$ 298 enquanto o Asaas
+        // segue cobrando R$ 199 e exatamente a divergencia que este metodo existe para evitar, e a
+        // tela de planos passava a mostrar um valor que ninguem cobra. Sem cobranca la, nao grava aqui.
+        assertNull(a.getValor(), "nosso numero so muda quando o Asaas aceita");
     }
 
     @Test
