@@ -35,7 +35,7 @@ class CobradorDePixServiceTest {
         Pedido p = pedido(true, null, StatusPedido.RECEBIDO);
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
 
-        new CobradorDePixService(repo, mock(FidelidadeService.class), 30).expirarAbandonados();
+        new CobradorDePixService(repo, mock(FidelidadeService.class), mock(br.com.bora.repository.LojaRepository.class), mock(br.com.bora.repository.IntegracaoCanalRepository.class), mock(PixService.class), 30).expirarAbandonados();
 
         assertEquals(StatusPedido.CANCELADO, p.status);
         assertFalse(Boolean.TRUE.equals(p.aguardandoPagamento));
@@ -51,7 +51,7 @@ class CobradorDePixServiceTest {
         Pedido p = pedido(true, OffsetDateTime.now(), StatusPedido.RECEBIDO);
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
 
-        new CobradorDePixService(repo, mock(FidelidadeService.class), 30).expirarAbandonados();
+        new CobradorDePixService(repo, mock(FidelidadeService.class), mock(br.com.bora.repository.LojaRepository.class), mock(br.com.bora.repository.IntegracaoCanalRepository.class), mock(PixService.class), 30).expirarAbandonados();
 
         assertEquals(StatusPedido.RECEBIDO, p.status, "cancelar venda ja paga seria o pior erro possivel");
         verify(repo, never()).save(any(Pedido.class));
@@ -62,7 +62,7 @@ class CobradorDePixServiceTest {
         PedidoRepository repo = mock(PedidoRepository.class);
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of());
 
-        new CobradorDePixService(repo, mock(FidelidadeService.class), 30).expirarAbandonados();
+        new CobradorDePixService(repo, mock(FidelidadeService.class), mock(br.com.bora.repository.LojaRepository.class), mock(br.com.bora.repository.IntegracaoCanalRepository.class), mock(PixService.class), 30).expirarAbandonados();
 
         verify(repo, never()).save(any(Pedido.class));
     }
@@ -73,7 +73,7 @@ class CobradorDePixServiceTest {
         Pedido p = pedido(true, null, StatusPedido.CANCELADO);
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
 
-        new CobradorDePixService(repo, mock(FidelidadeService.class), 30).expirarAbandonados();
+        new CobradorDePixService(repo, mock(FidelidadeService.class), mock(br.com.bora.repository.LojaRepository.class), mock(br.com.bora.repository.IntegracaoCanalRepository.class), mock(PixService.class), 30).expirarAbandonados();
 
         assertNull(p.motivoCancelamento, "nao reescreve o motivo de um cancelamento que ja existia");
         verify(repo, never()).save(any(Pedido.class));

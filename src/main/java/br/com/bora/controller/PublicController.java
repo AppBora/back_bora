@@ -5,6 +5,7 @@ import br.com.bora.entity.Loja;
 import br.com.bora.entity.Pedido;
 import br.com.bora.entity.PedidoItem;
 import br.com.bora.entity.Produto;
+import br.com.bora.entity.StatusPedido;
 import br.com.bora.repository.IntegracaoCanalRepository;
 import br.com.bora.repository.LojaRepository;
 import br.com.bora.repository.PedidoItemRepository;
@@ -12,6 +13,7 @@ import br.com.bora.repository.PedidoRepository;
 import br.com.bora.repository.ProdutoRepository;
 import br.com.bora.service.ComplementoService;
 import br.com.bora.service.PixService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -24,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 /** Endpoints públicos (sem autenticação) — cardápio digital por QR Code + pedido online com PIX. */
+@Slf4j
 @RestController
 @RequestMapping("/public")
 public class PublicController {
@@ -455,15 +458,33 @@ public class PublicController {
         if (paymentId != null && ("PAYMENT_RECEIVED".equals(event) || "PAYMENT_CONFIRMED".equals(event))) {
             pedidos.findFirstByLojaIdAndCanalExternoAndIdExterno(lojaId, "PIX_ASAAS", paymentId).ifPresent(p -> {
                 boolean primeiraConfirmacao = p.pagoEm == null;
-                p.formaPagamento = "PIX (pago)";
+                boolean jaCancelado = p.status == StatusPedido.CANCELADO;
+                p.formaPagamento = jaCancelado ? "PIX (pago APOS o cancelamento)" : "PIX (pago)";
                 p.aguardandoPagamento = false;
                 p.pagoEm = OffsetDateTime.now();
                 p.atualizadoEm = OffsetDateTime.now();
+                if (jaCancelado) {
+                    // O pedido expirou e a cobrança deveria ter sido fechada no Asaas. Se o dinheiro
+                    // entrou assim mesmo, não dá para seguir em silêncio: o cliente pagou e está
+                    // esperando comida, e a cozinha não tem pedido nenhum. Deixamos escrito na própria
+                    // linha do pedido, que é onde o lojista vai olhar.
+                    p.motivoCancelamento = "PIX pago DEPOIS do cancelamento — o dinheiro entrou na sua "
+                            + "conta. Combine com o cliente: preparar o pedido ou devolver.";
+                    log.warn("Loja {}: pagamento {} chegou para o pedido {}, que ja estava CANCELADO",
+                            lojaId, paymentId, p.id);
+                }
                 pedidos.save(p);
                 // O Asaas reenvia o mesmo aviso quando nao recebe 200: sem esta guarda, o cliente
                 // ganharia cashback de novo a cada reenvio.
                 if (primeiraConfirmacao && p.clienteId != null) {
-                    fidelidade.registrar(lojaId, p.clienteId, p.valorTotal, java.math.BigDecimal.ZERO);
+                    if (jaCancelado) {
+                        // O cancelamento devolveu o cashback ao cliente. Como ele acabou pagando o valor
+                        // ja descontado, o saldo volta a ser consumido — senao o desconto valeria duas
+                        // vezes. Cashback NOVO so para venda que de fato aconteceu.
+                        fidelidade.consumir(lojaId, p.clienteId, p.cashbackUsado);
+                    } else {
+                        fidelidade.registrar(lojaId, p.clienteId, p.valorTotal, java.math.BigDecimal.ZERO);
+                    }
                 }
             });
             if (integ != null) {

@@ -79,6 +79,31 @@ public class PixService {
      * Retorno: paymentId, payload (copia-e-cola) e encodedImage (PNG base64).
      */
     @SuppressWarnings("unchecked")
+    /**
+     * Cancela a cobrança no Asaas. Usado quando o pedido expira sem pagamento.
+     *
+     * <p>Sem isto o QR continuava valendo o dia inteiro (ele nasce com vencimento "hoje"), enquanto o
+     * pedido já tinha sido cancelado aos 30 minutos. Quem pagasse depois mandava dinheiro para uma
+     * venda que não existia mais.</p>
+     *
+     * @return true se o Asaas confirmou o cancelamento. Nunca lança: falhar aqui não pode derrubar a
+     *         rotina que cancela os pedidos.
+     */
+    public boolean cancelarCobranca(Loja loja, IntegracaoCanal i, String paymentId) {
+        if (paymentId == null || paymentId.isBlank()) return false;
+        String apiKey = loja != null && loja.asaasApiKey != null && !loja.asaasApiKey.isBlank()
+                ? loja.asaasApiKey : (i == null ? null : i.clientSecret);
+        if (apiKey == null || apiKey.isBlank()) return false;
+        try {
+            Map<String, Object> r = client(apiKey).delete().uri("/payments/{id}", paymentId)
+                    .retrieve().body(Map.class);
+            return r != null && Boolean.TRUE.equals(r.get("deleted"));
+        } catch (Exception e) {
+            log.warn("Nao consegui cancelar a cobranca {} no Asaas: {}", paymentId, e.getMessage());
+            return false;
+        }
+    }
+
     public Map<String, Object> criarCobranca(IntegracaoCanal i, Loja loja, Pedido pedido,
                                              String nomeCliente, String cpfCnpj) {
         // Preferir a subconta do lojista (recebimento white-label); cair para a chave legada se não houver.
