@@ -41,6 +41,8 @@ public class MarketplacePoller {
     private final IntegracaoCanalRepository repo;
     private final MarketplaceNormalizer normalizer;
     private final PedidoService pedidos;
+    private final br.com.bora.repository.LojaRepository lojas;
+    private final br.com.bora.security.RegraDeAcesso regra;
     private final boolean habilitado;
 
     /**
@@ -55,11 +57,15 @@ public class MarketplacePoller {
 
     public MarketplacePoller(List<MarketplaceClient> clients, IntegracaoCanalRepository repo,
                              MarketplaceNormalizer normalizer, PedidoService pedidos,
+                             br.com.bora.repository.LojaRepository lojas,
+                             br.com.bora.security.RegraDeAcesso regra,
                              @Value("${marketplace.polling.habilitado:true}") boolean habilitado) {
         this.clients = clients;
         this.repo = repo;
         this.normalizer = normalizer;
         this.pedidos = pedidos;
+        this.lojas = lojas;
+        this.regra = regra;
         this.habilitado = habilitado;
     }
 
@@ -102,7 +108,17 @@ public class MarketplacePoller {
     private List<IntegracaoCanal> conectadas(String canal) {
         List<IntegracaoCanal> out = new ArrayList<>();
         for (IntegracaoCanal i : repo.findByAtivoTrue()) {
-            if (canal.equalsIgnoreCase(i.canal) && i.prontaParaSincronizar()) out.add(i);
+            if (!canal.equalsIgnoreCase(i.canal) || !i.prontaParaSincronizar()) continue;
+            // A integração estar conectada não basta: a LOJA precisa poder operar. Suspender ou
+            // arquivar um cliente não encostava nas integrações, então o robô seguia puxando e
+            // aceitando pedido de uma loja que ninguém conseguia abrir — o cliente final pedia, o
+            // marketplace confirmava e não havia cozinha do outro lado.
+            if (!regra.podeOperar(lojas.findById(i.lojaId).orElse(null))) {
+                log.info("Loja {} nao pode operar agora (suspensa, arquivada ou com prazo vencido): "
+                        + "pulando o {} neste ciclo", i.lojaId, canal);
+                continue;
+            }
+            out.add(i);
         }
         return out;
     }

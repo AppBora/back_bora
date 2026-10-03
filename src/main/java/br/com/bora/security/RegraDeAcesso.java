@@ -5,7 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Quem pode entrar no painel de uma loja.
+ * Se uma loja pode operar agora — painel, cardápio público e marketplaces.
  *
  * <p>Separa duas coisas que viviam misturadas: a <b>decisão da plataforma</b> (suspender ou arquivar
  * um cliente, que já bloqueava) e o <b>fim do prazo de acesso</b> por falta de pagamento, que até
@@ -29,8 +29,15 @@ public class RegraDeAcesso {
         return cortarPorAssinatura;
     }
 
-    /** A equipe desta loja pode usar o painel agora? */
-    public boolean podeUsarOPainel(Loja loja) {
+    /**
+     * Esta loja pode operar agora?
+     *
+     * <p>Vale para tudo que movimenta a loja, não só o painel. O robô dos marketplaces não perguntava
+     * nada disto: loja suspensa seguia online no iFood, puxando e aceitando pedido sozinha, enquanto
+     * ninguém conseguia abrir a tela para preparar. O cliente final pedia, o marketplace confirmava, e
+     * a cozinha não existia.</p>
+     */
+    public boolean podeOperar(Loja loja) {
         if (loja == null) return false;
         if (loja.bloqueadaPelaPlataforma()) return false;
         return !(cortarPorAssinatura && loja.acessoVencido());

@@ -36,13 +36,19 @@ import java.util.Map;
 public class OpenDeliveryWebhookController {
 
     private final IntegracaoCanalRepository integracoes;
+    private final br.com.bora.repository.LojaRepository lojas;
+    private final br.com.bora.security.RegraDeAcesso regra;
     private final OpenDeliveryClient client;
     private final MarketplacePoller poller;
     private final ObjectMapper json;
 
     public OpenDeliveryWebhookController(IntegracaoCanalRepository integracoes, OpenDeliveryClient client,
+                                         br.com.bora.repository.LojaRepository lojas,
+                                         br.com.bora.security.RegraDeAcesso regra,
                                          MarketplacePoller poller, ObjectMapper json) {
         this.integracoes = integracoes;
+        this.lojas = lojas;
+        this.regra = regra;
         this.client = client;
         this.poller = poller;
         this.json = json;
@@ -62,6 +68,16 @@ public class OpenDeliveryWebhookController {
         if (!client.assinaturaValida(i, corpo, assinatura)) {
             log.warn("Open Delivery webhook: assinatura invalida para a loja {} (app shop {})", i.lojaId, merchantId);
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Assinatura invalida");
+        }
+
+        // A assinatura confere, mas a LOJA pode estar suspensa, arquivada ou com o prazo vencido.
+        // Aceitar o pedido aqui significa confirmar para o cliente final uma venda que ninguem vai
+        // preparar: o painel da loja esta fechado. Respondemos 503 para a 99 reenviar ou expirar, em
+        // vez de 2xx, que seria dizer "aceito" por uma loja que nao pode atender.
+        if (!regra.podeOperar(lojas.findById(i.lojaId).orElse(null))) {
+            log.warn("Open Delivery webhook: loja {} nao pode operar agora; evento recusado", i.lojaId);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Loja indisponivel no momento");
         }
 
         Map<String, Object> evento;
