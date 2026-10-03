@@ -30,13 +30,17 @@ public class ClienteService {
         }
         c.lojaId = ctx.lojaId();
         c.id = null;
+        c.telefone = FidelidadeService.normalizar(c.telefone);
         return repo.save(c);
     }
 
     public Cliente atualizar(Long id, Cliente dados) {
         Cliente c = buscar(id);
         c.nome = dados.nome;
-        c.telefone = dados.telefone;
+        // Só dígitos, igual ao que o cardápio e os marketplaces gravam. Guardar "(15) 99999-0001" aqui
+        // fazia o cliente cadastrado pelo lojista NÃO ser encontrado quando ele pedisse pelo cardápio:
+        // nascia um segundo cadastro e o cashback acumulado ficava preso no primeiro.
+        c.telefone = FidelidadeService.normalizar(dados.telefone);
         c.endereco = dados.endereco;
         c.bairro = dados.bairro;
         c.referencia = dados.referencia;
