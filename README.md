@@ -8,7 +8,7 @@ docker compose up --build
 ```
 
 ## Endpoints principais
-- GET /api/health
+- GET /actuator/health  (público — é este que o monitoramento usa; `/api/health` exige login)
 - GET /api/pedidos
 - POST /api/pedidos
 - PATCH /api/pedidos/{id}/status
