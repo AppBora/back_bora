@@ -109,5 +109,31 @@ public class InsumoService {
         return custoUnit;
     }
 
+    /**
+     * Desfaz o {@link #consumirFicha} de um item que nao vai acontecer.
+     *
+     * <p>Espelho exato do consumo: mesma ficha, mesma conta, sinal trocado. So mexe no insumo que
+     * controla estoque ({@code estoque != null}), igual ao consumo — quem nao controla continua sem
+     * numero nenhum, em vez de nascer com um saldo inventado no primeiro cancelamento.</p>
+     *
+     * <p>Devolve false quando nao havia ficha para devolver.</p>
+     */
+    @Transactional
+    public boolean devolverFicha(Long lojaId, Long produtoId, int qtdPedido) {
+        if (produtoId == null) return false;
+        List<ProdutoInsumo> ficha = fichas.findByLojaIdAndProdutoId(lojaId, produtoId);
+        if (ficha.isEmpty()) return false;
+        for (ProdutoInsumo pi : ficha) {
+            Insumo in = insumos.findByIdAndLojaId(pi.insumoId, lojaId).orElse(null);
+            if (in == null) continue;
+            BigDecimal qtdUnit = pi.quantidade == null ? BigDecimal.ZERO : pi.quantidade;
+            if (in.estoque != null) {
+                in.estoque = in.estoque.add(qtdUnit.multiply(BigDecimal.valueOf(qtdPedido)));
+                insumos.save(in);
+            }
+        }
+        return true;
+    }
+
     private ResponseStatusException nf(String o) { return new ResponseStatusException(HttpStatus.NOT_FOUND, o + " não encontrado"); }
 }

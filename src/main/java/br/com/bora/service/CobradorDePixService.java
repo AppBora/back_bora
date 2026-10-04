@@ -33,16 +33,19 @@ public class CobradorDePixService {
     private final LojaRepository lojas;
     private final IntegracaoCanalRepository integracoes;
     private final PixService pix;
+    private final DevolucaoDeEstoqueService devolucao;
     private final int minutosParaExpirar;
 
     public CobradorDePixService(PedidoRepository pedidos, FidelidadeService fidelidade,
                                 LojaRepository lojas, IntegracaoCanalRepository integracoes, PixService pix,
+                                DevolucaoDeEstoqueService devolucao,
                                 @Value("${bora.pix.minutos-para-expirar:30}") int minutosParaExpirar) {
         this.pedidos = pedidos;
         this.fidelidade = fidelidade;
         this.lojas = lojas;
         this.integracoes = integracoes;
         this.pix = pix;
+        this.devolucao = devolucao;
         this.minutosParaExpirar = minutosParaExpirar;
     }
 
@@ -81,6 +84,7 @@ public class CobradorDePixService {
             // Pago entre a consulta e agora? O webhook já limpou a marca; não cancelamos venda paga.
             if (p.pagoEm != null) continue;
             if (p.status == StatusPedido.CANCELADO) { p.aguardandoPagamento = false; continue; }
+            StatusPedido anterior = p.status;
             p.status = StatusPedido.CANCELADO;
             p.canceladoEm = OffsetDateTime.now();
             p.atualizadoEm = OffsetDateTime.now();
@@ -90,6 +94,9 @@ public class CobradorDePixService {
             // O cashback foi debitado quando o pedido nasceu, para o mesmo saldo não valer em dois
             // pedidos ao mesmo tempo. Venda que não aconteceu devolve o saldo ao cliente.
             fidelidade.devolver(p.lojaId, p.clienteId, p.cashbackUsado);
+            // E o estoque tambem. O pedido baixou produto ou insumo quando nasceu, e checkout
+            // abandonado nunca foi para a cozinha: tudo o que ele consumiu volta.
+            devolucao.devolver(p, anterior);
             cancelados.add(p);
         }
         return cancelados;

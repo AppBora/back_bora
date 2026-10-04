@@ -45,6 +45,7 @@ public class PublicController {
     private final br.com.bora.service.OperacaoService operacao;
     private final br.com.bora.repository.TaxaEntregaRepository taxas;
     private final br.com.bora.service.InsumoService insumos;
+    private final br.com.bora.service.DevolucaoDeEstoqueService devolucaoDeEstoque;
     private final br.com.bora.security.RegraDeAcesso regra;
     private final br.com.bora.repository.ConfiguracaoLojaRepository configuracoes;
     private final boolean respeitarHorario;
@@ -61,6 +62,7 @@ public class PublicController {
                             br.com.bora.service.OperacaoService operacao,
                             br.com.bora.repository.TaxaEntregaRepository taxas,
                             br.com.bora.service.InsumoService insumos,
+                            br.com.bora.service.DevolucaoDeEstoqueService devolucaoDeEstoque,
                             br.com.bora.security.RegraDeAcesso regra,
                             br.com.bora.repository.ConfiguracaoLojaRepository configuracoes,
                             org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
@@ -69,6 +71,7 @@ public class PublicController {
         this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
         this.taxas = taxas;
         this.insumos = insumos;
+        this.devolucaoDeEstoque = devolucaoDeEstoque;
         this.regra = regra;
         this.configuracoes = configuracoes;
         this.operacao = operacao;
@@ -394,6 +397,9 @@ public class PublicController {
                 // entao estoque e CMV ficavam errados justamente no canal que mais vende.
                 BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
                 item.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+                // Fica gravado no item qual dos dois caminhos rodou. Quem cancelar o pedido devolve
+                // exatamente isso, sem depender da ficha que o lojista tiver no dia do cancelamento.
+                item.setConsumiuFicha(custoFicha != null);
                 if (custoFicha == null && prod.estoque != null) {
                     prod.estoque = prod.estoque - qtd;
                     produtos.save(prod);
@@ -509,6 +515,7 @@ public class PublicController {
     /** PIX que não nasceu: cancela o pedido e devolve o cashback que ele já tinha consumido. */
     private void desfazerPedidoSemPix(Rascunho r) {
         tx.executeWithoutResult(st -> pedidos.findById(r.pedido().id).ifPresent(p -> {
+            StatusPedido anterior = p.status;
             p.status = StatusPedido.CANCELADO;
             p.canceladoEm = OffsetDateTime.now();
             p.atualizadoEm = OffsetDateTime.now();
@@ -516,6 +523,8 @@ public class PublicController {
             p.motivoCancelamento = "Não foi possível gerar o PIX";
             pedidos.save(p);
             fidelidade.devolver(p.lojaId, r.clienteId(), r.resgate());
+            // O pedido chegou a baixar estoque antes de o PIX falhar; devolve tudo.
+            devolucaoDeEstoque.devolver(p, anterior);
         }));
     }
     /**

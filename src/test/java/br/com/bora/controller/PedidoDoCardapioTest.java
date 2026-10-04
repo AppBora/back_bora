@@ -33,6 +33,7 @@ class PedidoDoCardapioTest {
     private FidelidadeService fidelidade;
     private TaxaEntregaRepository taxas;
     private InsumoService insumos;
+    private br.com.bora.service.DevolucaoDeEstoqueService devolucaoDeEstoque;
     private CupomRepository cupons;
     private PublicController controller;
     private Produto acai;
@@ -52,11 +53,13 @@ class PedidoDoCardapioTest {
                 .thenReturn(new ComplementoService.Escolha(BigDecimal.ZERO, List.of()));
         OperacaoService operacao = mock(OperacaoService.class);
         when(operacao.abertaAgora(anyLong())).thenReturn(true);
+        devolucaoDeEstoque = mock(br.com.bora.service.DevolucaoDeEstoqueService.class);
 
         controller = new PublicController(lojas, produtos, pedidos, itens,
                 mock(IntegracaoCanalRepository.class), mock(PixService.class),
                 mock(ComplementoGrupoRepository.class), mock(ComplementoItemRepository.class),
                 complementos, cupons, fidelidade, operacao, taxas, insumos,
+                devolucaoDeEstoque,
                 new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class), gerenciadorFalso(), false);
 
         Loja l = new Loja();
@@ -233,6 +236,7 @@ class PedidoDoCardapioTest {
                 mock(IntegracaoCanalRepository.class), px,
                 mock(ComplementoGrupoRepository.class), mock(ComplementoItemRepository.class),
                 complementos, cupons, fidelidade, operacao, taxas, insumos,
+                devolucaoDeEstoque,
                 new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class), gerenciadorFalso(), false);
     }
 
@@ -273,6 +277,10 @@ class PedidoDoCardapioTest {
         assertEquals("Não foi possível gerar o PIX", salvo().motivoCancelamento);
         // e o saldo que ele consumiu volta, como o cobrador faz com PIX abandonado
         verify(fidelidade).devolver(eq(1L), eq(42L), eq(new BigDecimal("10.00")));
+        // e o estoque tambem: o pedido chegou a baixar produto/insumo antes de o Asaas cair, e nunca
+        // foi para a cozinha. Este e o quarto caminho de cancelamento; os outros tres estao em
+        // TodoCancelamentoDevolveEstoqueTest.
+        verify(devolucaoDeEstoque).devolver(any(), eq(StatusPedido.RECEBIDO));
     }
 
     @Test

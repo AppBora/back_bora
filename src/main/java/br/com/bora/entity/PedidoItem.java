@@ -33,4 +33,12 @@ public class PedidoItem {
     private BigDecimal custoUnitario;
 
     private BigDecimal subtotal;
+
+    /**
+     * Como este item baixou estoque: {@code true} pela ficha tecnica (insumos), {@code false} pelo
+     * estoque do proprio produto, {@code null} para item criado antes da V45. Quem cancela o pedido
+     * le isto para devolver exatamente o que foi consumido, em vez de deduzir pela ficha de hoje.
+     */
+    @Column(name = "consumiu_ficha")
+    private Boolean consumiuFicha;
 }

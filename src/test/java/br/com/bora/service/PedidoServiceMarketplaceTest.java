@@ -53,7 +53,7 @@ class PedidoServiceMarketplaceTest {
         service = new PedidoService(repo, mock(PedidoItemRepository.class), mock(ProdutoRepository.class),
                 mock(ClienteRepository.class), logs, mock(PlanoService.class), integracoes,
                 mock(TaxaEntregaRepository.class), mock(InsumoService.class), mock(FidelidadeService.class),
-                mock(ComplementoService.class), ctx);
+                mock(ComplementoService.class), ctx, mock(DevolucaoDeEstoqueService.class));
         // O aviso ao cliente entra por injeção de campo (Módulo IA), não pelo construtor.
         ReflectionTestUtils.setField(service, "notifCliente", notifCliente);
 

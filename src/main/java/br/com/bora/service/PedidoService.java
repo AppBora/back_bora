@@ -51,12 +51,14 @@ public class PedidoService {
     private final FidelidadeService fidelidade;
     private final ComplementoService complementos;
     private final AuthContext ctx;
+    private final DevolucaoDeEstoqueService devolucao;
 
     public PedidoService(PedidoRepository repo, PedidoItemRepository itemRepo, ProdutoRepository produtos,
                          ClienteRepository clientes, LogStatusRepository logs, PlanoService planos,
                          IntegracaoService integracoes, TaxaEntregaRepository taxasEntrega,
                          InsumoService insumos, FidelidadeService fidelidade,
-                         ComplementoService complementos, AuthContext ctx) {
+                         ComplementoService complementos, AuthContext ctx,
+                         DevolucaoDeEstoqueService devolucao) {
         this.fidelidade = fidelidade;
         this.complementos = complementos;
         this.repo = repo;
@@ -69,6 +71,7 @@ public class PedidoService {
         this.taxasEntrega = taxasEntrega;
         this.insumos = insumos;
         this.ctx = ctx;
+        this.devolucao = devolucao;
     }
 
     /** Taxa de entrega ativa para o bairro do cliente (0 se não houver). */
@@ -202,6 +205,7 @@ public class PedidoService {
             // se o produto tem ficha técnica, consome insumos e usa o custo da ficha; senão, custo do produto + baixa do próprio
             BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
             it.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+            it.setConsumiuFicha(custoFicha != null); // ver PedidoItem.consumiuFicha: a devolucao le isto
             it.setSubtotal(subtotal);
             itens.add(it);
 
@@ -324,6 +328,7 @@ public class PedidoService {
         p.atualizadoEm = OffsetDateTime.now();
         p.motivoCancelamento = motivo == null || motivo.isBlank() ? "Cancelado pelo marketplace" : motivo;
         Pedido salvo = repo.save(p);
+        devolucao.devolver(salvo, anterior); // mesma regra do cancelamento pelo painel
         LogStatus registro = new LogStatus();
         registro.setLojaId(salvo.lojaId);
         registro.setPedidoId(salvo.id);
@@ -413,6 +418,9 @@ public class PedidoService {
             p.motivoCancelamento = motivo;
         }
         Pedido salvo = repo.save(p);
+        // Venda que nao aconteceu devolve o que consumiu. A regra depende do estagio em que o pedido
+        // estava: ver DevolucaoDeEstoqueService.
+        if (status == StatusPedido.CANCELADO) devolucao.devolver(salvo, anterior);
         registrarLog(salvo, anterior, status); // RN07
         integracoes.notificarStatus(salvo, status.name()); // sincroniza status com o marketplace (se conectado)
         notifCliente.notificarFase(salvo, status); // Operação Assistida: avisa o cliente no WhatsApp
