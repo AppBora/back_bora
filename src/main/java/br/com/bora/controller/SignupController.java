@@ -132,7 +132,7 @@ public class SignupController {
      *                    cadastrado). Só nesse caso a loja nova pode entrar numa empresa que já existe.
      */
     /** Data de revisao do texto publicado em /termos.html. Mudou o texto, muda isto aqui. */
-    private static final String VERSAO_DOS_TERMOS = "2026-10-02";
+    private static final String VERSAO_DOS_TERMOS = "2026-10-04";
 
     /**
      * A conta já é de dentro da empresa desse CNPJ?
