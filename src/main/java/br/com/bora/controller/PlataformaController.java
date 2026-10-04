@@ -563,8 +563,8 @@ public class PlataformaController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome da loja é obrigatório");
         }
         if (req.adminEmail() == null || req.adminEmail().isBlank()
-                || req.adminSenha() == null || req.adminSenha().length() < 6) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "E-mail e senha (mín. 6) do admin são obrigatórios");
+                || req.adminSenha() == null || req.adminSenha().length() < 8) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "E-mail e senha (mín. 8) do admin são obrigatórios");
         }
         String email = req.adminEmail().trim().toLowerCase();
 

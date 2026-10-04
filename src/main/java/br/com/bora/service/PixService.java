@@ -53,8 +53,10 @@ public class PixService {
             if (i.webhookToken == null || i.webhookToken.isBlank()) {
                 i.webhookToken = UUID.randomUUID().toString().replace("-", "");
             }
-            String email = usuarios.findByLojaId(i.lojaId).stream()
-                    .filter(u -> u.getPapel() == br.com.bora.entity.Papel.ADMINISTRADOR_LOJA)
+            // Pelos vinculos, nao pela coluna loja_id: numa rede o dono tem uma conta so, e da 2a loja
+            // em diante ele nao aparecia aqui. O aviso de falha do webhook ia para o endereco generico
+            // da Bora -- que nem caixa de e-mail e -- em vez de ir para o lojista.
+            String email = usuarios.donosDaLoja(i.lojaId).stream()
                     .findFirst().map(br.com.bora.entity.Usuario::getEmail).orElse("contato@borahapp.com.br");
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("name", "BoraHapp PIX - loja " + i.lojaId);

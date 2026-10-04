@@ -152,6 +152,7 @@ public class PedidoService {
                     c == null ? null : c.endereco,
                     c == null ? null : c.bairro,
                     p.entregador,
+                    p.pagamentoPendente(),
                     itensPorPedido.getOrDefault(p.id, List.of())));
         }
         return cards;

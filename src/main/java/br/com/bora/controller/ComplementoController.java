@@ -39,11 +39,19 @@ public class ComplementoController {
         return montar(lojaId, produtoId);
     }
 
-    /** Substitui TODOS os grupos/itens do produto (a tela salva o conjunto inteiro). */
+    /**
+     * Substitui TODOS os grupos/itens do produto (a tela salva o conjunto inteiro).
+     *
+     * <p>Exige o mesmo papel que mexer no produto. Sem isto, um atendente reescrevia o preço dos
+     * adicionais enquanto não podia mudar o preço do produto — e numa açaiteria o adicional é boa
+     * parte do valor da venda. Também é daqui que sai o "mínimo" do grupo, que decide se o cliente é
+     * obrigado a comprar um extra para conseguir pedir.</p>
+     */
     @PutMapping
     @Transactional
     public List<Map<String, Object>> salvar(@PathVariable Long produtoId,
                                             @RequestBody List<Map<String, Object>> corpo) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
         Long lojaId = ctx.lojaId();
         validarProduto(lojaId, produtoId);
         List<Long> antigos = grupos.findByLojaIdAndProdutoIdOrderById(lojaId, produtoId)

@@ -24,9 +24,16 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                            @Param("inicio") OffsetDateTime inicio,
                            @Param("fim") OffsetDateTime fim);
 
-    /** Pedidos válidos (não cancelados) da loja numa janela — balancete da rede. */
+    /**
+     * Pedidos válidos da loja numa janela — balancete da rede.
+     *
+     * <p>Mesma regra da receita: PIX que ninguém pagou não é venda. Faltava aqui, e só aqui, então a
+     * receita excluía o pedido pendente e a contagem o incluía — o ticket médio (receita ÷ pedidos)
+     * saía menor do que a realidade, e os dois números do mesmo painel não fechavam entre si.</p>
+     */
     @Query("select count(p) from Pedido p " +
            "where p.lojaId = :lojaId and p.status <> br.com.bora.entity.StatusPedido.CANCELADO " +
+           "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) " +
            "and p.criadoEm >= :inicio and p.criadoEm < :fim")
     long contaPedidosValidos(@Param("lojaId") Long lojaId,
                              @Param("inicio") OffsetDateTime inicio,

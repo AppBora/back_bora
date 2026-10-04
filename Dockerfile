@@ -4,7 +4,11 @@ WORKDIR /app
 COPY pom.xml .
 RUN mvn -q -DskipTests dependency:go-offline
 COPY src ./src
-RUN mvn -q -DskipTests package
+# Os testes rodam AQUI, no build da imagem que vai para producao. Antes a imagem era construida com
+# -DskipTests: os testes existiam, passavam na minha maquina, e nada garantia que tinham rodado antes
+# do deploy -- dependia de alguem lembrar. Teste que nao e obrigatorio vira decoracao.
+# Se um teste falhar, a imagem nao nasce, e e exatamente isso que se quer.
+RUN mvn -q package
 
 # ---- runtime (enxuto, non-root) ----
 FROM eclipse-temurin:21-jre
