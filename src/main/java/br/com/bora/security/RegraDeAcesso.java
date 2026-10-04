@@ -13,7 +13,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>O corte por falta de pagamento nasce <b>desligado</b> de propósito. O mecanismo fica pronto e
  * testado, mas ligar isso tira cliente do ar: é decisão comercial do dono, não do código. Para
- * ligar: {@code BORA_CORTE_POR_ASSINATURA=true}.</p>
+ * ligar: {@code BORA_COBRANCA_CORTE_POR_ASSINATURA=true} no ambiente do servidor.
+ * <b>O nome tem que ter o "COBRANCA" no meio.</b> O comentario daqui dizia {@code BORA_CORTE_POR_ASSINATURA},
+ * esse nome foi para o servidor, e o Spring nunca o ligou a esta propriedade: a variavel ficou
+ * "true" no arquivo de ambiente e o corte seguiu desligado, sem erro e sem aviso no log.</p>
  */
 @Component
 public class RegraDeAcesso {
