@@ -57,7 +57,7 @@ class PedidoDoCardapioTest {
                 mock(IntegracaoCanalRepository.class), mock(PixService.class),
                 mock(ComplementoGrupoRepository.class), mock(ComplementoItemRepository.class),
                 complementos, cupons, fidelidade, operacao, taxas, insumos,
-                new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class), false);
+                new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class), gerenciadorFalso(), false);
 
         Loja l = new Loja();
         l.id = 1L;
@@ -77,6 +77,20 @@ class PedidoDoCardapioTest {
             return p;
         });
         when(fidelidade.resgatePossivel(anyLong(), any(), any())).thenReturn(BigDecimal.ZERO);
+    }
+
+    /**
+     * Gerenciador de transação que de fato executa o que está dentro dela.
+     *
+     * <p>Um mock puro devolveria null e o corpo do pedido nunca rodaria: o teste passaria sem testar
+     * nada. Aqui ele abre uma transação de mentira e deixa o trabalho acontecer, que é o que
+     * interessa — o ponto do conserto é ONDE a transação começa e termina, não se ela existe.</p>
+     */
+    private org.springframework.transaction.PlatformTransactionManager gerenciadorFalso() {
+        var gerente = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        when(gerente.getTransaction(any()))
+                .thenReturn(new org.springframework.transaction.support.SimpleTransactionStatus());
+        return gerente;
     }
 
     private Map<String, Object> corpo(Object... extras) {
@@ -196,5 +210,91 @@ class PedidoDoCardapioTest {
         controller.pedirOnline(1L, corpo());
 
         verify(fidelidade).registrar(eq(1L), eq(42L), any(), any());
+    }
+
+    // ---------- o PIX agora acontece FORA da transacao, em tres passos ----------
+
+    private PixService pixDaLoja() {
+        PixService px = mock(PixService.class);
+        Loja l = lojas.findById(1L).orElseThrow();
+        l.asaasApiKey = "chave";
+        l.asaasStatus = "ATIVO";
+        l.asaasWalletId = "w1";
+        return px;
+    }
+
+    private void recriarCom(PixService px) {
+        ComplementoService complementos = mock(ComplementoService.class);
+        when(complementos.aplicar(anyLong(), any(), any()))
+                .thenReturn(new ComplementoService.Escolha(BigDecimal.ZERO, List.of()));
+        OperacaoService operacao = mock(OperacaoService.class);
+        when(operacao.abertaAgora(anyLong())).thenReturn(true);
+        controller = new PublicController(lojas, produtos, pedidos, itens,
+                mock(IntegracaoCanalRepository.class), px,
+                mock(ComplementoGrupoRepository.class), mock(ComplementoItemRepository.class),
+                complementos, cupons, fidelidade, operacao, taxas, insumos,
+                new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class), gerenciadorFalso(), false);
+    }
+
+    @Test
+    void pixOk_oPedidoNasceEsperandoPagamento_eGuardaACobranca() {
+        PixService px = pixDaLoja();
+        when(px.criarCobranca(any(), any(), any(), any(), anyString()))
+                .thenReturn(Map.of("paymentId", "pay_1", "payload", "000201"));
+        recriarCom(px);
+        when(pedidos.findById(anyLong())).thenAnswer(i -> Optional.of(salvo()));
+
+        Map<String, Object> r = controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735"));
+
+        assertEquals(Boolean.TRUE, r.get("aguardandoPagamento"));
+        assertNotNull(r.get("pix"));
+        assertEquals("PIX_ASAAS", salvo().canalExterno);
+        assertEquals("pay_1", salvo().idExterno);
+    }
+
+    @Test
+    void pixFalhou_oPedidoEhCancelado_eOCashbackVolta() {
+        PixService px = pixDaLoja();
+        when(px.criarCobranca(any(), any(), any(), any(), anyString()))
+                .thenThrow(new RuntimeException("Asaas fora do ar"));
+        recriarCom(px);
+        when(fidelidade.identificarPeloTelefone(anyLong(), any(), any(), any())).thenReturn(42L);
+        when(fidelidade.ehOMesmoCliente(anyLong(), any(), any())).thenReturn(true);
+        when(fidelidade.resgatePossivel(anyLong(), any(), any())).thenReturn(new BigDecimal("10.00"));
+        when(pedidos.findById(anyLong())).thenAnswer(i -> Optional.of(salvo()));
+
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735",
+                        "usarCashback", true)));
+
+        assertEquals(HttpStatus.BAD_GATEWAY, e.getStatusCode());
+        // o pedido ja existia quando o Asaas falhou: nao pode ficar vivo esperando um PIX que nao veio
+        assertEquals(StatusPedido.CANCELADO, salvo().status);
+        assertEquals("Não foi possível gerar o PIX", salvo().motivoCancelamento);
+        // e o saldo que ele consumiu volta, como o cobrador faz com PIX abandonado
+        verify(fidelidade).devolver(eq(1L), eq(42L), eq(new BigDecimal("10.00")));
+    }
+
+    @Test
+    void lojaSemPixConfigurado_nemChegaACriarPedido() {
+        PixService px = mock(PixService.class);
+        recriarCom(px); // loja sem chave Asaas
+
+        assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735")));
+
+        verify(pedidos, never()).save(any(Pedido.class));
+        verify(px, never()).criarCobranca(any(), any(), any(), any(), anyString());
+    }
+
+    @Test
+    void cpfInvalido_nemChegaACriarPedido() {
+        PixService px = pixDaLoja();
+        recriarCom(px);
+
+        assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "123")));
+
+        verify(pedidos, never()).save(any(Pedido.class));
     }
 }

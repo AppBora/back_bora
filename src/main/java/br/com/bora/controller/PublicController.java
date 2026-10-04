@@ -48,6 +48,8 @@ public class PublicController {
     private final br.com.bora.security.RegraDeAcesso regra;
     private final br.com.bora.repository.ConfiguracaoLojaRepository configuracoes;
     private final boolean respeitarHorario;
+    /** Transação explícita: o pedido grava em passos curtos, com a chamada ao Asaas FORA deles. */
+    private final org.springframework.transaction.support.TransactionTemplate tx;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
@@ -61,8 +63,10 @@ public class PublicController {
                             br.com.bora.service.InsumoService insumos,
                             br.com.bora.security.RegraDeAcesso regra,
                             br.com.bora.repository.ConfiguracaoLojaRepository configuracoes,
+                            org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                             @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
         this.respeitarHorario = respeitarHorario;
+        this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
         this.taxas = taxas;
         this.insumos = insumos;
         this.regra = regra;
@@ -277,7 +281,6 @@ public class PublicController {
      * formaPagamento "PIX" cria a cobrança na conta Asaas do lojista e devolve o QR Code.
      */
     @PostMapping("/loja/{lojaId}/pedido")
-    @Transactional
     public Map<String, Object> pedirOnline(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
         Loja loja = lojaAtiva(lojaId);
         // O horario que o lojista configura existia so na tela: abertaAgora() nao tinha um unico
@@ -305,175 +308,216 @@ public class PublicController {
         boolean retirada = "RETIRADA".equalsIgnoreCase(str(body.get("tipoEntrega")));
         String bairro = str(body.get("bairro"));
 
-        // Frete do cardapio. Ate aqui a taxa ficava SEMPRE zero aqui, enquanto o balcao cobrava a
-        // tabela do bairro: toda entrega feita pelo cardapio saia de graca, e o acerto do motoboy
-        // ainda somava R$ 0 por ela. Quando a loja nao tem bairro cadastrado, nada muda.
-        var bairrosAtendidos = taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(lojaId);
-        BigDecimal taxaEntrega = BigDecimal.ZERO;
-        if (!retirada && !bairrosAtendidos.isEmpty()) {
-            if (bairro == null || bairro.isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Escolha o bairro da entrega para calcularmos a taxa.");
-            }
-            var tabela = taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(lojaId, bairro.trim())
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "Ainda nao entregamos nesse bairro. Escolha um da lista ou retire no balcao."));
-            taxaEntrega = tabela.taxa == null ? BigDecimal.ZERO : tabela.taxa;
-        }
-        if (nome == null || nome.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe seu nome");
-        }
-
-        Pedido p = new Pedido();
-        p.lojaId = lojaId;
-        p.origem = "Cardápio Digital";
-        p.formaPagamento = "PIX".equals(forma) ? "PIX (aguardando)" : "Na entrega";
-        if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("\\D", "");
-        StringBuilder ob = new StringBuilder("Cliente: ").append(nome.trim());
-        if (telefone != null && !telefone.isBlank()) ob.append(" | Tel: ").append(telefone.trim());
-        if (retirada) ob.append(" | RETIRADA NO BALCAO");
-        if (endereco != null && !endereco.isBlank()) ob.append(" | End: ").append(endereco.trim());
-        if (!retirada && bairro != null && !bairro.isBlank()) ob.append(" | Bairro: ").append(bairro.trim());
-        if (obs != null && !obs.isBlank()) ob.append(" | Obs: ").append(obs.trim());
-        p.observacao = ob.toString();
-
-        BigDecimal total = BigDecimal.ZERO;
-        p.valorTotal = BigDecimal.ZERO;
-        p = pedidos.save(p);
-        for (Map<String, Object> it : pedidoItens) {
-            Long produtoId = Long.valueOf(String.valueOf(it.get("produtoId")));
-            int qtd = Integer.parseInt(String.valueOf(it.getOrDefault("quantidade", 1)));
-            if (qtd < 1 || qtd > 99) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantidade inválida");
-            Produto prod = produtos.findById(produtoId)
-                    .filter(x -> lojaId.equals(x.lojaId) && Boolean.TRUE.equals(x.ativo))
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto indisponível"));
-
-            // Complementos escolhidos: a regra (posse, mínimo/máximo por grupo, preço) é a mesma do
-            // painel — mora no ComplementoService para os dois canais não divergirem.
-            List<Long> escolhidos = new java.util.ArrayList<>();
-            Object escRaw = it.get("complementos");
-            if (escRaw instanceof List<?> ls) for (Object o : ls) { try { escolhidos.add(Long.valueOf(String.valueOf(o))); } catch (Exception e) {} }
-            ComplementoService.Escolha escolha = complementoService.aplicar(lojaId, prod, escolhidos);
-            BigDecimal extra = escolha.acrescimo();
-            String nomeItem = escolha.descricao(prod.nome);
-
-            PedidoItem item = new PedidoItem();
-            item.setLojaId(lojaId);
-            item.setPedidoId(p.id);
-            item.setProdutoId(prod.id);
-            item.setDescricao(nomeItem);
-            item.setQuantidade(qtd);
-            BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
-            item.setPrecoUnitario(unit);
-            // Mesma regra do balcao: com ficha tecnica, consome os insumos e usa o custo da ficha;
-            // sem ficha, baixa o estoque do proprio produto. O cardapio nao fazia nem um nem outro,
-            // entao estoque e CMV ficavam errados justamente no canal que mais vende.
-            BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
-            item.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
-            if (custoFicha == null && prod.estoque != null) {
-                prod.estoque = prod.estoque - qtd;
-                produtos.save(prod);
-            }
-            BigDecimal sub = unit.multiply(BigDecimal.valueOf(qtd));
-            item.setSubtotal(sub);
-            itens.save(item);
-            total = total.add(sub);
-        }
-        if (total.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pedido sem valor");
-        }
-
-        // Cupom de desconto (recalculado no servidor; nunca zera o pedido)
-        BigDecimal descontoAplicado = BigDecimal.ZERO;
-        String codCupom = str(body.get("cupom"));
-        if (codCupom != null && !codCupom.isBlank()) {
-            br.com.bora.entity.Cupom c = cupons.findByLojaIdAndCodigoIgnoreCase(lojaId, codCupom.trim())
-                    .filter(br.com.bora.entity.Cupom::valido)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cupom inválido ou vencido"));
-            descontoAplicado = c.desconto(total);
-            if (descontoAplicado.compareTo(total) >= 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O cupom não pode zerar o pedido");
-            }
-            total = total.subtract(descontoAplicado);
-            p.observacao = p.observacao + " | Cupom " + c.codigo + " (-R$ " + descontoAplicado + ")";
-        }
-
-        // Fidelidade: no cardápio o cliente é identificado pelo telefone — não há cadastro nem login.
-        Long clienteId = fidelidade.identificarPeloTelefone(lojaId, nome, telefone, endereco);
-        p.clienteId = clienteId;
-
-        BigDecimal resgate = BigDecimal.ZERO;
-        if (Boolean.TRUE.equals(body.get("usarCashback")) || "true".equals(str(body.get("usarCashback")))) {
-            // O saldo e de quem o acumulou. Telefone de cliente nao e segredo, entao exigimos que o
-            // nome informado no checkout bata com o do cadastro antes de gastar o cashback dele.
-            if (!fidelidade.ehOMesmoCliente(lojaId, clienteId, nome)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Para usar o cashback, informe o mesmo nome do seu cadastro.");
-            }
-            resgate = fidelidade.resgatePossivel(lojaId, clienteId, total);
-            if (resgate.signum() > 0) {
-                total = total.subtract(resgate);
-                p.cashbackUsado = resgate; // em campo próprio: o texto da observação não serve para contas
-                p.observacao = p.observacao + " | Cashback usado (-R$ " + resgate + ")";
-            }
-        }
-
-        total = total.add(taxaEntrega);
-        p.taxaEntrega = taxaEntrega;
-        p.valorTotal = total;
-        p.codigo = "CD-" + p.id;
-
-        Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("pedidoId", p.id);
-        resp.put("codigo", p.codigo);
-        resp.put("valorTotal", total);
-        resp.put("desconto", descontoAplicado);
-        resp.put("cashbackUsado", resgate);
-        resp.put("taxaEntrega", taxaEntrega);
-        resp.put("retirada", retirada);
-
-        if ("PIX".equals(forma)) {
-            // Recebimento por subconta do lojista (novo) OU integração PIX legada (chave própria).
+        // Checagens do PIX ANTES de qualquer escrita: se a loja nao aceita PIX ou o CPF nao presta,
+        // nao faz sentido nascer pedido nenhum para depois ser desfeito.
+        final boolean comPix = "PIX".equals(forma);
+        final String cpfLimpo = cpf == null ? "" : cpf.replaceAll("[^0-9]", "");
+        final IntegracaoCanal integPix;
+        if (comPix) {
             boolean subconta = subcontaRecebendo(loja);
-            IntegracaoCanal integ = integracaoPix(lojaId).orElse(null);
-            if (!subconta && integ == null) {
+            integPix = integracaoPix(lojaId).orElse(null);
+            if (!subconta && integPix == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Esta loja não aceita PIX online");
             }
-            if (cpf == null || cpf.replaceAll("\\D", "").length() < 11) {
+            if (cpfLimpo.length() < 11) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe um CPF válido para pagar com PIX");
             }
-            try {
-                Map<String, Object> cobranca = pix.criarCobranca(integ, loja, p, nome, cpf.replaceAll("\\D", ""));
-                p.canalExterno = "PIX_ASAAS";
-                p.idExterno = (String) cobranca.get("paymentId");
-                p.aguardandoPagamento = true; // so vira venda quando o Asaas confirmar
-                resp.put("pix", cobranca);
-            } catch (ResponseStatusException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Falha ao gerar o PIX: " + e.getMessage());
-            }
-        }
-        p.atualizadoEm = OffsetDateTime.now();
-        pedidos.save(p);
-
-        // Cashback só depois que o dinheiro entra. Creditar na hora do pedido deixava qualquer pessoa
-        // fabricar saldo: bastava gerar dez PIX de R$ 50 e nunca pagar para juntar R$ 25 de verdade.
-        // No PIX pendente, quem credita é o webhook do pagamento.
-        //
-        // O DEBITO, porém, é na hora, sempre. O desconto já saiu do total que o cliente vai pagar; se o
-        // saldo só fosse baixado depois, o mesmo cashback valeria em quantos pedidos PIX ele abrisse
-        // ao mesmo tempo. Se o PIX não for pago, o cobrador devolve.
-        if (!p.pagamentoPendente()) {
-            fidelidade.registrar(lojaId, clienteId, p.valorTotal, resgate);
         } else {
-            fidelidade.consumir(lojaId, clienteId, resgate);
+            integPix = null;
         }
-        resp.put("cashbackNovo", fidelidade.saldo(lojaId, clienteId));
-        resp.put("aguardandoPagamento", p.pagamentoPendente());
+
+        // ---- Passo 1: só banco, transação curta. Nenhuma chamada externa aqui dentro. ----
+        Rascunho rascunho = tx.execute(st -> {
+
+            // Frete do cardapio. Ate aqui a taxa ficava SEMPRE zero aqui, enquanto o balcao cobrava a
+            // tabela do bairro: toda entrega feita pelo cardapio saia de graca, e o acerto do motoboy
+            // ainda somava R$ 0 por ela. Quando a loja nao tem bairro cadastrado, nada muda.
+            var bairrosAtendidos = taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(lojaId);
+            BigDecimal taxaEntrega = BigDecimal.ZERO;
+            if (!retirada && !bairrosAtendidos.isEmpty()) {
+                if (bairro == null || bairro.isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Escolha o bairro da entrega para calcularmos a taxa.");
+                }
+                var tabela = taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(lojaId, bairro.trim())
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Ainda nao entregamos nesse bairro. Escolha um da lista ou retire no balcao."));
+                taxaEntrega = tabela.taxa == null ? BigDecimal.ZERO : tabela.taxa;
+            }
+            if (nome == null || nome.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe seu nome");
+            }
+
+            Pedido p = new Pedido();
+            p.lojaId = lojaId;
+            p.origem = "Cardápio Digital";
+            p.formaPagamento = "PIX".equals(forma) ? "PIX (aguardando)" : "Na entrega";
+            if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("\\D", "");
+            StringBuilder ob = new StringBuilder("Cliente: ").append(nome.trim());
+            if (telefone != null && !telefone.isBlank()) ob.append(" | Tel: ").append(telefone.trim());
+            if (retirada) ob.append(" | RETIRADA NO BALCAO");
+            if (endereco != null && !endereco.isBlank()) ob.append(" | End: ").append(endereco.trim());
+            if (!retirada && bairro != null && !bairro.isBlank()) ob.append(" | Bairro: ").append(bairro.trim());
+            if (obs != null && !obs.isBlank()) ob.append(" | Obs: ").append(obs.trim());
+            p.observacao = ob.toString();
+
+            BigDecimal total = BigDecimal.ZERO;
+            p.valorTotal = BigDecimal.ZERO;
+            p = pedidos.save(p);
+            for (Map<String, Object> it : pedidoItens) {
+                Long produtoId = Long.valueOf(String.valueOf(it.get("produtoId")));
+                int qtd = Integer.parseInt(String.valueOf(it.getOrDefault("quantidade", 1)));
+                if (qtd < 1 || qtd > 99) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantidade inválida");
+                Produto prod = produtos.findById(produtoId)
+                        .filter(x -> lojaId.equals(x.lojaId) && Boolean.TRUE.equals(x.ativo))
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto indisponível"));
+
+                // Complementos escolhidos: a regra (posse, mínimo/máximo por grupo, preço) é a mesma do
+                // painel — mora no ComplementoService para os dois canais não divergirem.
+                List<Long> escolhidos = new java.util.ArrayList<>();
+                Object escRaw = it.get("complementos");
+                if (escRaw instanceof List<?> ls) for (Object o : ls) { try { escolhidos.add(Long.valueOf(String.valueOf(o))); } catch (Exception e) {} }
+                ComplementoService.Escolha escolha = complementoService.aplicar(lojaId, prod, escolhidos);
+                BigDecimal extra = escolha.acrescimo();
+                String nomeItem = escolha.descricao(prod.nome);
+
+                PedidoItem item = new PedidoItem();
+                item.setLojaId(lojaId);
+                item.setPedidoId(p.id);
+                item.setProdutoId(prod.id);
+                item.setDescricao(nomeItem);
+                item.setQuantidade(qtd);
+                BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
+                item.setPrecoUnitario(unit);
+                // Mesma regra do balcao: com ficha tecnica, consome os insumos e usa o custo da ficha;
+                // sem ficha, baixa o estoque do proprio produto. O cardapio nao fazia nem um nem outro,
+                // entao estoque e CMV ficavam errados justamente no canal que mais vende.
+                BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
+                item.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+                if (custoFicha == null && prod.estoque != null) {
+                    prod.estoque = prod.estoque - qtd;
+                    produtos.save(prod);
+                }
+                BigDecimal sub = unit.multiply(BigDecimal.valueOf(qtd));
+                item.setSubtotal(sub);
+                itens.save(item);
+                total = total.add(sub);
+            }
+            if (total.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pedido sem valor");
+            }
+
+            // Cupom de desconto (recalculado no servidor; nunca zera o pedido)
+            BigDecimal descontoAplicado = BigDecimal.ZERO;
+            String codCupom = str(body.get("cupom"));
+            if (codCupom != null && !codCupom.isBlank()) {
+                br.com.bora.entity.Cupom c = cupons.findByLojaIdAndCodigoIgnoreCase(lojaId, codCupom.trim())
+                        .filter(br.com.bora.entity.Cupom::valido)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cupom inválido ou vencido"));
+                descontoAplicado = c.desconto(total);
+                if (descontoAplicado.compareTo(total) >= 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O cupom não pode zerar o pedido");
+                }
+                total = total.subtract(descontoAplicado);
+                p.observacao = p.observacao + " | Cupom " + c.codigo + " (-R$ " + descontoAplicado + ")";
+            }
+
+            // Fidelidade: no cardápio o cliente é identificado pelo telefone — não há cadastro nem login.
+            Long clienteId = fidelidade.identificarPeloTelefone(lojaId, nome, telefone, endereco);
+            p.clienteId = clienteId;
+
+            BigDecimal resgate = BigDecimal.ZERO;
+            if (Boolean.TRUE.equals(body.get("usarCashback")) || "true".equals(str(body.get("usarCashback")))) {
+                // O saldo e de quem o acumulou. Telefone de cliente nao e segredo, entao exigimos que o
+                // nome informado no checkout bata com o do cadastro antes de gastar o cashback dele.
+                if (!fidelidade.ehOMesmoCliente(lojaId, clienteId, nome)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Para usar o cashback, informe o mesmo nome do seu cadastro.");
+                }
+                resgate = fidelidade.resgatePossivel(lojaId, clienteId, total);
+                if (resgate.signum() > 0) {
+                    total = total.subtract(resgate);
+                    p.cashbackUsado = resgate; // em campo próprio: o texto da observação não serve para contas
+                    p.observacao = p.observacao + " | Cashback usado (-R$ " + resgate + ")";
+                }
+            }
+
+            total = total.add(taxaEntrega);
+            p.taxaEntrega = taxaEntrega;
+            p.valorTotal = total;
+            p.codigo = "CD-" + p.id;
+
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("pedidoId", p.id);
+            resp.put("codigo", p.codigo);
+            resp.put("valorTotal", total);
+            resp.put("desconto", descontoAplicado);
+            resp.put("cashbackUsado", resgate);
+            resp.put("taxaEntrega", taxaEntrega);
+            resp.put("retirada", retirada);
+
+            p.aguardandoPagamento = comPix; // decidido aqui, nao depende da resposta do Asaas
+            p.atualizadoEm = OffsetDateTime.now();
+            pedidos.save(p);
+
+            // Cashback só depois que o dinheiro entra. Creditar na hora do pedido deixava qualquer
+            // pessoa fabricar saldo: bastava gerar dez PIX de R$ 50 e nunca pagar. No PIX pendente,
+            // quem credita é o webhook do pagamento.
+            //
+            // O DÉBITO, porém, é na hora, sempre. O desconto já saiu do total que o cliente vai pagar;
+            // se o saldo só fosse baixado depois, o mesmo cashback valeria em quantos pedidos PIX ele
+            // abrisse ao mesmo tempo. Se o PIX não for pago, o cobrador devolve.
+            if (!comPix) {
+                fidelidade.registrar(lojaId, clienteId, p.valorTotal, resgate);
+            } else {
+                fidelidade.consumir(lojaId, clienteId, resgate);
+            }
+            resp.put("cashbackNovo", fidelidade.saldo(lojaId, clienteId));
+            resp.put("aguardandoPagamento", comPix);
+            return new Rascunho(p, resp, clienteId, resgate);
+        });
+
+        Map<String, Object> resp = rascunho.resposta();
+        if (!comPix) return resp;
+
+        // ---- Passo 2: o Asaas FORA da transação. A conexão do banco já voltou para o pool. ----
+        Map<String, Object> cobranca;
+        try {
+            cobranca = pix.criarCobranca(integPix, loja, rascunho.pedido(), nome, cpfLimpo);
+        } catch (Exception e) {
+            // O pedido já existe e já consumiu cashback. Sem o PIX ele não tem como ser pago:
+            // cancelamos e devolvemos o saldo, do mesmo jeito que o cobrador faz com PIX abandonado.
+            desfazerPedidoSemPix(rascunho);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Falha ao gerar o PIX: " + e.getMessage());
+        }
+
+        // ---- Passo 3: guarda a cobrança, outra transação curta ----
+        tx.executeWithoutResult(st -> pedidos.findById(rascunho.pedido().id).ifPresent(atual -> {
+            atual.canalExterno = "PIX_ASAAS";
+            atual.idExterno = (String) cobranca.get("paymentId");
+            atual.atualizadoEm = OffsetDateTime.now();
+            pedidos.save(atual);
+        }));
+        resp.put("pix", cobranca);
         return resp;
     }
 
+    /** O que o passo 1 produziu, para os passos seguintes trabalharem sem reabrir transação. */
+    private record Rascunho(Pedido pedido, Map<String, Object> resposta, Long clienteId,
+                            BigDecimal resgate) {}
+
+    /** PIX que não nasceu: cancela o pedido e devolve o cashback que ele já tinha consumido. */
+    private void desfazerPedidoSemPix(Rascunho r) {
+        tx.executeWithoutResult(st -> pedidos.findById(r.pedido().id).ifPresent(p -> {
+            p.status = StatusPedido.CANCELADO;
+            p.canceladoEm = OffsetDateTime.now();
+            p.atualizadoEm = OffsetDateTime.now();
+            p.aguardandoPagamento = false;
+            p.motivoCancelamento = "Não foi possível gerar o PIX";
+            pedidos.save(p);
+            fidelidade.devolver(p.lojaId, r.clienteId(), r.resgate());
+        }));
+    }
     /**
      * Saldo de cashback de quem está no checkout. O telefone é a identificação do cliente no
      * cardápio; devolve só o valor, nunca nome ou histórico.
