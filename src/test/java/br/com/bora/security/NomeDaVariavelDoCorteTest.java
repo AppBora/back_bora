@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -46,6 +47,22 @@ class NomeDaVariavelDoCorteTest {
     void oNomeSemCobrancaNaoLigaNada() {
         assertNull(comVariavel(ERRADO, "true").getProperty(PROPRIEDADE),
                 "se este nome passar a funcionar, atualize o comentario da RegraDeAcesso");
+    }
+
+    @Test
+    void aSubidaDizEmQualEstadoOCorteEsta() {
+        // Nenhum aviso = problema invisivel, que foi exatamente o que aconteceu: a variavel estava
+        // "true" no servidor com o nome errado e nada no log falava do assunto.
+        String desligado = new RegraDeAcesso(false).avisoDeSubida();
+        assertTrue(desligado.contains("DESLIGADO"), desligado);
+        assertTrue(desligado.contains(CERTO),
+                "o aviso de desligado tem que ensinar o nome que funciona: " + desligado);
+        assertFalse(desligado.contains(ERRADO + "=true"),
+                "e nao pode ensinar o nome que nao funciona: " + desligado);
+
+        String ligado = new RegraDeAcesso(true).avisoDeSubida();
+        assertTrue(ligado.contains("LIGADO") && !ligado.contains("DESLIGADO"),
+                "ligado tambem tem que aparecer, senao ninguem sabe que esta cortando: " + ligado);
     }
 
     @Test

@@ -21,10 +21,34 @@ import org.springframework.stereotype.Component;
 @Component
 public class RegraDeAcesso {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RegraDeAcesso.class);
+
     private final boolean cortarPorAssinatura;
 
     public RegraDeAcesso(@Value("${bora.cobranca.corte-por-assinatura:false}") boolean cortarPorAssinatura) {
         this.cortarPorAssinatura = cortarPorAssinatura;
+    }
+
+    /**
+     * Diz na subida se o corte esta ligado.
+     *
+     * <p>Foi a falta disto que escondeu o problema por dias: a variavel estava "true" no servidor com o
+     * nome errado, a propriedade caiu no padrao "false", e nada no log falava do assunto. Quem subiu o
+     * sistema nao tinha como saber que a decisao comercial nao estava valendo. Uma linha na subida e
+     * mais barata que uma semana de cliente inadimplente operando de graca — ou que um corte ligado
+     * sem ninguem perceber.</p>
+     */
+    @jakarta.annotation.PostConstruct
+    void dizerSeEstaLigado() {
+        if (cortarPorAssinatura) log.info(avisoDeSubida()); else log.warn(avisoDeSubida());
+    }
+
+    /** O texto do aviso, separado do log para poder ser conferido por teste. */
+    String avisoDeSubida() {
+        return cortarPorAssinatura
+                ? "Corte por falta de pagamento: LIGADO (loja com acesso vencido fica fora do ar)"
+                : "Corte por falta de pagamento: DESLIGADO. Para ligar, "
+                  + "BORA_COBRANCA_CORTE_POR_ASSINATURA=true no ambiente — o nome tem COBRANCA no meio";
     }
 
     /** O corte por falta de pagamento está ligado? */
