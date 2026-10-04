@@ -145,7 +145,7 @@ public class IaService {
         if (imagemBase64 == null || imagemBase64.length() < 100) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Envie a imagem do cardápio");
         }
-        Map<String, Object> resp = RestClient.create().post()
+        Map<String, Object> resp = TempoLimite.clienteDeIa().build().post()
                 .uri("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", claudeKey)
                 .header("anthropic-version", "2023-06-01")

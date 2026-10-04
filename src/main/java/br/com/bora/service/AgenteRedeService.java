@@ -305,7 +305,7 @@ public class AgenteRedeService {
 
         Map<String, Object> resp;
         try {
-            resp = RestClient.create().post()
+            resp = TempoLimite.clienteDeIa().build().post()
                     .uri("https://api.anthropic.com/v1/messages")
                     .header("x-api-key", claudeKey)
                     .header("anthropic-version", "2023-06-01")

@@ -43,7 +43,7 @@ public class PixService {
     }
 
     private RestClient client(String apiKey) {
-        return RestClient.builder().baseUrl(baseUrl).defaultHeader("access_token", apiKey).build();
+        return TempoLimite.cliente(baseUrl).defaultHeader("access_token", apiKey).build();
     }
 
     /** Ao conectar a integração PIX: gera token e cria o webhook na conta Asaas do lojista. */

@@ -16,6 +16,16 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/bora}
     username: ${SPRING_DATASOURCE_USERNAME:bora}
     password: ${SPRING_DATASOURCE_PASSWORD:bora123}
+    hikari:
+      # O padrao do Hikari sao 10 conexoes, e isso nunca foi escrito em lugar nenhum -- entao ninguem
+      # sabia que o teto existia. Com chamada externa dentro da transacao do pedido, 10 pessoas
+      # pagando PIX ao mesmo tempo travavam o painel de TODAS as lojas. O Postgres gerenciado aceita
+      # 81 conexoes e usa ~19 hoje; 20 aqui deixa folga para backup, uma segunda instancia e o resto.
+      maximum-pool-size: ${BORA_DB_POOL:20}
+      # Esperar 30s (padrao) por uma conexao vira fila que nao anda. Melhor falhar em 10 e liberar a
+      # thread do que empilhar requisicao que o cliente ja desistiu de esperar.
+      connection-timeout: 10000
+      leak-detection-threshold: 20000
   jpa:
     hibernate:
       ddl-auto: validate

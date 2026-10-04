@@ -22,7 +22,7 @@ public class AsaasClient {
     public AsaasClient(@Value("${asaas.base-url:https://sandbox.asaas.com/api/v3}") String baseUrl,
                        @Value("${asaas.api-key:}") String apiKey) {
         this.apiKey = apiKey;
-        this.http = RestClient.builder().baseUrl(baseUrl).build();
+        this.http = TempoLimite.cliente(baseUrl).build();
     }
 
     public boolean configurado() {

@@ -77,7 +77,7 @@ public class FiscalService {
         }
         nota.put("items", linhas);
         String ref = "borahapp-" + loja.id + "-" + pedido.id;
-        return org.springframework.web.client.RestClient.create().post()
+        return TempoLimite.cliente().build().post()
                 .uri("https://api.focusnfe.com.br/v2/nfce?ref=" + ref)
                 .headers(h -> h.setBasicAuth(token, ""))
                 .body(nota)

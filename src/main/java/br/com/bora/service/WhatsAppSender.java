@@ -16,7 +16,7 @@ public class WhatsAppSender {
     public boolean enviar(IntegracaoCanal i, String para, String texto) {
         if (i == null || i.clientId == null || i.clientSecret == null || para == null || para.isBlank()) return false;
         try {
-            RestClient.create().post()
+            TempoLimite.cliente().build().post()
                     .uri("https://graph.facebook.com/v20.0/" + i.clientId + "/messages")
                     .header("Authorization", "Bearer " + i.clientSecret)
                     .header("Content-Type", "application/json")

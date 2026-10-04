@@ -96,7 +96,7 @@ public class WhatsAppController {
 
     private void enviar(IntegracaoCanal i, String para, String texto) {
         try {
-            RestClient.create().post()
+            br.com.bora.service.TempoLimite.cliente().build().post()
                     .uri("https://graph.facebook.com/v20.0/" + i.clientId + "/messages")
                     .header("Authorization", "Bearer " + i.clientSecret)
                     .header("Content-Type", "application/json")
