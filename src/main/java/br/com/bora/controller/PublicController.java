@@ -96,8 +96,11 @@ public class PublicController {
                 ? cfg.nomeExibicao : (loja.nome == null ? "Cardápio" : loja.nome);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("nome", nome);
-        m.put("logoUrl", cfg == null ? null : cfg.logoUrl);
-        m.put("bannerUrl", cfg == null ? null : cfg.bannerUrl);
+        // Logo e banner tambem vinham embutidos em texto dentro do JSON. O logo da Zira sozinho era
+        // 34 KB em TODA abertura do cardapio e da tela de acompanhar. Como endereco, o navegador
+        // guarda em cache e nao baixa de novo.
+        m.put("logoUrl", enderecoDaMarca(loja.id, "logo", cfg == null ? null : cfg.logoUrl));
+        m.put("bannerUrl", enderecoDaMarca(loja.id, "banner", cfg == null ? null : cfg.bannerUrl));
         // Sem cor escolhida, fica o roxo que o cardapio ja usava — nao queremos loja sem identidade
         // nenhuma por causa de um cadastro em branco.
         m.put("corPrimaria", cfg == null || cfg.corPrimaria == null || cfg.corPrimaria.isBlank()
@@ -195,11 +198,78 @@ public class PublicController {
             m.put("nome", p.nome);
             m.put("categoria", p.categoria == null || p.categoria.isBlank() ? "Outros" : p.categoria);
             m.put("preco", p.preco);
-            m.put("imagem", p.imagemUrl);
+            m.put("imagem", enderecoDaImagem(lojaId, p.id, p.imagemUrl));
             m.put("complementos", gruposPorProduto.getOrDefault(p.id, List.of()));
             return m;
         }).toList());
         return resp;
+    }
+
+    private String enderecoDaMarca(Long lojaId, String qual, String valor) {
+        if (valor == null || valor.isBlank()) return null;
+        if (!valor.startsWith("data:")) return valor;
+        return "/public/loja/" + lojaId + "/" + qual;
+    }
+
+    /** Logo ou banner da loja, a partir do que está gravado, com cache no navegador. */
+    @GetMapping("/loja/{lojaId}/{qual:logo|banner}")
+    public org.springframework.http.ResponseEntity<byte[]> imagemDaMarca(
+            @PathVariable Long lojaId, @PathVariable String qual,
+            @RequestHeader(value = "If-None-Match", required = false) String etagRecebida) {
+        var cfg = configuracoes.findByLojaId(lojaId).orElse(null);
+        String dado = cfg == null ? null : ("logo".equals(qual) ? cfg.logoUrl : cfg.bannerUrl);
+        return servirImagem(dado, etagRecebida);
+    }
+
+    /**
+     * Foto do produto: endereço, não a foto inteira dentro do JSON.
+     *
+     * <p>As fotos vinham embutidas no cardápio em base64. Na Zirá isso era <b>89% do peso</b>: 452 KB
+     * de foto num cardápio de 510 KB, baixados de novo a cada abertura, no 4G do cliente — inclusive
+     * as fotos de produtos que ele nunca vai rolar até ver. Como endereço, o navegador baixa só o que
+     * aparece, guarda em cache e não repete.</p>
+     *
+     * <p>Quem já tiver um endereço de verdade gravado (http...) continua como está.</p>
+     */
+    private String enderecoDaImagem(Long lojaId, Long produtoId, String valor) {
+        if (valor == null || valor.isBlank()) return null;
+        if (!valor.startsWith("data:")) return valor;
+        return "/public/loja/" + lojaId + "/produto/" + produtoId + "/imagem";
+    }
+
+    /** Serve a foto do produto a partir do que está gravado, com cache no navegador. */
+    @GetMapping("/loja/{lojaId}/produto/{produtoId}/imagem")
+    public org.springframework.http.ResponseEntity<byte[]> imagemDoProduto(
+            @PathVariable Long lojaId, @PathVariable Long produtoId,
+            @RequestHeader(value = "If-None-Match", required = false) String etagRecebida) {
+        return servirImagem(produtos.findByIdAndLojaId(produtoId, lojaId)
+                .map(pr -> pr.imagemUrl).orElse(null), etagRecebida);
+    }
+
+    /** Decodifica o "data:..." gravado e entrega como imagem de verdade, com cache e etiqueta. */
+    private org.springframework.http.ResponseEntity<byte[]> servirImagem(String dado, String etagRecebida) {
+        if (dado == null || !dado.startsWith("data:")) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Sem imagem");
+        }
+        int virgula = dado.indexOf(',');
+        String tipo = dado.substring(5, virgula < 0 ? dado.length() : virgula).split(";")[0];
+        byte[] bytes;
+        try {
+            bytes = java.util.Base64.getDecoder().decode(virgula < 0 ? "" : dado.substring(virgula + 1));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Imagem ilegível");
+        }
+        // A etiqueta muda quando a imagem muda: o lojista troca a foto e o cliente vê a nova.
+        String etag = "\"" + Integer.toHexString(dado.hashCode()) + "\"";
+        if (etag.equals(etagRecebida)) {
+            return org.springframework.http.ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag).build();
+        }
+        return org.springframework.http.ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "public, max-age=600")
+                .eTag(etag)
+                .contentType(org.springframework.http.MediaType.parseMediaType(
+                        tipo.isBlank() ? "application/octet-stream" : tipo))
+                .body(bytes);
     }
 
     /**

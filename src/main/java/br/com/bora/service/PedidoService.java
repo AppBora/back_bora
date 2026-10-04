@@ -27,6 +27,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.Map;
 
 @Service
@@ -120,8 +123,16 @@ public class PedidoService {
                         Comparator.nullsLast(Comparator.naturalOrder())).reversed())
                 .toList();
 
+        // Só os clientes que aparecem nestes cards. Antes vinha a lista inteira da loja a cada
+        // atualização — e o painel atualiza a cada 6 segundos, em várias telas abertas ao mesmo tempo.
+        // Numa loja com milhares de clientes isso era dezenas de milhares de registros por minuto,
+        // para mostrar o nome de uns 30 pedidos.
+        Set<Long> idsDeClientes = pedidos.stream()
+                .map(p -> p.clienteId).filter(Objects::nonNull).collect(Collectors.toSet());
         Map<Long, Cliente> clientePorId = new LinkedHashMap<>();
-        clientes.findByLojaIdOrderByNomeAsc(lojaId).forEach(c -> clientePorId.put(c.id, c));
+        if (!idsDeClientes.isEmpty()) {
+            clientes.findByLojaIdAndIdIn(lojaId, idsDeClientes).forEach(c -> clientePorId.put(c.id, c));
+        }
 
         Map<Long, List<PedidoCard.ItemResumo>> itensPorPedido = new LinkedHashMap<>();
         List<Long> ids = pedidos.stream().map(p -> p.id).toList();
