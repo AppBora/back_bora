@@ -132,7 +132,6 @@ public class SignupController {
      *                    cadastrado). Só nesse caso a loja nova pode entrar numa empresa que já existe.
      */
     /** Data de revisao do texto publicado em /termos.html. Mudou o texto, muda isto aqui. */
-    private static final String VERSAO_DOS_TERMOS = "2026-10-04";
 
     /**
      * A conta já é de dentro da empresa desse CNPJ?
@@ -163,7 +162,7 @@ public class SignupController {
         loja.empresaId = empresas.paraDocumento(req.documento(), req.nomeLoja()).getId();
         loja.acessoAte = java.time.OffsetDateTime.now().plusDays(7); // os 7 dias gratis do site
         loja.termosAceitosEm = java.time.OffsetDateTime.now();
-        loja.termosVersao = VERSAO_DOS_TERMOS;
+        loja.termosVersao = br.com.bora.service.TermosService.VERSAO_VIGENTE;
         loja.termosAceitosDe = origemDoAceite;
         loja = lojas.save(loja);
         provisionamento.semear(loja.getId(), loja.getNome()); // nasce operável (defaults)

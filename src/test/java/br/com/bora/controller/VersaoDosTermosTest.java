@@ -34,9 +34,9 @@ class VersaoDosTermosTest {
         assumeTrue(Files.exists(termos), "termos.html nao esta neste checkout");
 
         String constante = Files.readString(
-                Paths.get("src/main/java/br/com/bora/controller/SignupController.java"));
-        Matcher mc = Pattern.compile("VERSAO_DOS_TERMOS = \"(\\d{4})-(\\d{2})-(\\d{2})\"").matcher(constante);
-        assertTrue(mc.find(), "constante VERSAO_DOS_TERMOS sumiu do SignupController");
+                Paths.get("src/main/java/br/com/bora/service/TermosService.java"));
+        Matcher mc = Pattern.compile("VERSAO_VIGENTE = \"(\\d{4})-(\\d{2})-(\\d{2})\"").matcher(constante);
+        assertTrue(mc.find(), "constante VERSAO_VIGENTE sumiu do TermosService");
 
         Matcher mp = Pattern.compile("Última atualização:</b> (\\d{1,2}) de (\\p{L}+) de (\\d{4})")
                 .matcher(Files.readString(termos));
