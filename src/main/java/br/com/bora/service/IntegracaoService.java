@@ -284,4 +284,41 @@ public class IntegracaoService {
     private String str(Object o) { return o == null ? null : String.valueOf(o); }
 
     private static String limpo(String v) { return v == null || v.isBlank() ? null : v.trim(); }
+
+    /**
+     * Avisa os marketplaces que esta loja saiu do ar — ou que voltou.
+     *
+     * <p>Chamado quando a plataforma suspende ou reativa a loja. Sem isto a 99 continua achando a
+     * loja aberta e manda pedido que ninguem vai preparar: o cliente final espera comida que nao
+     * vem, e a culpa parece ser do lojista. Hoje so o Open Delivery tem esse aviso; os outros canais
+     * seguem dependendo do poller, que ja recusa operar loja suspensa.</p>
+     *
+     * <p>Nunca derruba a operacao de quem chamou: a suspensao no Bora ja aconteceu, e falar com o
+     * marketplace e o extra.</p>
+     */
+    public void avisarMarketplacesQueALojaFechou(Long lojaId, boolean disponivel) {
+        for (var i : repo.findByLojaIdOrderByCanalAsc(lojaId)) {
+            if (!"NOVE_NOVE".equalsIgnoreCase(i.canal)) continue;
+            clientDe(i.canal)
+                    .filter(c -> c instanceof br.com.bora.service.marketplace.OpenDeliveryClient)
+                    .map(c -> (br.com.bora.service.marketplace.OpenDeliveryClient) c)
+                    .ifPresent(c -> c.avisarQueFechou(i, disponivel));
+        }
+    }
+
+    /**
+     * Confere na 99 o codigo que o cliente mostrou. Ver
+     * {@link br.com.bora.service.marketplace.OpenDeliveryClient#validarCodigoDeEntrega}.
+     */
+    public boolean validarCodigoDeEntrega(Long lojaId, String canal, String idExterno, String codigo) {
+        var i = repo.findByLojaIdAndCanal(lojaId, canal)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Esta loja não está conectada ao " + label(canal) + "."));
+        var client = clientDe(canal)
+                .filter(c -> c instanceof br.com.bora.service.marketplace.OpenDeliveryClient)
+                .map(c -> (br.com.bora.service.marketplace.OpenDeliveryClient) c)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Conferir código só vale para a 99Food."));
+        return client.validarCodigoDeEntrega(i, idExterno, codigo);
+    }
 }

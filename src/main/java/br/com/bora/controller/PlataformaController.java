@@ -30,6 +30,8 @@ public class PlataformaController {
     private final br.com.bora.repository.ConfigPlataformaRepository configs;
     private final br.com.bora.service.ProvisionamentoService provisionamento;
     private final br.com.bora.service.AssinaturaService assinaturas;
+    /** Para avisar o marketplace quando a loja e suspensa. Ver avisarMarketplacesQueALojaFechou. */
+    private final br.com.bora.service.IntegracaoService integracoes;
     private final br.com.bora.repository.AssinaturaRepository assinaturaRepo;
     private final br.com.bora.repository.PagamentoAssinaturaRepository pagamentos;
     private final br.com.bora.repository.PedidoRepository pedidos;
@@ -46,6 +48,7 @@ public class PlataformaController {
                                 br.com.bora.repository.ConfigPlataformaRepository configs,
                                 br.com.bora.service.ProvisionamentoService provisionamento,
                                 br.com.bora.service.AssinaturaService assinaturas,
+                                br.com.bora.service.IntegracaoService integracoes,
                                 br.com.bora.repository.AssinaturaRepository assinaturaRepo,
                                 br.com.bora.repository.PagamentoAssinaturaRepository pagamentos,
                                 br.com.bora.repository.PedidoRepository pedidos,
@@ -57,6 +60,7 @@ public class PlataformaController {
         this.splitPadrao = splitPadrao;
         this.credenciais = credenciais;
         this.assinaturas = assinaturas;
+        this.integracoes = integracoes;
         this.assinaturaRepo = assinaturaRepo;
         this.pagamentos = pagamentos;
         this.pedidos = pedidos;
@@ -349,6 +353,10 @@ public class PlataformaController {
         loja.setAtivo(false);
         String assinatura = assinaturas.cancelarPorAdministracao(loja.id);
         lojas.save(loja);
+        // A 99 precisa saber que a loja saiu do ar, senao continua mandando pedido que ninguem vai
+        // preparar -- e quem espera comida que nao vem e o cliente final, achando que a culpa e do
+        // lojista. Nao derruba a suspensao se falhar: a loja ja esta fora do ar aqui.
+        integracoes.avisarMarketplacesQueALojaFechou(loja.id, false);
         log.warn("AUDITORIA plataforma: usuario {} SUSPENDEU a loja {} ({}). Motivo: {}",
                 ctx.atual().userId(), loja.id, loja.getNome(), motivo);
         return assinatura;

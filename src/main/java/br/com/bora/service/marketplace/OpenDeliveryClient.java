@@ -50,6 +50,8 @@ public class OpenDeliveryClient implements MarketplaceClient {
     private static final String POLLING = "/v1/events:polling";
     private static final String ACK = "/v1/events/acknowledgment";
     private static final String ORDERS = "/v1/orders";
+    /** Avisa a 99 que a loja saiu do ar por algo inesperado. Ver {@link #avisarQueFechou}. */
+    private static final String MERCHANT_UPDATE = "/v1/merchantUpdate";
 
     private static final long RENOVAR_ANTES_MIN = 5;
 
@@ -445,6 +447,65 @@ public class OpenDeliveryClient implements MarketplaceClient {
             log.info("Open Delivery: pedido {} -> {}", orderId, verbo);
         } catch (Exception e) {
             log.warn("Open Delivery: falha ao enviar {} do pedido {}: {}", verbo, orderId, e.getMessage());
+        }
+    }
+
+    /**
+     * Confere com a 99 o codigo que o cliente mostrou na entrega ou na retirada.
+     *
+     * <p>Quem sabe se o codigo esta certo e a 99, nao nos: o cliente recebe o codigo no aplicativo
+     * dele e o entregador digita aqui. A especificacao avisa que este caminho e <b>sincrono</b> —
+     * nao gera evento no polling nem no webhook, entao a resposta tem que voltar para a tela na
+     * hora.</p>
+     *
+     * @return true quando a 99 confirma o codigo (HTTP 200)
+     */
+    public boolean validarCodigoDeEntrega(IntegracaoCanal i, String orderId, String codigo) {
+        if (codigo == null || codigo.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Digite o código que o cliente mostrou.");
+        }
+        try {
+            autenticado(i).post()
+                    .uri(uri -> uri.path(ORDERS + "/{id}/validateCode")
+                            .queryParam("deliveryCode", codigo.trim()).build(orderId))
+                    .retrieve().toBodilessEntity();
+            log.info("Open Delivery: codigo do pedido {} conferido e aceito pela 99", orderId);
+            return true;
+        } catch (HttpClientErrorException e) {
+            // 400 aqui e "codigo errado", nao defeito nosso: a tela precisa dizer isso ao entregador.
+            log.info("Open Delivery: a 99 recusou o codigo do pedido {}: {}", orderId, e.getStatusCode());
+            return false;
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Não consegui falar com a 99Food para conferir o código. Tente de novo.");
+        }
+    }
+
+    /**
+     * Avisa a 99 que a loja saiu do ar por algo inesperado — e que volte quando resolver.
+     *
+     * <p>A especificacao e explicita: {@code merchantStatus} so deve ser usado quando a loja precisa
+     * fechar por um imprevisto e <b>nao se sabe quando volta</b>; nao serve para feriado nem para o
+     * fecha-e-abre do dia a dia. A suspensao pela plataforma e exatamente esse caso: o lojista foi
+     * suspenso e nao ha data para voltar. Sem este aviso a 99 continua achando a loja aberta e manda
+     * pedido que ninguem vai preparar — o cliente final espera comida que nao vem.</p>
+     *
+     * <p>Falhar aqui nao pode derrubar a suspensao: a loja ja esta fora do ar no Bora, e o pedido que
+     * porventura chegar e recusado pelo poller, que ja consulta se a loja pode operar.</p>
+     */
+    public void avisarQueFechou(IntegracaoCanal i, boolean disponivel) {
+        if (i == null || !i.prontaParaSincronizar()) return;
+        Map<String, Object> corpo = new LinkedHashMap<>();
+        corpo.put("merchantStatus", disponivel ? "AVAILABLE" : "UNAVAILABLE");
+        try {
+            autenticado(i).post().uri(MERCHANT_UPDATE)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(corpo).retrieve().toBodilessEntity();
+            log.info("Open Delivery: loja {} avisada a 99 como {}", i.lojaId,
+                    disponivel ? "AVAILABLE" : "UNAVAILABLE");
+        } catch (Exception e) {
+            log.warn("Open Delivery: nao consegui avisar a 99 que a loja {} ficou {}: {}",
+                    i.lojaId, disponivel ? "disponivel" : "indisponivel", e.getMessage());
         }
     }
 
