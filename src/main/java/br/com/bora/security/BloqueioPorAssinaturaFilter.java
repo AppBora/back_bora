@@ -26,9 +26,16 @@ import java.io.IOException;
 @Component
 public class BloqueioPorAssinaturaFilter extends OncePerRequestFilter {
 
-    /** O que continua aberto para quem está bloqueado: ver o plano, assinar e carregar a marca da loja. */
+    /**
+     * O que continua aberto para quem está bloqueado: ver o plano, assinar, carregar a marca da loja
+     * e <b>aceitar os Termos</b>.
+     *
+     * <p>Os Termos ficaram de fora e isso virava um nó: a loja vencida tomava 402 ao consultar o
+     * aceite, a faixa do painel nunca aparecia, e ela não conseguia aceitar justamente o documento que
+     * rege a suspensão que a bloqueou. Quem está prestes a pagar para voltar precisa poder aceitar.</p>
+     */
     private static final String[] CAMINHOS_LIVRES = {
-            "/api/assinatura", "/api/plano", "/api/configuracao", "/auth/"
+            "/api/assinatura", "/api/plano", "/api/configuracao", "/api/termos", "/auth/"
     };
 
     private final LojaRepository lojas;

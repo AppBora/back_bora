@@ -158,15 +158,29 @@ class EstoqueVoltaNoCancelamentoTest {
     }
 
     @Test
-    void itemAntigoSemMarca_caiNaFichaAtual() {
-        // Item criado antes da V45: consumiuFicha e null. Aqui a ficha de hoje e a melhor informacao
-        // que existe sobre o passado, e e isso que usamos.
+    void itemAntigoSemMarca_naoDevolveNada() {
+        // Item criado antes da V45: consumiuFicha e null. A primeira versao caia na ficha de hoje, e
+        // isso INVENTAVA estoque: o cardapio publico so passou a baixar estoque em 01/10/2026, entao
+        // item criado ali antes disso tem produtoId preenchido e nunca tirou nada. Devolver somaria
+        // unidade que jamais saiu, calado. Entre errar somando e nao mexer, nao mexer e melhor --
+        // estoque inventado o lojista nunca descobre de onde veio.
         pedidoTem(item(11L, 1, null));
 
-        devolucao.devolver(pedido(), StatusPedido.CONFIRMADO);
+        int mexidos = devolucao.devolver(pedido(), StatusPedido.CONFIRMADO);
 
-        assertEquals(0, new BigDecimal("5.300").compareTo(polpa.estoque),
-                "item sem marca com ficha hoje: devolve pela ficha, deu " + polpa.estoque);
+        assertEquals(0, mexidos);
+        assertEquals(0, new BigDecimal("5.000").compareTo(polpa.estoque),
+                "item sem marca nao pode criar insumo do nada, deu " + polpa.estoque);
+    }
+
+    @Test
+    void itemAntigoSemMarca_tambemNaoMexeNoEstoqueDoProduto() {
+        pedidoTem(item(10L, 3, null));
+
+        devolucao.devolver(pedido(), StatusPedido.RECEBIDO);
+
+        assertEquals(20, refrigerante.estoque,
+                "sem saber como baixou, nao devolve: 20 continua 20");
     }
 
     @Test

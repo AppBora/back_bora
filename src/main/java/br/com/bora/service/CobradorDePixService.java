@@ -34,11 +34,20 @@ public class CobradorDePixService {
     private final IntegracaoCanalRepository integracoes;
     private final PixService pix;
     private final DevolucaoDeEstoqueService devolucao;
+    /**
+     * Transacao explicita. O metodo abaixo chamava {@code cancelarVencidos()} em si mesmo, e chamada
+     * interna NAO passa pelo proxy do Spring: o {@code @Transactional} daquele metodo nunca valeu
+     * aqui. Cancelar o pedido, devolver o cashback e devolver o estoque viravam tres gravacoes
+     * soltas — se a ultima falhasse, o pedido ficava cancelado e o estoque nunca voltava, e nenhuma
+     * rodada seguinte o pegava de novo.
+     */
+    private final org.springframework.transaction.support.TransactionTemplate tx;
     private final int minutosParaExpirar;
 
     public CobradorDePixService(PedidoRepository pedidos, FidelidadeService fidelidade,
                                 LojaRepository lojas, IntegracaoCanalRepository integracoes, PixService pix,
                                 DevolucaoDeEstoqueService devolucao,
+                                org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                                 @Value("${bora.pix.minutos-para-expirar:30}") int minutosParaExpirar) {
         this.pedidos = pedidos;
         this.fidelidade = fidelidade;
@@ -46,6 +55,7 @@ public class CobradorDePixService {
         this.integracoes = integracoes;
         this.pix = pix;
         this.devolucao = devolucao;
+        this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
         this.minutosParaExpirar = minutosParaExpirar;
     }
 
@@ -59,8 +69,8 @@ public class CobradorDePixService {
      */
     @Scheduled(fixedDelayString = "${bora.pix.intervalo-ms:300000}")
     public void expirarAbandonados() {
-        List<Pedido> cancelados = cancelarVencidos();
-        if (cancelados.isEmpty()) return;
+        List<Pedido> cancelados = tx.execute(st -> cancelarVencidos());
+        if (cancelados == null || cancelados.isEmpty()) return;
         // O Asaas é chamado FORA da transação: aqui a conexão do banco já voltou para o pool. Uma
         // lentidão deles não pode segurar conexão enquanto o cardápio inteiro espera.
         int fechadas = 0;

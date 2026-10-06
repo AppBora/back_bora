@@ -253,13 +253,29 @@ public class PublicController {
                 .map(pr -> pr.imagemUrl).orElse(null), etagRecebida);
     }
 
+    /**
+     * Os unicos tipos que este servidor entrega como imagem.
+     *
+     * <p>Sem esta lista, o tipo saia do proprio {@code data:} que o lojista gravou. Dava para salvar
+     * {@code data:text/html;base64,...} numa foto de produto e pedir a vitima para abrir o endereco da
+     * imagem: o navegador executava aquilo como PAGINA, no mesmo dominio do painel, e o script lia o
+     * token do {@code localStorage}. Se a vitima fosse o suporte da plataforma, o atacante levava
+     * acesso a todas as lojas. SVG fica de fora de proposito: SVG executa script.</p>
+     */
+    private static final java.util.Set<String> IMAGENS_PERMITIDAS = java.util.Set.of(
+            "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif", "image/avif");
+
     /** Decodifica o "data:..." gravado e entrega como imagem de verdade, com cache e etiqueta. */
     private org.springframework.http.ResponseEntity<byte[]> servirImagem(String dado, String etagRecebida) {
         if (dado == null || !dado.startsWith("data:")) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Sem imagem");
         }
         int virgula = dado.indexOf(',');
-        String tipo = dado.substring(5, virgula < 0 ? dado.length() : virgula).split(";")[0];
+        String tipo = dado.substring(5, virgula < 0 ? dado.length() : virgula).split(";")[0]
+                .trim().toLowerCase();
+        if (!IMAGENS_PERMITIDAS.contains(tipo)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Sem imagem");
+        }
         byte[] bytes;
         try {
             bytes = java.util.Base64.getDecoder().decode(virgula < 0 ? "" : dado.substring(virgula + 1));
@@ -273,9 +289,12 @@ public class PublicController {
         }
         return org.springframework.http.ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "public, max-age=600")
+                // Cinto e suspensorio: mesmo com a lista acima, o navegador nao deve adivinhar o tipo
+                // nem executar nada que venha daqui.
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Security-Policy", "default-src 'none'; sandbox")
                 .eTag(etag)
-                .contentType(org.springframework.http.MediaType.parseMediaType(
-                        tipo.isBlank() ? "application/octet-stream" : tipo))
+                .contentType(org.springframework.http.MediaType.parseMediaType(tipo))
                 .body(bytes);
     }
 

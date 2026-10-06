@@ -39,7 +39,7 @@ class QuadroNaoCarregaBaseInteiraTest {
         service = new PedidoService(repo, mock(PedidoItemRepository.class), mock(ProdutoRepository.class),
                 clientes, mock(LogStatusRepository.class), mock(PlanoService.class),
                 mock(IntegracaoService.class), mock(TaxaEntregaRepository.class), mock(InsumoService.class),
-                mock(FidelidadeService.class), mock(ComplementoService.class), ctx, mock(DevolucaoDeEstoqueService.class));
+                mock(FidelidadeService.class), mock(ComplementoService.class), ctx, mock(DevolucaoDeEstoqueService.class), GerenciadorDeTransacaoFalso.novo());
     }
 
     private Pedido pedido(Long id, Long clienteId) {

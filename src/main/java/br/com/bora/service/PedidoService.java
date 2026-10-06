@@ -52,13 +52,16 @@ public class PedidoService {
     private final ComplementoService complementos;
     private final AuthContext ctx;
     private final DevolucaoDeEstoqueService devolucao;
+    /** Transacao explicita, para agrupar o que precisa cair junto sem prender chamada externa. */
+    private final org.springframework.transaction.support.TransactionTemplate tx;
 
     public PedidoService(PedidoRepository repo, PedidoItemRepository itemRepo, ProdutoRepository produtos,
                          ClienteRepository clientes, LogStatusRepository logs, PlanoService planos,
                          IntegracaoService integracoes, TaxaEntregaRepository taxasEntrega,
                          InsumoService insumos, FidelidadeService fidelidade,
                          ComplementoService complementos, AuthContext ctx,
-                         DevolucaoDeEstoqueService devolucao) {
+                         DevolucaoDeEstoqueService devolucao,
+                         org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao) {
         this.fidelidade = fidelidade;
         this.complementos = complementos;
         this.repo = repo;
@@ -72,6 +75,7 @@ public class PedidoService {
         this.insumos = insumos;
         this.ctx = ctx;
         this.devolucao = devolucao;
+        this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
     }
 
     /** Taxa de entrega ativa para o bairro do cliente (0 se não houver). */
@@ -417,11 +421,19 @@ public class PedidoService {
             p.canceladoEm = OffsetDateTime.now();
             p.motivoCancelamento = motivo;
         }
-        Pedido salvo = repo.save(p);
-        // Venda que nao aconteceu devolve o que consumiu. A regra depende do estagio em que o pedido
-        // estava: ver DevolucaoDeEstoqueService.
-        if (status == StatusPedido.CANCELADO) devolucao.devolver(salvo, anterior);
-        registrarLog(salvo, anterior, status); // RN07
+        // Gravar o pedido, devolver o estoque e registrar o log sao UMA coisa so. Sem isto eram tres
+        // gravacoes soltas: se a devolucao estourasse, o pedido ja estava CANCELADO, o lojista via
+        // erro 500, tentar de novo dava "estado final" e o estoque nunca voltava.
+        // As chamadas externas (marketplace, WhatsApp) ficam FORA, antes e depois.
+        final StatusPedido anteriorFinal = anterior;
+        Pedido salvo = tx.execute(st -> {
+            Pedido gravado = repo.save(p);
+            // Venda que nao aconteceu devolve o que consumiu. A regra depende do estagio em que o
+            // pedido estava: ver DevolucaoDeEstoqueService.
+            if (status == StatusPedido.CANCELADO) devolucao.devolver(gravado, anteriorFinal);
+            registrarLog(gravado, anteriorFinal, status); // RN07
+            return gravado;
+        });
         integracoes.notificarStatus(salvo, status.name()); // sincroniza status com o marketplace (se conectado)
         notifCliente.notificarFase(salvo, status); // Operação Assistida: avisa o cliente no WhatsApp
         return salvo;

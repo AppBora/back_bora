@@ -45,7 +45,7 @@ class TodoCancelamentoDevolveEstoqueTest {
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
 
         new CobradorDePixService(repo, mock(FidelidadeService.class), mock(LojaRepository.class),
-                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, 30)
+                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, GerenciadorDeTransacaoFalso.novo(), 30)
                 .expirarAbandonados();
 
         verify(devolucao).devolver(p, StatusPedido.RECEBIDO);
@@ -60,7 +60,7 @@ class TodoCancelamentoDevolveEstoqueTest {
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
 
         new CobradorDePixService(repo, mock(FidelidadeService.class), mock(LojaRepository.class),
-                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, 30)
+                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, GerenciadorDeTransacaoFalso.novo(), 30)
                 .expirarAbandonados();
 
         verify(devolucao, never()).devolver(any(), any());
@@ -114,7 +114,7 @@ class TodoCancelamentoDevolveEstoqueTest {
                 mock(ProdutoRepository.class), mock(ClienteRepository.class), mock(LogStatusRepository.class),
                 mock(PlanoService.class), mock(IntegracaoService.class), mock(TaxaEntregaRepository.class),
                 mock(InsumoService.class), mock(FidelidadeService.class), mock(ComplementoService.class),
-                ctx, devolucao);
+                ctx, devolucao, GerenciadorDeTransacaoFalso.novo());
         ReflectionTestUtils.setField(service, "notifCliente", mock(NotificacaoClienteService.class));
         return service;
     }

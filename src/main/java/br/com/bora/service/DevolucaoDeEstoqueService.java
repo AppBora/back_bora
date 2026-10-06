@@ -78,6 +78,7 @@ public class DevolucaoDeEstoqueService {
 
         List<PedidoItem> lista = itens.findByLojaIdAndPedidoIdOrderById(p.lojaId, p.id);
         int devolvidos = 0;
+        int naoDevolvidosPorFaltaDeMarca = 0;
         for (PedidoItem item : lista) {
             int qtd = item.getQuantidade() == null ? 1 : item.getQuantidade();
             if (qtd <= 0 || item.getProdutoId() == null) continue;
@@ -91,16 +92,27 @@ public class DevolucaoDeEstoqueService {
                 if (podeDevolverProduto && devolverProduto(p.lojaId, item.getProdutoId(), qtd)) devolvidos++;
                 continue;
             }
-            // Item sem a marca (anterior a V45): tenta a ficha de hoje; sem ficha, e estoque de produto.
-            if (podeDevolverInsumo && insumos.devolverFicha(p.lojaId, item.getProdutoId(), qtd)) {
-                devolvidos++;
-            } else if (podeDevolverProduto && devolverProduto(p.lojaId, item.getProdutoId(), qtd)) {
-                devolvidos++;
-            }
+            // Item sem a marca (anterior a V45): NAO devolve nada.
+            //
+            // A versao anterior caia na ficha de hoje, e isso inventava estoque. O cardapio publico so
+            // passou a baixar estoque em 01/10/2026 (commit e9a8bd7): item criado ali antes disso tem
+            // produto_id preenchido e NUNCA tirou nada do estoque. Devolver somaria unidade que jamais
+            // saiu, calado. E para item de balcao antigo cuja ficha mudou depois, a ficha de hoje
+            // devolve o insumo errado.
+            //
+            // Entre errar somando e nao mexer, nao mexer e melhor: estoque inventado e silencioso e o
+            // lojista nunca descobre de onde veio. O aviso no log diz o que conferir a mao. Isso some
+            // sozinho conforme os pedidos antigos saem do ar — todo item novo ja nasce com a marca.
+            naoDevolvidosPorFaltaDeMarca++;
         }
         if (devolvidos > 0) {
             log.info("Pedido {} da loja {} cancelado em {}: estoque devolvido em {} item(ns)",
                     p.id, p.lojaId, statusAntes, devolvidos);
+        }
+        if (naoDevolvidosPorFaltaDeMarca > 0) {
+            log.warn("Pedido {} da loja {} cancelado: {} item(ns) sao anteriores a V45 e nao registram "
+                            + "como baixaram estoque; nada foi devolvido neles, confira o estoque a mao",
+                    p.id, p.lojaId, naoDevolvidosPorFaltaDeMarca);
         }
         return devolvidos;
     }
