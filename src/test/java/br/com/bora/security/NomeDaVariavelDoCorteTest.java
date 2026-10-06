@@ -26,9 +26,37 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class NomeDaVariavelDoCorteTest {
 
-    private static final String PROPRIEDADE = "bora.cobranca.corte-por-assinatura";
-    private static final String CERTO = "BORA_COBRANCA_CORTE_POR_ASSINATURA";
     private static final String ERRADO = "BORA_CORTE_POR_ASSINATURA";
+
+    /**
+     * O nome da propriedade lido DO PROPRIO CODIGO, nao copiado para ca.
+     *
+     * <p>A primeira versao deste teste tinha a string "bora.cobranca.corte-por-assinatura" escrita
+     * dentro dele. Isso o tornava quase inutil: trocar o {@code @Value} da RegraDeAcesso pelo nome
+     * errado — o bug que este teste existe para impedir — deixava os testes todos verdes. Agora a
+     * propriedade vem da anotacao do construtor, entao o teste acompanha o codigo.</p>
+     */
+    private static String propriedadeDoCodigo() {
+        for (var c : RegraDeAcesso.class.getDeclaredConstructors()) {
+            for (var anotacoes : c.getParameterAnnotations()) {
+                for (var a : anotacoes) {
+                    if (a instanceof org.springframework.beans.factory.annotation.Value v) {
+                        var m = java.util.regex.Pattern.compile("\\$\\{([^:}]+)").matcher(v.value());
+                        if (m.find()) return m.group(1);
+                    }
+                }
+            }
+        }
+        throw new AssertionError("a RegraDeAcesso perdeu o @Value do corte por assinatura");
+    }
+
+    /** O nome de variavel de ambiente que o Spring liga a essa propriedade. */
+    private static String variavelDeAmbienteDoCodigo() {
+        return propriedadeDoCodigo().replace('.', '_').replace('-', '_').toUpperCase();
+    }
+
+    private static final String PROPRIEDADE = propriedadeDoCodigo();
+    private static final String CERTO = variavelDeAmbienteDoCodigo();
 
     private static StandardEnvironment comVariavel(String nome, String valor) {
         StandardEnvironment env = new StandardEnvironment();

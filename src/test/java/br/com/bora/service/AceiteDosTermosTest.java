@@ -129,4 +129,14 @@ class AceiteDosTermosTest {
                         .toLowerCase().contains("administrador"),
                 "o gerente precisa saber a quem pedir");
     }
+
+    @Test
+    void quemNaoPodeAceitar_naoRecebeOBotao() {
+        // A tela mostra o botao quando podeAceitar e true. O teste so afirmava o true do
+        // administrador, entao "podeAceitar = sempre true" passava despercebido e o botao aparecia
+        // para gerente e para o suporte — que levariam 403 ao clicar.
+        assertEquals(Boolean.FALSE, termos.situacao(18L, "GERENTE").get("podeAceitar"));
+        assertEquals(Boolean.FALSE, termos.situacao(18L, "ADMINISTRADOR_BORA").get("podeAceitar"));
+        assertEquals(Boolean.TRUE, termos.situacao(18L, "ADMINISTRADOR_LOJA").get("podeAceitar"));
+    }
 }

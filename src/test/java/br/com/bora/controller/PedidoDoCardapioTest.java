@@ -305,4 +305,29 @@ class PedidoDoCardapioTest {
 
         verify(pedidos, never()).save(any(Pedido.class));
     }
+
+    @Test
+    void oItemGuardaComoBaixouOEstoque() {
+        // Sem esta marca a devolucao no cancelamento tem que adivinhar pela ficha de hoje, e devolve
+        // a coisa errada para quem mexeu na ficha depois do pedido. A gravacao nao tinha teste
+        // nenhum: inverter a condicao, ou apagar a linha, passava despercebido.
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt())).thenReturn(null); // produto sem ficha
+        controller.pedirOnline(1L, corpo());
+
+        var capturado = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
+        verify(itens, atLeastOnce()).save(capturado.capture());
+        assertEquals(Boolean.FALSE, capturado.getValue().getConsumiuFicha(),
+                "sem ficha, o item baixou o estoque do proprio produto");
+
+        reset(itens);
+        when(itens.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt()))
+                .thenReturn(new java.math.BigDecimal("4.00")); // agora com ficha
+        controller.pedirOnline(1L, corpo());
+
+        var comFicha = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
+        verify(itens, atLeastOnce()).save(comFicha.capture());
+        assertEquals(Boolean.TRUE, comFicha.getValue().getConsumiuFicha(),
+                "com ficha, o item consumiu insumo");
+    }
 }
