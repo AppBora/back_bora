@@ -39,6 +39,8 @@ public class IfoodClient implements MarketplaceClient {
     private static final String AUTH = "/authentication/v1.0/oauth";
     private static final String EVENTS = "/events/v1.0/events";
     private static final String ORDERS = "/order/v1.0/orders";
+    /** As lojas que o token enxerga. E daqui que sai o Merchant ID, em vez de o lojista digitar. */
+    private static final String MERCHANTS = "/merchant/v1.0/merchants";
 
     /** Renova o token com folga: o do iFood dura ~6h. */
     private static final long RENOVAR_ANTES_MIN = 30;
@@ -184,8 +186,48 @@ public class IfoodClient implements MarketplaceClient {
         i.vinculoExpiraEm = null;
         i.status = "CONECTADO";
         i.ativo = true;
+        descobrirMerchant(i);
         repo.save(i);
-        log.info("iFood: loja {} conectada (merchant {})", i.lojaId, i.merchantId);
+        log.info("iFood: loja {} conectada (merchant {})", i.lojaId,
+                i.merchantId == null || i.merchantId.isBlank() ? "NAO DESCOBERTO" : i.merchantId);
+    }
+
+    /**
+     * Pergunta ao iFood qual e a loja deste token e guarda o Merchant ID.
+     *
+     * <p>Sem isto a autorizacao terminava com o Merchant ID em branco, e o painel dizia "Conectado —
+     * os pedidos chegam sozinhos" enquanto o polling saia na primeira linha e nunca buscava nada
+     * (veja {@code polling}). Conectado nao e o mesmo que recebendo, e a tela afirmava o que nao
+     * acontecia: o lojista ficaria esperando pedido para sempre, sem erro em lugar nenhum.</p>
+     *
+     * <p>O token so enxerga as lojas que o lojista autorizou. Com uma, preenche sozinho. Com varias,
+     * nao adivinha: deixa em branco para o lojista escolher, porque errar a loja e pior que perguntar.
+     * Falha de rede aqui nao derruba o vinculo — o token ja e valido, e o Merchant ID pode ser
+     * preenchido depois.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private void descobrirMerchant(IntegracaoCanal i) {
+        if (i.merchantId != null && !i.merchantId.isBlank()) return; // o lojista ja informou
+        List<Map<String, Object>> lojas;
+        try {
+            lojas = autenticado(i).get().uri(MERCHANTS).retrieve().body(List.class);
+        } catch (Exception e) {
+            log.warn("iFood: nao consegui descobrir o Merchant ID da loja {}: {}", i.lojaId, e.getMessage());
+            return;
+        }
+        if (lojas == null || lojas.isEmpty()) {
+            log.warn("iFood: o token da loja {} nao enxerga nenhuma loja no iFood", i.lojaId);
+            return;
+        }
+        if (lojas.size() > 1) {
+            log.info("iFood: o token da loja {} enxerga {} lojas; o lojista escolhe qual e a dele",
+                    i.lojaId, lojas.size());
+            return;
+        }
+        Object id = lojas.get(0).get("id");
+        if (id == null) return;
+        i.merchantId = String.valueOf(id);
+        log.info("iFood: Merchant ID da loja {} descoberto sozinho: {}", i.lojaId, i.merchantId);
     }
 
     @Override
