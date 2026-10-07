@@ -108,7 +108,11 @@ public class MarketplacePoller {
     private List<IntegracaoCanal> conectadas(String canal) {
         List<IntegracaoCanal> out = new ArrayList<>();
         for (IntegracaoCanal i : repo.findByAtivoTrue()) {
-            if (!canal.equalsIgnoreCase(i.canal) || !i.prontaParaSincronizar()) continue;
+            // Quem esta em ERRO tambem entra, mas espacado: ver IntegracaoCanal.mereceNovaTentativa.
+            // Sem isso, integracao que caiu nunca mais se levanta sozinha, nem com o problema
+            // resolvido.
+            if (!canal.equalsIgnoreCase(i.canal)
+                    || !(i.prontaParaSincronizar() || i.mereceNovaTentativa())) continue;
             // A integração estar conectada não basta: a LOJA precisa poder operar. Suspender ou
             // arquivar um cliente não encostava nas integrações, então o robô seguia puxando e
             // aceitando pedido de uma loja que ninguém conseguia abrir — o cliente final pedia, o

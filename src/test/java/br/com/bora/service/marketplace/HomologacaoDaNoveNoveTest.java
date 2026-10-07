@@ -48,7 +48,10 @@ class HomologacaoDaNoveNoveTest {
             chamadas.add(troca.getRequestMethod() + " " + completo);
             corpos.add(new String(troca.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             int codigo = completo.contains("validateCode") ? respostaDoCodigo : 200;
-            byte[] r = "{}".getBytes(StandardCharsets.UTF_8);
+            // O polling devolve LISTA de eventos; responder "{}" aqui fazia a conversao estourar e o
+            // teste acusava um defeito que nao existia.
+            String corpo = completo.contains("events:polling") ? "[]" : "{}";
+            byte[] r = corpo.getBytes(StandardCharsets.UTF_8);
             troca.getResponseHeaders().add("Content-Type", "application/json");
             troca.sendResponseHeaders(codigo, r.length);
             try (OutputStream o = troca.getResponseBody()) { o.write(r); }
@@ -121,5 +124,18 @@ class HomologacaoDaNoveNoveTest {
         cliente.avisarQueFechou(solta, false);
 
         assertTrue(chamadas.isEmpty());
+    }
+
+    @Test
+    void pollingQueVoltaAFuncionar_tiraALojaDoErroSozinho() {
+        IntegracaoCanal i = integracao();
+        i.status = "ERRO";
+        i.ultimoErro = "A 99Food recusou a credencial";
+
+        cliente.polling(i);
+
+        assertEquals("CONECTADO", i.status,
+                "deu certo de novo: a integracao se levanta sozinha, sem ninguem clicar em Conectar");
+        assertNull(i.ultimoErro, "o erro antigo nao pode ficar na tela depois de resolvido");
     }
 }

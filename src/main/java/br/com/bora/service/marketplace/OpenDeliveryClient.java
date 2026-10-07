@@ -234,6 +234,12 @@ public class OpenDeliveryClient implements MarketplaceClient {
             List<Map<String, Object>> eventos = req.retrieve().body(List.class);
             i.ultimoPollingEm = OffsetDateTime.now();
             i.ultimoErro = null;
+            // Deu certo: a integracao se levanta sozinha. Antes ela ficava marcada como ERRO para
+            // sempre, fora da fila, mesmo com a credencial ja corrigida.
+            if ("ERRO".equals(i.status)) {
+                i.status = "CONECTADO";
+                log.info("Open Delivery: loja {} voltou sozinha: o polling funcionou de novo", i.lojaId);
+            }
             repo.save(i);
             return eventos == null ? List.of() : eventos;
         } catch (Exception e) {

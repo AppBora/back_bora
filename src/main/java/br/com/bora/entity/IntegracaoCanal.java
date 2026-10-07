@@ -68,4 +68,27 @@ public class IntegracaoCanal {
     public boolean prontaParaSincronizar() {
         return merchantId != null && !merchantId.isBlank() && "CONECTADO".equals(status);
     }
+
+    /** Minutos entre duas tentativas de uma integracao que caiu em ERRO. */
+    private static final long ESPERA_APOS_ERRO_MIN = 10;
+
+    /**
+     * Integracao em ERRO merece nova tentativa, de vez em quando?
+     *
+     * <p>Antes, cair em ERRO era definitivo: o ciclo so olhava quem estava CONECTADO, entao a
+     * integracao saia da fila e nunca mais tentava — mesmo depois de o problema ser resolvido. Em
+     * 06/10/2026 isso aconteceu de verdade: uma credencial foi trocada por engano, a loja caiu em
+     * ERRO, a credencial foi restaurada e ela continuou parada. So voltou quando alguem clicou em
+     * Conectar. Ninguem descobre isso pela tela, que mostra "ultimo erro" sem dizer que o sistema
+     * desistiu.</p>
+     *
+     * <p>Tentar a cada 30s com credencial errada seria martelar o marketplace e arriscar bloqueio.
+     * Por isso a nova tentativa e espacada: uma a cada {@value #ESPERA_APOS_ERRO_MIN} minutos. Se der
+     * certo, o proprio cliente limpa o erro e devolve o status para CONECTADO.</p>
+     */
+    public boolean mereceNovaTentativa() {
+        if (merchantId == null || merchantId.isBlank() || !"ERRO".equals(status)) return false;
+        return ultimoPollingEm == null
+                || ultimoPollingEm.isBefore(OffsetDateTime.now().minusMinutes(ESPERA_APOS_ERRO_MIN));
+    }
 }
