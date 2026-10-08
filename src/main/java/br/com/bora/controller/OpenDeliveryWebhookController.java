@@ -41,17 +41,21 @@ public class OpenDeliveryWebhookController {
     private final OpenDeliveryClient client;
     private final MarketplacePoller poller;
     private final ObjectMapper json;
+    /** Para o aviso do entregador fechar o pedido sem contar a novidade de volta para a 99. */
+    private final br.com.bora.service.PedidoService pedidos;
 
     public OpenDeliveryWebhookController(IntegracaoCanalRepository integracoes, OpenDeliveryClient client,
                                          br.com.bora.repository.LojaRepository lojas,
                                          br.com.bora.security.RegraDeAcesso regra,
-                                         MarketplacePoller poller, ObjectMapper json) {
+                                         MarketplacePoller poller, ObjectMapper json,
+                                         br.com.bora.service.PedidoService pedidos) {
         this.integracoes = integracoes;
         this.lojas = lojas;
         this.regra = regra;
         this.client = client;
         this.poller = poller;
         this.json = json;
+        this.pedidos = pedidos;
     }
 
     @PostMapping("/v1/newEvent")
@@ -94,5 +98,73 @@ public class OpenDeliveryWebhookController {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Falha ao processar; reenviar");
         }
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * A 99 avisa o que o entregador dela fez: pegou o pedido, entregou, cancelou.
+     *
+     * <p>Em pedido que a 99 entrega, quem sabe onde o motoboy esta e ela. Sem este aviso o pedido
+     * parava em PRONTO no painel para sempre: o lojista nunca via "saiu" nem "entregue", e o quadro
+     * do dia ficava cheio de pedido que ja chegou na casa do cliente.</p>
+     *
+     * <p>A especificacao manda responder <b>200 com corpo vazio</b>; qualquer outra coisa faz a 99
+     * reenviar. Entao: evento desconhecido tambem responde 200 — reenviar um aviso que nao sabemos
+     * tratar nao melhora nada e so enche a fila deles.</p>
+     */
+    @PostMapping("/v1/trackingEvent")
+    public ResponseEntity<Void> eventoDeRastreio(
+            @RequestHeader(value = "X-App-MerchantId", required = false) String merchantId,
+            @RequestHeader(value = "X-App-Signature", required = false) String assinatura,
+            @RequestBody(required = false) String corpo) {
+        if (merchantId == null || merchantId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Header X-App-MerchantId ausente");
+        }
+        IntegracaoCanal i = integracoes.findFirstByCanalAndMerchantId(client.canal(), merchantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Nenhuma loja conectada com o App Shop ID " + merchantId));
+        if (!client.assinaturaValida(i, corpo, assinatura)) {
+            log.warn("Open Delivery rastreio: assinatura invalida para a loja {} (app shop {})", i.lojaId, merchantId);
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Assinatura invalida");
+        }
+
+        Map<String, Object> evento;
+        try {
+            evento = json.readValue(corpo, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Evento ilegivel");
+        }
+
+        String pedido = texto(evento.get("orderId"));
+        Object ev = evento.get("event");
+        String tipo = ev instanceof Map<?, ?> m ? texto(m.get("type")) : null;
+        if (pedido == null || tipo == null) {
+            log.warn("Open Delivery rastreio: evento sem orderId ou type na loja {}", i.lojaId);
+            return ResponseEntity.ok().build();
+        }
+
+        // Ao contrario do pedido novo, aqui NAO recusamos loja suspensa: este aviso so fecha um pedido
+        // que ja entrou antes. Travar isso deixaria o pedido pendurado para sempre no painel dela.
+        switch (tipo.toUpperCase()) {
+            case "PICKED_UP" -> pedidos.avancarPorMarketplace(i.lojaId, client.canal(), pedido,
+                    br.com.bora.entity.StatusPedido.SAIU_PARA_ENTREGA);
+            case "DELIVERED" -> pedidos.avancarPorMarketplace(i.lojaId, client.canal(), pedido,
+                    br.com.bora.entity.StatusPedido.ENTREGUE);
+            case "CANCELLED" -> pedidos.cancelarPorMarketplace(i.lojaId, client.canal(), pedido,
+                    primeiroNaoVazio(ev instanceof Map<?, ?> m2 ? texto(m2.get("message")) : null,
+                            "Cancelado pela logistica da 99Food"));
+            default -> log.info("Open Delivery rastreio: evento {} na loja {} nao muda o pedido {}",
+                    tipo, i.lojaId, pedido);
+        }
+        return ResponseEntity.ok().build();
+    }
+
+    private static String texto(Object o) {
+        if (o == null) return null;
+        String s = String.valueOf(o).trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private static String primeiroNaoVazio(String a, String b) {
+        return a == null || a.isBlank() ? b : a;
     }
 }

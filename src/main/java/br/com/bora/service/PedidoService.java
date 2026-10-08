@@ -344,6 +344,44 @@ public class PedidoService {
     }
 
     /**
+     * O entregador do marketplace andou: o pedido avanca aqui, sem devolver o status para la.
+     *
+     * <p>Quando a entrega e do marketplace, quem sabe onde o motoboy esta e ele. O Bora so e avisado
+     * — e nao pode responder contando a mesma novidade de volta, que e o que {@code alterarStatus}
+     * faria. Tambem nao exige usuario logado: quem chama e o webhook, sem ninguem na tela.</p>
+     *
+     * <p>Nao recua status nem mexe em pedido ja encerrado: o aviso pode chegar fora de ordem ou
+     * repetido, e reabrir um pedido entregue seria pior que ignorar.</p>
+     *
+     * @return true quando o pedido realmente mudou
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public boolean avancarPorMarketplace(Long lojaId, String canalCodigo, String idExterno,
+                                         StatusPedido novo) {
+        var achado = buscarExterno(lojaId, canalCodigo, idExterno);
+        if (achado.isEmpty()) return false;
+        Pedido p = achado.get();
+        if (p.status == StatusPedido.CANCELADO || p.status == StatusPedido.ENTREGUE) return false;
+        if (p.status == novo) return false;
+        StatusPedido anterior = p.status;
+        p.status = novo;
+        p.atualizadoEm = OffsetDateTime.now();
+        if (novo == StatusPedido.ENTREGUE) p.entregueEm = OffsetDateTime.now();
+        Pedido salvo = repo.save(p);
+        LogStatus registro = new LogStatus();
+        registro.setLojaId(salvo.lojaId);
+        registro.setPedidoId(salvo.id);
+        registro.setStatusAnterior(anterior == null ? null : anterior.name());
+        registro.setStatusNovo(novo.name());
+        registro.setUsuarioId(null); // quem mexeu foi o marketplace, nao um usuario do painel
+        logs.save(registro);
+        notifCliente.notificarFase(salvo, novo); // o cliente final merece saber que saiu/chegou
+        AUDITORIA.info("[{}] loja {}: pedido {} avancou para {} pelo aviso do entregador",
+                canalCodigo, lojaId, idExterno, novo);
+        return true;
+    }
+
+    /**
      * Encontra (ou cria) o cliente do pedido de marketplace. Ordem: o id que o marketplace dá ao cliente;
      * depois o telefone, só se for de uma pessoa. O iFood manda a CENTRAL dele (0800 + localizador) no
      * lugar do celular — casar por ela juntava todos os clientes do iFood da loja num cadastro só.

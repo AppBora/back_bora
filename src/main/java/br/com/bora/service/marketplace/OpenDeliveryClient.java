@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -430,7 +431,9 @@ public class OpenDeliveryClient implements MarketplaceClient {
     /**
      * Resposta ao pedido de cancelamento do cliente. Negar exige motivo da lista RequestDenied:
      * DISH_ALREADY_DONE (ja preparado) ou OUT_FOR_DELIVERY (ja saiu).
-     * NAO VERIFICADO: o corpo do acceptCancellation nao foi lido na especificacao; vai sem corpo.
+     * Conferido na especificacao em 08/10/2026: o acceptCancellation NAO tem corpo — so o orderId no
+     * caminho, e a resposta e 204 sem conteudo. O comentario anterior dizia "nao verificado"; estava
+     * certo em mandar sem corpo, agora com a fonte.
      */
     @Override
     public void responderPedidoDeCancelamento(IntegracaoCanal i, String orderId, boolean aceitar, String statusInterno) {
@@ -449,11 +452,34 @@ public class OpenDeliveryClient implements MarketplaceClient {
         try {
             RestClient.RequestBodySpec req = autenticado(i).post().uri(ORDERS + "/{id}/{verbo}", orderId, verbo);
             if (corpo != null) req = req.contentType(MediaType.APPLICATION_JSON).body(corpo);
-            req.retrieve().toBodilessEntity();
-            log.info("Open Delivery: pedido {} -> {}", orderId, verbo);
+            var resposta = req.retrieve().toBodilessEntity();
+            log.info("Open Delivery: pedido {} -> {}{}", orderId, verbo, requestId(resposta.getHeaders()));
+        } catch (HttpStatusCodeException e) {
+            log.warn("Open Delivery: falha ao enviar {} do pedido {}: {}{}",
+                    verbo, orderId, e.getMessage(), requestId(e.getResponseHeaders()));
         } catch (Exception e) {
             log.warn("Open Delivery: falha ao enviar {} do pedido {}: {}", verbo, orderId, e.getMessage());
         }
+    }
+
+    /**
+     * O identificador que a 99 devolve em cada chamada, para o log.
+     *
+     * <p>Eles pedem isso por escrito na lista de pre-producao: <i>"para cada chamada aos nossos
+     * endpoints ou aos webhooks mandamos um request id. E a informacao necessaria para abrir um
+     * chamado e investigarmos em caso de erro, entao recomendamos guardar por alguns dias"</i>.</p>
+     *
+     * <p>Nao guardavamos. No chamado aberto em 27/09 isso fez falta: contamos o que aconteceu, sem o
+     * numero que permite a eles achar a chamada do lado de la. Agora ele vai junto no log, que e
+     * onde alguem vai procurar quando precisar.</p>
+     */
+    private static String requestId(org.springframework.http.HttpHeaders cabecalhos) {
+        if (cabecalhos == null) return "";
+        for (String nome : new String[]{"x-request-id", "request-id", "traceId", "x-trace-id"}) {
+            String v = cabecalhos.getFirst(nome);
+            if (v != null && !v.isBlank()) return " [request " + v + "]";
+        }
+        return "";
     }
 
     /**
