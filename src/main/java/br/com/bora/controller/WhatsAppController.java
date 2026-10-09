@@ -6,7 +6,6 @@ import br.com.bora.repository.LojaRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
@@ -25,10 +24,13 @@ public class WhatsAppController {
 
     private final IntegracaoCanalRepository integracoes;
     private final LojaRepository lojas;
+    private final br.com.bora.service.WhatsAppSender envio;
 
-    public WhatsAppController(IntegracaoCanalRepository integracoes, LojaRepository lojas) {
+    public WhatsAppController(IntegracaoCanalRepository integracoes, LojaRepository lojas,
+                              br.com.bora.service.WhatsAppSender envio) {
         this.integracoes = integracoes;
         this.lojas = lojas;
+        this.envio = envio;
     }
 
     /** Verificação do webhook (Meta chama com hub.challenge ao configurar). */
@@ -87,24 +89,10 @@ public class WhatsAppController {
                         + "*2* 🕒 Horário de funcionamento\n"
                         + "*3* 👤 Falar com um atendente\n\nOu peça agora: " + linkCardapio;
             }
-            enviar(i, de, resposta);
+            envio.enviar(i, de, resposta);
         } catch (Exception e) {
             log.warn("WhatsApp loja {}: erro ao processar mensagem: {}", lojaId, e.getMessage());
         }
         return Map.of("status", "ok");
-    }
-
-    private void enviar(IntegracaoCanal i, String para, String texto) {
-        try {
-            br.com.bora.service.TempoLimite.cliente().build().post()
-                    .uri("https://graph.facebook.com/v20.0/" + i.clientId + "/messages")
-                    .header("Authorization", "Bearer " + i.clientSecret)
-                    .header("Content-Type", "application/json")
-                    .body(Map.of("messaging_product", "whatsapp", "to", para,
-                            "type", "text", "text", Map.of("body", texto)))
-                    .retrieve().body(Map.class);
-        } catch (Exception e) {
-            log.warn("WhatsApp loja {}: falha ao enviar resposta: {}", i.lojaId, e.getMessage());
-        }
     }
 }
