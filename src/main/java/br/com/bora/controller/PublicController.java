@@ -12,6 +12,7 @@ import br.com.bora.repository.PedidoItemRepository;
 import br.com.bora.repository.PedidoRepository;
 import br.com.bora.repository.ProdutoRepository;
 import br.com.bora.service.ComplementoService;
+import br.com.bora.service.RepetirPedidoService;
 import br.com.bora.service.PixService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -411,9 +412,9 @@ public class PublicController {
                 item.setPedidoId(p.id);
                 item.setProdutoId(prod.id);
                 item.setDescricao(nomeItem);
-                // Os ids, e nao so os nomes da descricao: e o que permite repetir o pedido depois.
-                item.setComplementos(escolhidos.isEmpty() ? null
-                        : escolhidos.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")));
+                // Nome e preco junto, nao so o id: ver ComplementosDoItem. Lista vazia grava "[]",
+                // que diz "nao tinha adicional" — diferente de nulo, que diz "nao sei".
+                item.setComplementos(br.com.bora.service.ComplementosDoItem.escrever(escolha.escolhidos()));
                 item.setQuantidade(qtd);
                 BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
                 item.setPrecoUnitario(unit);
@@ -567,25 +568,27 @@ public class PublicController {
         return m;
     }
 
-    /** Status público do pedido (para a tela de acompanhamento do QR PIX). */
     /**
      * O carrinho sugerido a partir de um pedido antigo, para o cliente repetir o que ja pediu.
      *
-     * <p>Exige a assinatura do link ({@code t}). Sem ela responde 404, e nao 403: dizer "assinatura
-     * errada" confirmaria que o pedido existe, que e metade do que alguem varrendo numeros quer
-     * saber.</p>
+     * <p>Exige a assinatura do link ({@code t}), conferida dentro do servico. Assinatura errada e
+     * pedido inexistente devolvem o <b>mesmo</b> 404: um 403 separado confirmaria que o pedido
+     * existe, que e metade do que alguem varrendo numeros quer saber.</p>
+     *
+     * <p>{@code lojaAtiva} vem depois da assinatura, e nao antes, para o endpoint nao virar oraculo
+     * de quais lojas existem.</p>
      */
     @GetMapping("/loja/{lojaId}/pedido/{pedidoId}/repetir")
-    public Map<String, Object> repetirPedido(@PathVariable Long lojaId, @PathVariable Long pedidoId,
-                                             @RequestParam(name = "t", required = false) String t) {
-        if (!repetir.tokenValido(lojaId, pedidoId, t)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado");
-        }
-        Map<String, Object> m = repetir.montar(lojaId, pedidoId);
-        if (m == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado");
-        return m;
+    public RepetirPedidoService.CarrinhoSugerido repetirPedido(
+            @PathVariable Long lojaId, @PathVariable Long pedidoId,
+            @RequestParam(name = "t", required = false) String t) {
+        var carrinho = repetir.abrir(lojaId, pedidoId, t)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado"));
+        lojaAtiva(lojaId); // loja suspensa ou vencida nao serve link antigo, igual ao cardapio
+        return carrinho;
     }
 
+    /** Status público do pedido (para a tela de acompanhamento do QR PIX). */
     @GetMapping("/loja/{lojaId}/pedido/{pedidoId}/status")
     public Map<String, Object> statusPedido(@PathVariable Long lojaId, @PathVariable Long pedidoId) {
         Pedido p = pedidos.findByIdAndLojaId(pedidoId, lojaId)

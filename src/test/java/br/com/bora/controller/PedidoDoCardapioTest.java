@@ -34,6 +34,7 @@ class PedidoDoCardapioTest {
     private TaxaEntregaRepository taxas;
     private InsumoService insumos;
     private br.com.bora.service.DevolucaoDeEstoqueService devolucaoDeEstoque;
+    private ComplementoService complementos;
     private CupomRepository cupons;
     private PublicController controller;
     private Produto acai;
@@ -48,7 +49,7 @@ class PedidoDoCardapioTest {
         taxas = mock(TaxaEntregaRepository.class);
         insumos = mock(InsumoService.class);
         cupons = mock(CupomRepository.class);
-        ComplementoService complementos = mock(ComplementoService.class);
+        complementos = mock(ComplementoService.class);
         when(complementos.aplicar(anyLong(), any(), any()))
                 .thenReturn(new ComplementoService.Escolha(BigDecimal.ZERO, List.of()));
         OperacaoService operacao = mock(OperacaoService.class);
@@ -331,5 +332,27 @@ class PedidoDoCardapioTest {
         verify(itens, atLeastOnce()).save(comFicha.capture());
         assertEquals(Boolean.TRUE, comFicha.getValue().getConsumiuFicha(),
                 "com ficha, o item consumiu insumo");
+    }
+
+    /**
+     * O pedido do cardapio guarda o que foi escolhido, igual ao do balcao.
+     *
+     * <p>Sao dois caminhos diferentes criando pedido. Enquanto so um tinha teste, apagar a gravacao
+     * no outro passava despercebido.</p>
+     */
+    @Test
+    void itemDoCardapioGuardaOsComplementosEscolhidos() {
+        when(complementos.aplicar(anyLong(), any(), any()))
+                .thenReturn(new ComplementoService.Escolha(new BigDecimal("2.00"),
+                        List.of(new ComplementoService.Escolhido(12L, "Granola", new BigDecimal("2.00")))));
+
+        controller.pedirOnline(1L, corpo("itens",
+                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))));
+
+        var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
+        verify(itens).save(c.capture());
+        var guardado = br.com.bora.service.ComplementosDoItem.ler(c.getValue().getComplementos());
+        assertNotNull(guardado, "sem registro, o repetir nao tem como refazer o item");
+        assertEquals("Granola", guardado.get(0).nome());
     }
 }

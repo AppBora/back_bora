@@ -25,7 +25,8 @@ public class WhatsAppSender {
                     .retrieve().body(Map.class);
             return true;
         } catch (Exception e) {
-            log.warn("WhatsApp loja {}: falha ao enviar p/ {}: {}", i.lojaId, para, e.getMessage());
+            // Sem o numero: e telefone de cliente final, e log nao e lugar de dado pessoal (LGPD).
+            log.warn("WhatsApp loja {}: falha ao enviar: {}", i.lojaId, e.getMessage());
             return false;
         }
     }

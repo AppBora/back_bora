@@ -101,6 +101,26 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     /** PIX gerado e nunca pago, mais velho que o corte — o cobrador cancela estes. */
     List<Pedido> findByAguardandoPagamentoTrueAndCriadoEmBefore(OffsetDateTime corte);
     Optional<Pedido> findByIdAndLojaId(Long id, Long lojaId);
+
+    /**
+     * O ultimo pedido REPETIVEL de cada cliente da loja, numa consulta so.
+     *
+     * <p>Antes isto era uma consulta por cliente dentro de um laco: abrir o CRM de uma loja com 500
+     * clientes custava 501 idas ao banco, cada uma varrendo os pedidos da loja por falta de indice
+     * com {@code cliente_id} (criado na V47).</p>
+     *
+     * <p>"Repetivel" exclui o que nao faz sentido oferecer de volta: pedido CANCELADO (inclusive o
+     * PIX que expirou) e pedido de marketplace, cujos itens nao guardam {@code produto_id} e por
+     * isso nao remontam. Sem esse filtro o botao aparecia e levava a carrinho vazio.</p>
+     *
+     * <p>Usa {@code max(id)} e nao {@code criadoEm} porque o id e sequencial e nao empata.</p>
+     */
+    @Query("select p.clienteId, max(p.id) from Pedido p "
+         + "where p.lojaId = :lojaId and p.clienteId is not null "
+         + "and p.status <> br.com.bora.entity.StatusPedido.CANCELADO "
+         + "and p.canalExterno is null "
+         + "group by p.clienteId")
+    List<Object[]> ultimoPedidoRepetivelPorCliente(@Param("lojaId") Long lojaId);
     long countByLojaIdAndCriadoEmAfter(Long lojaId, OffsetDateTime inicio); // RN09 — limite de pedidos/mês
     Optional<Pedido> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno); // idempotência webhook
 

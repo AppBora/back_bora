@@ -13,50 +13,66 @@ import br.com.bora.repository.ProdutoRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * "Repetir o ultimo pedido": remonta no carrinho o que o cliente ja pediu.
  *
  * <h2>Por que o link e assinado</h2>
  * <p>O pedido tem o que a pessoa comeu, e os ids sao sequenciais. Um link que aceitasse so
- * {@code ?pedido=105} deixaria qualquer um varrer os numeros e ler o pedido dos outros. Por isso o
- * link leva uma assinatura derivada do segredo do servidor: sem ela, 404.</p>
+ * {@code ?pedido=105} deixaria qualquer um varrer os numeros e ler o pedido dos outros. A
+ * assinatura e conferida <b>aqui dentro</b>, antes de qualquer acesso ao banco: deixar isso no
+ * controller ja permitiu que uma mutacao removesse a checagem sem nenhum teste reclamar.</p>
  *
  * <h2>Por que nao reaproveita o ComplementoService.aplicar</h2>
  * <p>Aquele metodo <b>lanca 400</b> quando um complemento nao existe mais ou quando o grupo ficou
  * fora do minimo/maximo — o que e certo na hora de criar o pedido, e errado aqui: o cardapio de
- * hoje nao e o de um mes atras, e o link nao pode quebrar porque a loja mexeu no cardapio. Aqui a
- * validacao e por fora e <b>degrada</b>: o que da para remontar vai para o carrinho, o resto vira
- * aviso na tela.</p>
+ * hoje nao e o de um mes atras, e o link nao pode quebrar porque a loja mexeu no cardapio. A
+ * validacao aqui <b>degrada</b>: o que da para remontar vai para o carrinho, o resto vira aviso.
+ * Os limites do grupo saem de {@link ComplementoService#minimoDe} e {@link ComplementoService#maximoDe},
+ * para a regra nao divergir entre criar e repetir.</p>
+ *
+ * <h2>Por que casa por nome quando o id some</h2>
+ * <p>{@code ComplementoController.salvar} apaga e recria os complementos do produto a cada
+ * gravacao, com ids novos. Casar so por id faria o repetir perder os adicionais na primeira vez que
+ * o lojista corrigisse um preco. Como o item do pedido guarda o <b>nome</b>
+ * (ver {@link ComplementosDoItem}), da para reencontrar o mesmo adicional depois do cadastro ser
+ * refeito.</p>
  *
  * <h2>O que este servico nunca faz</h2>
- * <p>Nao cria pedido e nao cobra nada. Ele devolve uma sugestao de carrinho; quem confirma e paga e
- * o cliente, na tela do cardapio, como em qualquer pedido.</p>
+ * <p>Nao cria pedido e nao cobra nada. Devolve uma sugestao de carrinho; quem confirma e paga e o
+ * cliente, na tela do cardapio, como em qualquer pedido.</p>
  */
 @Slf4j
 @Service
 public class RepetirPedidoService {
+
+    /** 12 bytes = 96 bits de assinatura: inquebravel na pratica e cabe numa URL de WhatsApp. */
+    private static final int BYTES_DA_ASSINATURA = 12;
+    private static final String ALGORITMO = "HmacSHA256";
 
     private final PedidoRepository pedidos;
     private final PedidoItemRepository itens;
     private final ProdutoRepository produtos;
     private final ComplementoGrupoRepository grupos;
     private final ComplementoItemRepository complementos;
-    private final byte[] chave;
+    private final SecretKeySpec chave;
 
     public RepetirPedidoService(PedidoRepository pedidos, PedidoItemRepository itens,
                                 ProdutoRepository produtos, ComplementoGrupoRepository grupos,
@@ -69,21 +85,31 @@ public class RepetirPedidoService {
         this.complementos = complementos;
         // Deriva uma chave propria do segredo do servidor. O prefixo separa o uso: assinatura de
         // link de repeticao nao e token de sessao, e nao deve valer uma pela outra.
-        this.chave = ("repetir-pedido|" + segredo).getBytes(StandardCharsets.UTF_8);
+        this.chave = new SecretKeySpec(("repetir-pedido|" + segredo).getBytes(StandardCharsets.UTF_8), ALGORITMO);
+        if (segredo.startsWith("troque-")) {
+            log.warn("ATENCAO: bora.jwt.secret esta no valor padrao do repositorio. "
+                    + "Qualquer pessoa consegue forjar o link de repetir pedido.");
+        }
     }
+
+    // ---------------------------------------------------------------- o que sai daqui
+
+    public record ItemSugerido(Long produtoId, String nome, int quantidade, List<Long> complementos) {}
+
+    public record CarrinhoSugerido(String codigo, OffsetDateTime feitoEm,
+                                   List<ItemSugerido> itens, List<String> avisos) {}
 
     // ---------------------------------------------------------------- assinatura
 
     /** Assinatura curta deste pedido, para entrar na URL. */
     public String token(Long lojaId, Long pedidoId) {
         try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(chave, "HmacSHA256"));
+            Mac mac = Mac.getInstance(ALGORITMO); // Mac nao e thread-safe: um por chamada e o certo
+            mac.init(chave);
             byte[] h = mac.doFinal((lojaId + ":" + pedidoId).getBytes(StandardCharsets.UTF_8));
-            // 12 bytes = 96 bits de assinatura: inquebravel na pratica e cabe numa URL de WhatsApp.
-            return java.util.Base64.getUrlEncoder().withoutPadding()
-                    .encodeToString(java.util.Arrays.copyOf(h, 12));
-        } catch (Exception e) {
+            return Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(java.util.Arrays.copyOf(h, BYTES_DA_ASSINATURA));
+        } catch (GeneralSecurityException e) {
             throw new IllegalStateException("falha ao assinar o link de repeticao", e);
         }
     }
@@ -95,128 +121,199 @@ public class RepetirPedidoService {
                 recebido.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** O link que a loja manda para o cliente, ou vazio se o cliente nunca pediu nesta loja. */
-    public Optional<String> linkDoUltimoPedido(String base, Long lojaId, Long clienteId) {
-        if (clienteId == null) return Optional.empty();
-        return pedidos.findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(lojaId, clienteId)
-                .map(p -> base + "/cardapio.html?loja=" + lojaId + "&repetir=" + p.id + "&t=" + token(lojaId, p.id));
+    /** Os links de "repetir" de todos os clientes da loja que tem pedido repetivel, numa consulta. */
+    public Map<Long, String> linksDosUltimosPedidos(String base, Long lojaId) {
+        Map<Long, String> m = new LinkedHashMap<>();
+        for (Object[] linha : pedidos.ultimoPedidoRepetivelPorCliente(lojaId)) {
+            Long clienteId = (Long) linha[0], pedidoId = (Long) linha[1];
+            if (clienteId == null || pedidoId == null) continue;
+            m.put(clienteId, link(base, lojaId, pedidoId));
+        }
+        return m;
+    }
+
+    private String link(String base, Long lojaId, Long pedidoId) {
+        return base + "/cardapio.html?loja=" + lojaId + "&repetir=" + pedidoId
+                + "&t=" + token(lojaId, pedidoId);
     }
 
     // ---------------------------------------------------------------- remontagem
 
     /**
-     * O carrinho sugerido a partir de um pedido antigo, mais o que mudou desde entao.
+     * O carrinho sugerido a partir de um pedido antigo, se a assinatura conferir.
      *
-     * <p>Cada item volta com {@code produtoId}, {@code quantidade} e os complementos que ainda
-     * existem. Item que nao da para remontar sozinho nao entra no carrinho: entra na lista de
-     * avisos, para o cliente escolher na mao em vez de receber algo diferente do que pediu.</p>
+     * <p>Vazio tanto para assinatura errada quanto para pedido inexistente: quem chama devolve o
+     * mesmo 404 nos dois casos, e um 403 separado confirmaria que o pedido existe.</p>
      */
-    public Map<String, Object> montar(Long lojaId, Long pedidoId) {
-        Pedido pedido = pedidos.findByIdAndLojaId(pedidoId, lojaId).orElse(null);
-        if (pedido == null) return null;
-
-        List<PedidoItem> linhas = itens.findByLojaIdAndPedidoIdOrderById(lojaId, pedidoId);
-        List<Map<String, Object>> carrinho = new ArrayList<>();
-        List<String> avisos = new ArrayList<>();
-
-        for (PedidoItem li : linhas) {
-            String nome = li.getDescricao() == null ? "Item" : li.getDescricao();
-            if (li.getProdutoId() == null) {
-                avisos.add(nome + " não pode ser repetido automaticamente");
-                continue;
-            }
-            Produto prod = produtos.findByIdAndLojaId(li.getProdutoId(), lojaId).orElse(null);
-            if (prod == null || !Boolean.TRUE.equals(prod.ativo)) {
-                avisos.add(nomeCurto(nome) + " saiu do cardápio");
-                continue;
-            }
-
-            Resultado r = complementosQueAindaValem(lojaId, prod, li.getComplementos());
-            if (r.precisaEscolherDeNovo) {
-                avisos.add(prod.nome + ": escolha os adicionais de novo, o cardápio mudou");
-                continue;
-            }
-            if (r.removidos > 0) {
-                avisos.add(prod.nome + ": " + r.removidos + " adicional(is) não existe(m) mais");
-            }
-
-            BigDecimal agora = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(r.acrescimo);
-            if (li.getPrecoUnitario() != null && li.getPrecoUnitario().compareTo(agora) != 0) {
-                avisos.add(prod.nome + " mudou de preço");
-            }
-
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("produtoId", prod.id);
-            item.put("nome", prod.nome);
-            item.put("quantidade", li.getQuantidade() == null ? 1 : li.getQuantidade());
-            item.put("complementos", r.ids);
-            carrinho.add(item);
-        }
-
-        Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("codigo", pedido.codigo == null ? String.valueOf(pedido.id) : pedido.codigo);
-        resp.put("feitoEm", pedido.criadoEm);
-        resp.put("itens", carrinho);
-        resp.put("avisos", avisos);
-        return resp;
+    @Transactional(readOnly = true)
+    public Optional<CarrinhoSugerido> abrir(Long lojaId, Long pedidoId, String token) {
+        if (!tokenValido(lojaId, pedidoId, token)) return Optional.empty();
+        return pedidos.findByIdAndLojaId(pedidoId, lojaId).map(p -> montar(lojaId, p));
     }
 
-    private record Resultado(List<Long> ids, BigDecimal acrescimo, int removidos, boolean precisaEscolherDeNovo) {}
+    private CarrinhoSugerido montar(Long lojaId, Pedido pedido) {
+        List<PedidoItem> linhas = itens.findByLojaIdAndPedidoIdOrderById(lojaId, pedido.id);
+        Cardapio cardapio = cardapioDe(lojaId, linhas);
+
+        List<ItemSugerido> carrinho = new ArrayList<>();
+        List<String> avisos = new ArrayList<>();
+        for (PedidoItem li : linhas) remontarLinha(lojaId, li, cardapio, carrinho, avisos);
+
+        return new CarrinhoSugerido(pedido.codigo == null ? String.valueOf(pedido.id) : pedido.codigo,
+                pedido.criadoEm, carrinho, avisos);
+    }
+
+    private void remontarLinha(Long lojaId, PedidoItem li, Cardapio cardapio,
+                               List<ItemSugerido> carrinho, List<String> avisos) {
+        String descricao = li.getDescricao() == null ? "Item" : li.getDescricao();
+        if (li.getProdutoId() == null) {
+            // Pedido de marketplace: os itens nao guardam produto_id, entao nao ha o que remontar.
+            avisos.add(nomeCurto(descricao) + " veio de aplicativo e não pode ser repetido por aqui");
+            return;
+        }
+        Produto prod = cardapio.produtos.get(li.getProdutoId());
+        if (prod == null || !Boolean.TRUE.equals(prod.ativo)) {
+            avisos.add(nomeCurto(descricao) + " saiu do cardápio");
+            return;
+        }
+
+        List<ComplementoService.Escolhido> guardados = ComplementosDoItem.ler(li.getComplementos());
+        List<ComplementoGrupo> gs = cardapio.gruposDe(prod.id);
+
+        if (guardados == null) {
+            // Item criado antes de o pedido registrar os complementos. Nao se sabe o que foi
+            // escolhido — e um produto com grupo nenhum nao tinha o que escolher.
+            if (!gs.isEmpty()) {
+                avisos.add(prod.nome + ": escolha os adicionais de novo, esse pedido é antigo");
+                return;
+            }
+            carrinho.add(new ItemSugerido(prod.id, prod.nome, quantidadeDe(li), List.of()));
+            return;
+        }
+
+        Reencontro r = reencontrar(guardados, gs, cardapio);
+        if (r.faltouObrigatorio) {
+            avisos.add(prod.nome + ": escolha os adicionais de novo, o cardápio mudou");
+            return;
+        }
+        if (!r.sumiram.isEmpty()) {
+            avisos.add(prod.nome + ": " + String.join(", ", r.sumiram)
+                    + (r.sumiram.size() == 1 ? " não está mais no cardápio" : " não estão mais no cardápio"));
+        }
+
+        BigDecimal agora = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(r.acrescimo);
+        BigDecimal pago = li.getPrecoUnitario();
+        // So avisa de preco quando NADA sumiu: se um adicional saiu, o valor muda por causa disso,
+        // e dizer "mudou de preco" junto seria culpar o reajuste por uma coisa que nao houve.
+        if (r.sumiram.isEmpty() && pago != null && pago.compareTo(agora) != 0) {
+            avisos.add(prod.nome + " mudou de preço");
+        }
+
+        carrinho.add(new ItemSugerido(prod.id, prod.nome, quantidadeDe(li), r.ids));
+    }
+
+    private static int quantidadeDe(PedidoItem li) {
+        Integer q = li.getQuantidade();
+        return q == null || q < 1 ? 1 : q;
+    }
+
+    // ---------------------------------------------------------------- cardapio de hoje, em lote
+
+    /** O que o cardapio de hoje tem dos produtos deste pedido. Tres consultas, nao tres por item. */
+    private record Cardapio(Map<Long, Produto> produtos,
+                            Map<Long, List<ComplementoGrupo>> gruposPorProduto,
+                            Map<Long, ComplementoItem> itensPorId,
+                            Map<Long, Map<String, ComplementoItem>> itensPorNome) {
+        List<ComplementoGrupo> gruposDe(Long produtoId) {
+            return gruposPorProduto.getOrDefault(produtoId, List.of());
+        }
+    }
+
+    private Cardapio cardapioDe(Long lojaId, List<PedidoItem> linhas) {
+        List<Long> produtoIds = linhas.stream().map(PedidoItem::getProdutoId).filter(java.util.Objects::nonNull).distinct().toList();
+        if (produtoIds.isEmpty()) return new Cardapio(Map.of(), Map.of(), Map.of(), Map.of());
+
+        Map<Long, Produto> porId = new HashMap<>();
+        produtos.findByLojaIdAndIdIn(lojaId, produtoIds).forEach(p -> porId.put(p.id, p));
+
+        Map<Long, List<ComplementoGrupo>> porProduto = new HashMap<>();
+        List<ComplementoGrupo> todosGrupos = grupos.findByLojaIdAndProdutoIdInOrderById(lojaId, produtoIds);
+        todosGrupos.forEach(g -> porProduto.computeIfAbsent(g.produtoId, k -> new ArrayList<>()).add(g));
+
+        Map<Long, ComplementoItem> porItemId = new HashMap<>();
+        Map<Long, Map<String, ComplementoItem>> porNome = new HashMap<>();
+        if (!todosGrupos.isEmpty()) {
+            complementos.findByLojaIdAndGrupoIdInOrderById(lojaId, todosGrupos.stream().map(g -> g.id).toList())
+                    .forEach(ci -> {
+                        porItemId.put(ci.id, ci);
+                        porNome.computeIfAbsent(ci.grupoId, k -> new HashMap<>()).put(chave(ci.nome), ci);
+                    });
+        }
+        return new Cardapio(porId, porProduto, porItemId, porNome);
+    }
+
+    /** Nome normalizado, para "Leite Ninho" e "leite ninho " serem o mesmo adicional. */
+    private static String chave(String nome) {
+        return nome == null ? "" : nome.trim().toLowerCase(Locale.ROOT);
+    }
+
+    // ---------------------------------------------------------------- reencontrar os adicionais
+
+    private record Reencontro(List<Long> ids, BigDecimal acrescimo, List<String> sumiram, boolean faltouObrigatorio) {}
 
     /**
-     * Filtra os complementos salvos contra o cardapio de hoje.
-     *
-     * <p>Marca {@code precisaEscolherDeNovo} quando o que sobrou nao satisfaz mais o minimo de um
-     * grupo obrigatorio — por exemplo, o unico tamanho que o cliente escolhia foi removido. Nesse
-     * caso remontar daria um item invalido, que so estouraria no fim, na hora de fechar o pedido.</p>
+     * Procura no cardapio de hoje cada adicional que o pedido guardou: primeiro pelo id, depois pelo
+     * nome dentro do mesmo grupo. O segundo passo e o que faz o repetir sobreviver a uma regravacao
+     * do cardapio, que troca todos os ids.
      */
-    private Resultado complementosQueAindaValem(Long lojaId, Produto prod, String salvos) {
-        List<ComplementoGrupo> gs = grupos.findByLojaIdAndProdutoIdOrderById(lojaId, prod.id);
-
-        List<Long> pedidos = new ArrayList<>();
-        if (salvos != null && !salvos.isBlank()) {
-            for (String p : salvos.split(",")) {
-                try { pedidos.add(Long.valueOf(p.trim())); } catch (NumberFormatException ignored) { }
-            }
-        }
-
+    private Reencontro reencontrar(List<ComplementoService.Escolhido> guardados,
+                                   List<ComplementoGrupo> gs, Cardapio cardapio) {
         if (gs.isEmpty()) {
-            // Produto sem complementos hoje. Se o pedido antigo tinha algum, ele simplesmente nao
-            // existe mais — nao e motivo para bloquear a repeticao do produto.
-            return new Resultado(List.of(), BigDecimal.ZERO, pedidos.size(), false);
+            // O produto nao tem mais grupo nenhum: nao ha onde encaixar o que foi escolhido, mas
+            // isso nao impede repetir o produto.
+            List<String> sumiram = guardados.stream().map(ComplementoService.Escolhido::nome).toList();
+            return new Reencontro(List.of(), BigDecimal.ZERO, sumiram, false);
         }
 
-        Map<Long, ComplementoItem> catalogo = new HashMap<>();
-        complementos.findByLojaIdAndGrupoIdInOrderById(lojaId, gs.stream().map(g -> g.id).toList())
-                .forEach(ci -> catalogo.put(ci.id, ci));
-
-        List<Long> validos = new ArrayList<>();
+        List<Long> ids = new ArrayList<>();
+        List<String> sumiram = new ArrayList<>();
         Map<Long, Integer> porGrupo = new HashMap<>();
         BigDecimal acrescimo = BigDecimal.ZERO;
-        int removidos = 0;
-        Set<Long> jaVistos = new HashSet<>();
-        for (Long id : pedidos) {
-            ComplementoItem ci = catalogo.get(id);
-            if (ci == null || !jaVistos.add(id)) { removidos++; continue; }
-            validos.add(id);
-            porGrupo.merge(ci.grupoId, 1, Integer::sum);
-            acrescimo = acrescimo.add(ci.preco == null ? BigDecimal.ZERO : ci.preco);
+
+        for (ComplementoService.Escolhido g : guardados) {
+            ComplementoItem achado = cardapio.itensPorId.get(g.id());
+            if (achado == null || !pertence(achado, gs)) achado = porNomeNosGrupos(g.nome(), gs, cardapio);
+            if (achado == null) { sumiram.add(g.nome()); continue; }
+            ids.add(achado.id);
+            porGrupo.merge(achado.grupoId, 1, Integer::sum);
+            acrescimo = acrescimo.add(achado.preco == null ? BigDecimal.ZERO : achado.preco);
         }
 
-        for (ComplementoGrupo g : gs) {
-            int min = g.minimo == null ? 0 : g.minimo;
-            int max = g.maximo == null ? 1 : g.maximo;
-            int tem = porGrupo.getOrDefault(g.id, 0);
+        for (ComplementoGrupo grupo : gs) {
+            int tem = porGrupo.getOrDefault(grupo.id, 0);
             // Abaixo do minimo: faltou algo obrigatorio. Acima do maximo: a loja apertou a regra
-            // depois. Nos dois casos o cliente tem que escolher de novo, nao a gente por ele.
-            if (tem < min || tem > max) return new Resultado(List.of(), BigDecimal.ZERO, removidos, true);
+            // depois. Nos dois casos o cliente escolhe de novo, em vez de a gente escolher por ele.
+            if (tem < ComplementoService.minimoDe(grupo) || tem > ComplementoService.maximoDe(grupo)) {
+                return new Reencontro(List.of(), BigDecimal.ZERO, sumiram, true);
+            }
         }
+        return new Reencontro(ids, acrescimo, sumiram, false);
+    }
 
-        return new Resultado(validos, acrescimo, removidos, false);
+    private static boolean pertence(ComplementoItem ci, List<ComplementoGrupo> gs) {
+        return gs.stream().anyMatch(g -> g.id.equals(ci.grupoId));
+    }
+
+    private static ComplementoItem porNomeNosGrupos(String nome, List<ComplementoGrupo> gs, Cardapio cardapio) {
+        for (ComplementoGrupo g : gs) {
+            ComplementoItem ci = cardapio.itensPorNome.getOrDefault(g.id, Map.of()).get(chave(nome));
+            if (ci != null) return ci;
+        }
+        return null;
     }
 
     /** "Copo 500ml (Granola)" -> "Copo 500ml": o aviso fala do produto, nao da escolha antiga. */
-    private String nomeCurto(String descricao) {
+    private static String nomeCurto(String descricao) {
         int i = descricao.indexOf(" (");
         return i > 0 ? descricao.substring(0, i) : descricao;
     }

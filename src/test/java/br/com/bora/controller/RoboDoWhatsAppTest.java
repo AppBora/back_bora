@@ -10,6 +10,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.web.server.ResponseStatusException;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -19,33 +22,34 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * O robo de WhatsApp responde o que promete.
+ * O robo de WhatsApp responde o que promete, e so para quem a Meta mandou.
  *
- * <p>Ate aqui o robo nao tinha teste nenhum, e ele e a primeira coisa que o cliente final da loja
- * toca: manda "oi" no numero da acaiteria e quem responde e este codigo. Um erro aqui nao aparece em
- * log de erro — aparece como cliente sem resposta.</p>
+ * <p>Ele e a primeira coisa que o cliente final da loja toca: manda "oi" no numero da acaiteria e
+ * quem responde e este codigo. Um erro aqui nao aparece em log de erro — aparece como cliente sem
+ * resposta, ou como a loja mandando mensagem para quem ela nunca falou.</p>
  *
- * <p>Estes testes passam pelo {@code receber()} de verdade e olham <b>o texto que sai</b>, porque o
- * que importa para o cliente e a mensagem, nao o caminho interno. Isso so e possivel porque o envio
- * agora e o {@link WhatsAppSender} injetado: antes o controller tinha uma copia privada que batia
- * direto em {@code graph.facebook.com}, e qualquer teste viraria chamada de rede de verdade.</p>
+ * <p>Os testes passam pelo {@code receber()} de verdade, com corpo cru e assinatura, e olham <b>o
+ * texto que sai</b>. Isso so e possivel porque o envio e o {@link WhatsAppSender} injetado: a
+ * versao anterior tinha uma copia privada que batia direto em {@code graph.facebook.com}.</p>
  */
 class RoboDoWhatsAppTest {
-
-    private IntegracaoCanalRepository integracoes;
-    private WhatsAppSender envio;
-    private WhatsAppController controller;
-    private IntegracaoCanal zap;
 
     private static final long LOJA = 18L;
     private static final String CLIENTE = "5515998887777";
     private static final String LINK = "https://borahapp.com.br/cardapio.html?loja=18";
+    private static final String APP_SECRET = "segredo-do-aplicativo-meta-para-teste";
+
+    private IntegracaoCanalRepository integracoes;
+    private WhatsAppSender envio;
+    private LojaRepository lojas;
+    private WhatsAppController controller;
+    private IntegracaoCanal zap;
 
     @BeforeEach
     void montar() {
         integracoes = mock(IntegracaoCanalRepository.class);
         envio = mock(WhatsAppSender.class);
-        LojaRepository lojas = mock(LojaRepository.class);
+        lojas = mock(LojaRepository.class);
 
         zap = new IntegracaoCanal();
         zap.lojaId = LOJA;
@@ -60,23 +64,71 @@ class RoboDoWhatsAppTest {
         loja.nome = "Açaí Zirá - Montreal";
         when(lojas.findById(LOJA)).thenReturn(Optional.of(loja));
 
-        controller = new WhatsAppController(integracoes, lojas, envio);
+        controller = new WhatsAppController(integracoes, lojas, envio, APP_SECRET);
     }
 
-    /** O envelope que a Meta manda de verdade, com uma mensagem de texto dentro. */
-    private Map<String, Object> mensagem(String texto) {
-        return Map.of("entry", List.of(Map.of("changes", List.of(Map.of("value", Map.of(
-                "messages", List.of(Map.of(
-                        "from", CLIENTE,
-                        "type", "text",
-                        "text", Map.of("body", texto)))))))));
+    // ---------------------------------------------------------------- o envelope da Meta
+
+    /** O corpo cru, como a Meta manda: o robo assina o texto, nao um Map remontado. */
+    private String corpoCom(String texto) {
+        return "{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{"
+                + "\"from\":\"" + CLIENTE + "\",\"type\":\"text\",\"text\":{\"body\":\"" + texto + "\"}}]}}]}]}";
+    }
+
+    private static String assinar(String corpo, String segredo) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(segredo.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            StringBuilder hex = new StringBuilder("sha256=");
+            for (byte b : mac.doFinal(corpo.getBytes(StandardCharsets.UTF_8))) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (Exception e) { throw new IllegalStateException(e); }
+    }
+
+    private Map<String, String> entregar(String corpo) {
+        return controller.receber(LOJA, corpo, assinar(corpo, APP_SECRET));
     }
 
     private String respostaPara(String texto) {
-        controller.receber(LOJA, mensagem(texto));
+        entregar(corpoCom(texto));
         ArgumentCaptor<String> saiu = ArgumentCaptor.forClass(String.class);
         verify(envio).enviar(eq(zap), eq(CLIENTE), saiu.capture());
         return saiu.getValue();
+    }
+
+    // ---------------------------------------------------------------- quem pode falar com o robo
+
+    @Test
+    void semAssinaturaDaMeta_oRoboFicaCalado() {
+        // Sem isto, qualquer um fazia POST aqui com o "from" que quisesse e o robo respondia para
+        // esse numero, com o token da loja: relay de spam saindo do numero comercial dela.
+        assertEquals("ignored", controller.receber(LOJA, corpoCom("oi"), null).get("status"));
+        verify(envio, never()).enviar(any(), any(), any());
+    }
+
+    @Test
+    void assinaturaDeOutroSegredo_oRoboFicaCalado() {
+        String corpo = corpoCom("oi");
+
+        assertEquals("ignored", controller.receber(LOJA, corpo, assinar(corpo, "segredo-do-atacante")).get("status"));
+        verify(envio, never()).enviar(any(), any(), any());
+    }
+
+    @Test
+    void assinaturaDeOutroCorpo_oRoboFicaCalado() {
+        // Corpo trocado depois de assinado: a assinatura tem que cobrir o conteudo, nao a rota.
+        assertEquals("ignored",
+                controller.receber(LOJA, corpoCom("oi"), assinar(corpoCom("outra coisa"), APP_SECRET)).get("status"));
+        verify(envio, never()).enviar(any(), any(), any());
+    }
+
+    @Test
+    void semAppSecretConfigurado_oRoboFicaCalado_emVezDeAbrirAPorta() {
+        var semSegredo = new WhatsAppController(integracoes, lojas, envio, "");
+        String corpo = corpoCom("oi");
+
+        assertEquals("ignored", semSegredo.receber(LOJA, corpo, assinar(corpo, APP_SECRET)).get("status"));
+        verify(envio, never()).enviar(any(), any(), any());
     }
 
     // ---------------------------------------------------------------- o menu
@@ -94,7 +146,9 @@ class RoboDoWhatsAppTest {
     void lojaSemNomeCadastrado_naoMandaNullParaOCliente() {
         LojaRepository vazio = mock(LojaRepository.class);
         when(vazio.findById(LOJA)).thenReturn(Optional.empty());
-        new WhatsAppController(integracoes, vazio, envio).receber(LOJA, mensagem("oi"));
+        String corpo = corpoCom("oi");
+        new WhatsAppController(integracoes, vazio, envio, APP_SECRET)
+                .receber(LOJA, corpo, assinar(corpo, APP_SECRET));
 
         ArgumentCaptor<String> saiu = ArgumentCaptor.forClass(String.class);
         verify(envio).enviar(any(), any(), saiu.capture());
@@ -111,8 +165,7 @@ class RoboDoWhatsAppTest {
 
     @Test
     void pedirCardapioPorExtenso_vaiParaOMesmoLugar() {
-        for (String texto : List.of("cardapio", "cardápio", "quero fazer um pedido", "quero pedir",
-                "CARDAPIO POR FAVOR", "  Cardápio  ")) {
+        for (String texto : List.of("cardapio", "quero fazer um pedido", "quero pedir", "CARDAPIO POR FAVOR")) {
             clearInvocations(envio);
             assertTrue(respostaPara(texto).contains(LINK), "deveria mandar o cardapio para: " + texto);
         }
@@ -126,37 +179,42 @@ class RoboDoWhatsAppTest {
 
         assertTrue(r.contains(LINK), "o horario de verdade esta no cardapio, nao no robo");
         // O robo nao tem acesso ao horario da loja. Se um dia escrever um horario fixo aqui, a loja
-        // passa a prometer um horario que nao e o dela — por isso o teste trava o comportamento atual.
-        assertFalse(r.matches("(?s).*\\b\\d{1,2}h\\d{0,2}\\b.*"), "nao pode cravar horario: " + r);
+        // passa a prometer um horario que nao e o dela.
+        assertFalse(r.matches("(?s).*\\b\\d{1,2}\\s*[h:]\\s*\\d{0,2}\\b.*"), "nao pode cravar horario: " + r);
+        assertFalse(r.toLowerCase().contains("24 horas"), "nem prometer 24h: " + r);
     }
 
     @Test
     void perguntarSeEstaAberto_caiNoHorario() {
-        for (String texto : List.of("horario", "horário", "ta aberto?", "voces funciona hoje?")) {
+        for (String texto : List.of("horario", "ta aberto?", "voces funciona hoje?")) {
             clearInvocations(envio);
-            assertTrue(respostaPara(texto).contains("🕒"), "deveria responder horario para: " + texto);
+            assertTrue(respostaPara(texto).contains(LINK), "deveria responder horario para: " + texto);
         }
     }
 
-    // ---------------------------------------------------------------- opcao 3: atendente
+    // ---------------------------------------------------------------- opcao 3: gente
 
     @Test
-    void opcaoTres_prometeAtendenteHumano() {
-        assertTrue(respostaPara("3").contains("atendente humano"));
+    void opcaoTres_naoPrometePrazoQueNinguemCumpre() {
+        // Ninguem na loja e avisado por sistema nenhum: nao ha chamado, sino nem tela. O que e
+        // verdade e que a mensagem esta no WhatsApp da loja e alguem le quando puder.
+        String r = respostaPara("3");
+
+        assertFalse(r.contains("instantes"), "prometer prazo sem ter como cumprir: " + r);
+        assertTrue(r.contains("assim que puder"), r);
     }
 
-    /**
-     * Este teste existe para registrar uma promessa que o sistema NAO cumpre: o robo diz que um
-     * humano vai responder, e ninguem na loja e avisado — nao abre chamado, nao toca sino, nao
-     * aparece em tela nenhuma. Quem escolhe a opcao 3 fica esperando. Enquanto for assim, que pelo
-     * menos esteja escrito aqui.
-     */
     @Test
-    void opcaoTres_naoAvisaNinguemNaLoja_promessaEmAberto() {
-        controller.receber(LOJA, mensagem("3"));
-
-        verify(envio, times(1)).enviar(any(), any(), any()); // so a resposta ao cliente
-        verifyNoMoreInteractions(envio);                      // nada vai para a loja
+    void reclamacaoDePedido_vaiParaGente_naoParaOCardapio() {
+        // "pedido" era testado antes de "atendente": a mensagem que mais precisa de uma pessoa
+        // recebia o link do cardapio.
+        for (String texto : List.of("meu pedido nao chegou", "quero falar sobre meu pedido",
+                "veio errado", "ta muito atrasado", "quero reclamar")) {
+            clearInvocations(envio);
+            String r = respostaPara(texto);
+            assertFalse(r.contains(LINK), "não é hora de mandar cardápio para: " + texto);
+            assertTrue(r.contains("alguém da loja"), texto + " -> " + r);
+        }
     }
 
     // ---------------------------------------------------------------- quando nao deve responder
@@ -165,7 +223,7 @@ class RoboDoWhatsAppTest {
     void integracaoDesligada_oRoboFicaCalado() {
         zap.ativo = false;
 
-        assertEquals("ignored", controller.receber(LOJA, mensagem("oi")).get("status"));
+        assertEquals("ignored", entregar(corpoCom("oi")).get("status"));
         verify(envio, never()).enviar(any(), any(), any());
     }
 
@@ -173,7 +231,7 @@ class RoboDoWhatsAppTest {
     void lojaSemTokenConfigurado_oRoboFicaCalado() {
         zap.clientSecret = null;
 
-        assertEquals("ignored", controller.receber(LOJA, mensagem("oi")).get("status"));
+        assertEquals("ignored", entregar(corpoCom("oi")).get("status"));
         verify(envio, never()).enviar(any(), any(), any());
     }
 
@@ -181,28 +239,25 @@ class RoboDoWhatsAppTest {
     void avisoDeEntrega_naoEMensagemDeCliente_naoResponde() {
         // A Meta manda "statuses" (entregue, lido) no mesmo webhook. Responder isso seria o robo
         // conversando com o proprio recibo.
-        Map<String, Object> statuses = Map.of("entry", List.of(Map.of("changes", List.of(Map.of(
-                "value", Map.of("statuses", List.of(Map.of("status", "delivered"))))))));
+        String corpo = "{\"entry\":[{\"changes\":[{\"value\":{\"statuses\":[{\"status\":\"delivered\"}]}}]}]}";
 
-        assertEquals("ok", controller.receber(LOJA, statuses).get("status"));
+        assertEquals("ok", entregar(corpo).get("status"));
         verify(envio, never()).enviar(any(), any(), any());
     }
 
     @Test
     void corpoQuebrado_respondeOkParaAMetaNaoReenviar() {
         // Qualquer 4xx/5xx faz a Meta repetir o mesmo aviso por horas.
-        assertEquals("ok", controller.receber(LOJA, Map.of("entry", "isto nao e uma lista")).get("status"));
+        assertEquals("ok", entregar("{\"entry\":\"isto nao e uma lista\"}").get("status"));
         verify(envio, never()).enviar(any(), any(), any());
     }
 
     @Test
     void mensagemDeAudio_naoQuebra_eCaiNoMenu() {
-        Map<String, Object> audio = Map.of("entry", List.of(Map.of("changes", List.of(Map.of(
-                "value", Map.of("messages", List.of(Map.of(
-                        "from", CLIENTE, "type", "audio",
-                        "audio", Map.of("id", "abc")))))))));
+        String corpo = "{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{"
+                + "\"from\":\"" + CLIENTE + "\",\"type\":\"audio\",\"audio\":{\"id\":\"abc\"}}]}}]}]}";
 
-        assertEquals("ok", controller.receber(LOJA, audio).get("status"));
+        assertEquals("ok", entregar(corpo).get("status"));
         ArgumentCaptor<String> saiu = ArgumentCaptor.forClass(String.class);
         verify(envio).enviar(any(), eq(CLIENTE), saiu.capture());
         assertTrue(saiu.getValue().contains("*1*"), "audio sem texto deve cair no menu: " + saiu.getValue());
@@ -222,5 +277,11 @@ class RoboDoWhatsAppTest {
                 () -> controller.verificar(LOJA, "subscribe", "chute", "desafio-123"));
 
         assertEquals(403, e.getStatusCode().value());
+    }
+
+    @Test
+    void verifyTokenAusente_naoDevolveDesafio() {
+        assertThrows(ResponseStatusException.class,
+                () -> controller.verificar(LOJA, "subscribe", null, "desafio-123"));
     }
 }

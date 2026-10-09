@@ -33,12 +33,35 @@ public class ComplementoService {
         this.itens = itens;
     }
 
-    /** Acréscimo de preço e nomes dos complementos escolhidos, já validados contra os grupos. */
-    public record Escolha(BigDecimal acrescimo, List<String> nomes) {
+    /**
+     * Um complemento escolhido, com o nome e o preço <b>do momento do pedido</b>.
+     *
+     * <p>O nome vai junto porque o id não sobrevive: {@code ComplementoController.salvar} apaga e
+     * recria os grupos e itens do produto a cada gravação, com ids novos da sequência. Guardar só o
+     * id faria o histórico apontar para o nada na primeira vez que o lojista corrigisse um preço.</p>
+     */
+    public record Escolhido(Long id, String nome, BigDecimal preco) {}
+
+    /** Acréscimo de preço e complementos escolhidos, já validados contra os grupos. */
+    public record Escolha(BigDecimal acrescimo, List<Escolhido> escolhidos) {
+        public List<String> nomes() { return escolhidos.stream().map(Escolhido::nome).toList(); }
+
         public String descricao(String nomeProduto) {
-            return nomes.isEmpty() ? nomeProduto : nomeProduto + " (" + String.join(", ", nomes) + ")";
+            return escolhidos.isEmpty() ? nomeProduto
+                    : nomeProduto + " (" + String.join(", ", nomes()) + ")";
         }
     }
+
+    /**
+     * Os padrões do grupo quando o cadastro não diz: nada obrigatório, uma escolha no máximo.
+     *
+     * <p>Moram aqui porque quem repete um pedido antigo precisa aplicar exatamente a mesma régua.
+     * Enquanto estavam copiados nos dois lugares, mudar um e esquecer o outro faria o carrinho
+     * remontado aceitar o que o pedido recusaria no fim.</p>
+     */
+    public static int minimoDe(ComplementoGrupo g) { return g.minimo == null ? 0 : g.minimo; }
+
+    public static int maximoDe(ComplementoGrupo g) { return g.maximo == null ? 1 : g.maximo; }
 
     /**
      * Valida a escolha do cliente contra os grupos do produto e devolve o que somar ao preço.
@@ -73,20 +96,21 @@ public class ComplementoService {
         }
 
         BigDecimal acrescimo = BigDecimal.ZERO;
-        List<String> nomes = new ArrayList<>();
+        List<Escolhido> resultado = new ArrayList<>();
         for (ComplementoGrupo g : gs) {
             List<ComplementoItem> sel = porGrupo.getOrDefault(g.id, List.of());
-            int min = g.minimo == null ? 0 : g.minimo;
-            int max = g.maximo == null ? 1 : g.maximo;
+            int min = minimoDe(g);
+            int max = maximoDe(g);
             if (sel.size() < min || sel.size() > max) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Escolha entre " + min + " e " + max + " em \"" + g.nome + "\" de " + produto.nome);
             }
             for (ComplementoItem ci : sel) {
-                acrescimo = acrescimo.add(ci.preco == null ? BigDecimal.ZERO : ci.preco);
-                nomes.add(ci.nome);
+                BigDecimal preco = ci.preco == null ? BigDecimal.ZERO : ci.preco;
+                acrescimo = acrescimo.add(preco);
+                resultado.add(new Escolhido(ci.id, ci.nome, preco));
             }
         }
-        return new Escolha(acrescimo, nomes);
+        return new Escolha(acrescimo, resultado);
     }
 }

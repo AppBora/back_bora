@@ -112,7 +112,8 @@ class PedidoServiceContaDoBalcaoTest {
         when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(1L, "Setor Bueno")).thenReturn(Optional.of(t));
         // borda recheada: +12 no preço unitário
         when(complementos.aplicar(eq(1L), any(Produto.class), any()))
-                .thenReturn(new ComplementoService.Escolha(new BigDecimal("12.00"), List.of("Borda Catupiry")));
+                .thenReturn(new ComplementoService.Escolha(new BigDecimal("12.00"),
+                        List.of(new ComplementoService.Escolhido(1L, "Borda Catupiry", new BigDecimal("12.00")))));
 
         service.criar(new NovoPedidoRequest(3L, "101", "Dinheiro", "Delivery", null, false,
                 List.of(new ItemPedidoRequest(10L, 2, List.of(1L))), null));
@@ -189,5 +190,47 @@ class PedidoServiceContaDoBalcaoTest {
         assertThrows(ResponseStatusException.class, () -> service.criar(
                 new NovoPedidoRequest(null, "106", "PIX", "Delivery", null, false, List.of(), null)));
         verify(repo, never()).save(any(Pedido.class));
+    }
+
+    /**
+     * O pedido guarda o que foi escolhido, e nao so o nome na descricao.
+     *
+     * <p>Sem este teste, apagar a gravacao passava pela suite inteira: o "repetir pedido" degradava
+     * em silencio para "escolha os adicionais de novo" e tudo continuava verde.</p>
+     */
+    @Test
+    void itemGuardaOsComplementosEscolhidos_comNomeEPreco() {
+        produto(10L, "Copo 500ml", "19.90");
+        when(complementos.aplicar(eq(1L), any(Produto.class), any()))
+                .thenReturn(new ComplementoService.Escolha(new BigDecimal("2.00"),
+                        List.of(new ComplementoService.Escolhido(12L, "Granola", new BigDecimal("2.00")))));
+
+        service.criar(new NovoPedidoRequest(null, "1", "Dinheiro", "Balcão", null, false,
+                List.of(new ItemPedidoRequest(10L, 1, List.of(12L))), null));
+
+        var salvos = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(itemRepo).saveAll(salvos.capture());
+        br.com.bora.entity.PedidoItem item = (br.com.bora.entity.PedidoItem) salvos.getValue().get(0);
+        var guardado = br.com.bora.service.ComplementosDoItem.ler(item.getComplementos());
+        assertNotNull(guardado, "sem registro, o repetir nao tem como refazer o item");
+        assertEquals(1, guardado.size());
+        assertEquals("Granola", guardado.get(0).nome(), "o nome e o que sobrevive a regravacao do cardapio");
+        assertEquals(0, new BigDecimal("2.00").compareTo(guardado.get(0).preco()));
+    }
+
+    @Test
+    void itemSemComplemento_guardaListaVazia_eNaoNulo() {
+        // Nulo significa "item antigo, nao sei o que foi escolhido". Vazio significa "nao tinha".
+        produto(10L, "Água", "4.00");
+        when(complementos.aplicar(eq(1L), any(Produto.class), any()))
+                .thenReturn(new ComplementoService.Escolha(BigDecimal.ZERO, List.of()));
+
+        service.criar(new NovoPedidoRequest(null, "1", "Dinheiro", "Balcão", null, false,
+                List.of(new ItemPedidoRequest(10L, 1, List.of())), null));
+
+        var salvos = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(itemRepo).saveAll(salvos.capture());
+        br.com.bora.entity.PedidoItem item = (br.com.bora.entity.PedidoItem) salvos.getValue().get(0);
+        assertEquals(List.of(), br.com.bora.service.ComplementosDoItem.ler(item.getComplementos()));
     }
 }
