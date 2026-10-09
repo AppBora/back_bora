@@ -103,9 +103,24 @@ public class OpenDeliveryClient implements MarketplaceClient {
         return i != null && preenchida(i.clientId, i.clientSecret);
     }
 
-    /** client_id = {app_id}_{app_shop_id} (roteiro, pag. 17). */
+    /**
+     * client_id = {app_id}_{app_shop_id} (roteiro, pag. 17) — sempre, venha de onde vier.
+     *
+     * <p>Com a credencial da plataforma o Bora ja montava a juncao sozinho. Com credencial PROPRIA
+     * da loja ele mandava o campo cru, assumindo que o lojista tinha colado um client_id completo.
+     * Em 09/10/2026 isso custou cinco tentativas para ligar a primeira loja real: o dono colava o App
+     * ID do aplicativo de producao, a 99 recebia um identificador sem loja e recusava, e a tela nao
+     * dava pista nenhuma — a mensagem falava em "confira o App Shop ID e o App Secret".</p>
+     *
+     * <p>Agora o comportamento e um so. Se o valor ja traz o sublinhado, respeitamos (quem colou um
+     * client_id completo continua funcionando, inclusive a Zira, configurada assim naquele dia).
+     * Se vier so o App ID, juntamos com o codigo da loja.</p>
+     */
     String clientIdDaLoja(IntegracaoCanal i) {
-        return credencialDaLoja(i) ? i.clientId : appId() + "_" + i.merchantId;
+        if (!credencialDaLoja(i)) return appId() + "_" + i.merchantId;
+        String proprio = i.clientId.trim();
+        if (proprio.contains("_")) return proprio;
+        return i.merchantId == null || i.merchantId.isBlank() ? proprio : proprio + "_" + i.merchantId;
     }
 
     /** client_secret = {app_secret}. E tambem a chave que assina o webhook. */
