@@ -51,6 +51,7 @@ public class PublicController {
     private final boolean respeitarHorario;
     /** Transação explícita: o pedido grava em passos curtos, com a chamada ao Asaas FORA deles. */
     private final org.springframework.transaction.support.TransactionTemplate tx;
+    private final br.com.bora.service.RepetirPedidoService repetir;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
@@ -65,9 +66,11 @@ public class PublicController {
                             br.com.bora.service.DevolucaoDeEstoqueService devolucaoDeEstoque,
                             br.com.bora.security.RegraDeAcesso regra,
                             br.com.bora.repository.ConfiguracaoLojaRepository configuracoes,
+                            br.com.bora.service.RepetirPedidoService repetir,
                             org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                             @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
         this.respeitarHorario = respeitarHorario;
+        this.repetir = repetir;
         this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
         this.taxas = taxas;
         this.insumos = insumos;
@@ -408,6 +411,9 @@ public class PublicController {
                 item.setPedidoId(p.id);
                 item.setProdutoId(prod.id);
                 item.setDescricao(nomeItem);
+                // Os ids, e nao so os nomes da descricao: e o que permite repetir o pedido depois.
+                item.setComplementos(escolhidos.isEmpty() ? null
+                        : escolhidos.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")));
                 item.setQuantidade(qtd);
                 BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
                 item.setPrecoUnitario(unit);
@@ -562,6 +568,24 @@ public class PublicController {
     }
 
     /** Status público do pedido (para a tela de acompanhamento do QR PIX). */
+    /**
+     * O carrinho sugerido a partir de um pedido antigo, para o cliente repetir o que ja pediu.
+     *
+     * <p>Exige a assinatura do link ({@code t}). Sem ela responde 404, e nao 403: dizer "assinatura
+     * errada" confirmaria que o pedido existe, que e metade do que alguem varrendo numeros quer
+     * saber.</p>
+     */
+    @GetMapping("/loja/{lojaId}/pedido/{pedidoId}/repetir")
+    public Map<String, Object> repetirPedido(@PathVariable Long lojaId, @PathVariable Long pedidoId,
+                                             @RequestParam(name = "t", required = false) String t) {
+        if (!repetir.tokenValido(lojaId, pedidoId, t)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado");
+        }
+        Map<String, Object> m = repetir.montar(lojaId, pedidoId);
+        if (m == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado");
+        return m;
+    }
+
     @GetMapping("/loja/{lojaId}/pedido/{pedidoId}/status")
     public Map<String, Object> statusPedido(@PathVariable Long lojaId, @PathVariable Long pedidoId) {
         Pedido p = pedidos.findByIdAndLojaId(pedidoId, lojaId)

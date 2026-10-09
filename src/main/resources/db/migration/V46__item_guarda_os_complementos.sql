@@ -1,0 +1,11 @@
+-- O item do pedido guardava os complementos so dentro da descricao, em texto:
+-- "Copo 500ml (Granola, Leite condensado)". Serve para ler, nao serve para refazer — nome muda,
+-- nome se repete entre grupos, e nao da para voltar de nome para id sem adivinhar.
+--
+-- Sem os ids nao existe "repetir o ultimo pedido": o cliente teria que remontar tudo na mao,
+-- que e exatamente o trabalho que a funcao promete eliminar.
+--
+-- Guarda os ids escolhidos, separados por virgula, na ordem em que vieram. Nulo = item criado
+-- antes desta migracao: nesse caso o repetir remonta o produto e pede os complementos de novo,
+-- em vez de chutar. Mesmo tratamento que a V45 deu ao consumiu_ficha.
+alter table pedido_item add column if not exists complementos text;

@@ -204,6 +204,9 @@ public class PedidoService {
             it.setLojaId(lojaId);
             it.setProdutoId(prod.id);
             it.setDescricao(escolha.descricao(prod.nome));
+            // Os ids, e nao so os nomes da descricao: e o que permite repetir o pedido depois.
+            it.setComplementos(i.complementos() == null || i.complementos().isEmpty() ? null
+                    : i.complementos().stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")));
             it.setQuantidade(qtd);
             it.setPrecoUnitario(preco);
             // se o produto tem ficha técnica, consome insumos e usa o custo da ficha; senão, custo do produto + baixa do próprio

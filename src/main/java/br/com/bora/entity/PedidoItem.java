@@ -41,4 +41,14 @@ public class PedidoItem {
      */
     @Column(name = "consumiu_ficha")
     private Boolean consumiuFicha;
+
+    /**
+     * Ids dos complementos escolhidos, separados por virgula, na ordem em que vieram
+     * ({@code "12,15"}). A {@code descricao} guarda os nomes, que servem para ler e nao para
+     * refazer: nome muda e se repete entre grupos. {@code null} para item criado antes da V46 —
+     * nesse caso o "repetir pedido" remonta o produto e pede os complementos de novo, em vez de
+     * adivinhar.
+     */
+    @Column(name = "complementos")
+    private String complementos;
 }
