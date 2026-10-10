@@ -13,12 +13,13 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.*;
 
 /**
  * Os quatro caminhos de cancelamento chamam a devolucao de estoque.
  *
- * <p>A regra em si vive no {@link DevolucaoDeEstoqueService} e e testada em
+ * <p>A regra em si vive no {@link EstornoDaVendaService} e e testada em
  * {@code EstoqueVoltaNoCancelamentoTest}. O risco que ESTE teste cobre e outro: esquecer de ligar a
  * devolucao em um dos caminhos. Foi exatamente o que aconteceu — o cardapio publico passou a baixar
  * estoque e nenhum dos cancelamentos desfazia, em nenhum lugar.</p>
@@ -28,7 +29,7 @@ import static org.mockito.Mockito.*;
  */
 class TodoCancelamentoDevolveEstoqueTest {
 
-    private final DevolucaoDeEstoqueService devolucao = mock(DevolucaoDeEstoqueService.class);
+    private final EstornoDaVendaService devolucao = mock(EstornoDaVendaService.class);
 
     private Pedido pedido(StatusPedido status) {
         Pedido p = new Pedido();
@@ -48,7 +49,8 @@ class TodoCancelamentoDevolveEstoqueTest {
                 mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, GerenciadorDeTransacaoFalso.novo(), 30)
                 .expirarAbandonados();
 
-        verify(devolucao).devolver(p, StatusPedido.RECEBIDO);
+        // false: PIX que expirou nunca foi pago, entao nao ha historico nem cashback novo para desfazer.
+        verify(devolucao).devolver(p, StatusPedido.RECEBIDO, false);
     }
 
     @Test
@@ -63,7 +65,7 @@ class TodoCancelamentoDevolveEstoqueTest {
                 mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, GerenciadorDeTransacaoFalso.novo(), 30)
                 .expirarAbandonados();
 
-        verify(devolucao, never()).devolver(any(), any());
+        verify(devolucao, never()).devolver(any(), any(), anyBoolean());
     }
 
     @Test
@@ -78,7 +80,8 @@ class TodoCancelamentoDevolveEstoqueTest {
 
         servicoDePedido(repo).cancelarPorMarketplace(18L, "IFOOD", "ped-ext-1", "cliente desistiu");
 
-        verify(devolucao).devolver(p, StatusPedido.CONFIRMADO);
+        // true: pedido de marketplace nunca espera PIX; a venda ja estava contabilizada.
+        verify(devolucao).devolver(p, StatusPedido.CONFIRMADO, true);
     }
 
     @Test
@@ -91,7 +94,7 @@ class TodoCancelamentoDevolveEstoqueTest {
         servicoDePedido(repo).alterarStatus(1L, StatusPedido.CANCELADO, "faltou ingrediente");
 
         // EM_PREPARO: a devolucao e chamada, e ela decide que o insumo nao volta.
-        verify(devolucao).devolver(p, StatusPedido.EM_PREPARO);
+        verify(devolucao).devolver(p, StatusPedido.EM_PREPARO, true);
     }
 
     @Test
@@ -103,7 +106,22 @@ class TodoCancelamentoDevolveEstoqueTest {
 
         servicoDePedido(repo).alterarStatus(1L, StatusPedido.EM_PREPARO, null);
 
-        verify(devolucao, never()).devolver(any(), any());
+        verify(devolucao, never()).devolver(any(), any(), anyBoolean());
+    }
+
+    @Test
+    void cancelamentoNoPainelDePedidoEsperandoPix_dizQueAVendaNaoFoiContabilizada() {
+        PedidoRepository repo = mock(PedidoRepository.class);
+        Pedido p = pedido(StatusPedido.RECEBIDO);
+        p.aguardandoPagamento = true; // PIX gerado, dinheiro nunca entrou
+        when(repo.findByIdAndLojaId(1L, 1L)).thenReturn(Optional.of(p));
+        when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
+
+        servicoDePedido(repo).alterarStatus(1L, StatusPedido.CANCELADO, "cliente desistiu");
+
+        // Aqui so houve o DEBITO do resgate. Dizer "true" faria o estorno tirar do cliente um cashback
+        // que esta venda nunca creditou — saldo que ele ganhou em outro pedido.
+        verify(devolucao).devolver(p, StatusPedido.RECEBIDO, false);
     }
 
     private PedidoService servicoDePedido(PedidoRepository repo) {

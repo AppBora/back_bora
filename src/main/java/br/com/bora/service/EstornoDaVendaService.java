@@ -13,7 +13,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 /**
- * Pedido cancelado devolve o que consumiu.
+ * Pedido cancelado devolve o que consumiu: estoque, insumo e cashback.
+ *
+ * <p>Este e o ponto unico por onde passam os QUATRO caminhos de cancelamento (PIX que falhou, PIX
+ * expirado, cancelamento do marketplace, cancelamento do lojista no painel). O cashback entrou aqui
+ * em 09/10/2026 exatamente por isso: ele estava sendo devolvido em dois dos quatro caminhos, na mao,
+ * e os outros dois esqueciam. Regra nova de cancelamento entra aqui, nao num quinto lugar.</p>
  *
  * <p>Nascer um pedido baixa estoque por um de dois caminhos: produto COM ficha tecnica consome os
  * insumos da ficha; produto SEM ficha baixa o estoque dele mesmo. Cancelar nao desfazia nem um nem
@@ -37,17 +42,19 @@ import java.util.List;
  */
 @Slf4j
 @Service
-public class DevolucaoDeEstoqueService {
+public class EstornoDaVendaService {
 
     private final PedidoItemRepository itens;
     private final ProdutoRepository produtos;
     private final InsumoService insumos;
+    private final FidelidadeService fidelidade;
 
-    public DevolucaoDeEstoqueService(PedidoItemRepository itens, ProdutoRepository produtos,
-                                     InsumoService insumos) {
+    public EstornoDaVendaService(PedidoItemRepository itens, ProdutoRepository produtos,
+                                     InsumoService insumos, FidelidadeService fidelidade) {
         this.itens = itens;
         this.produtos = produtos;
         this.insumos = insumos;
+        this.fidelidade = fidelidade;
     }
 
     /** O pedido ja tinha entrado em producao? Depois disso o ingrediente nao volta. */
@@ -62,16 +69,24 @@ public class DevolucaoDeEstoqueService {
     }
 
     /**
-     * Devolve o estoque do pedido cancelado.
+     * Devolve o estoque e o cashback do pedido cancelado.
      *
      * @param statusAntes o status que o pedido tinha ANTES de virar CANCELADO — e ele que diz o que
      *                    ainda existe fisicamente. Passar o status ja cancelado devolveria tudo
      *                    sempre, inclusive comida que a cozinha fez.
+     * @param vendaJaContabilizada esta venda ja tinha entrado no historico do cliente e gerado
+     *                    cashback? E {@code false} so para PIX que nunca foi pago (expirou ou nem
+     *                    gerou cobranca): ali houve apenas o debito do resgate. Nao use
+     *                    {@code p.pagamentoPendente()} para decidir isto — dois dos chamadores zeram
+     *                    {@code aguardandoPagamento} antes de chegar aqui, e a resposta sairia errada.
      * @return quantos itens tiveram algo devolvido (para o log de quem chamou)
      */
     @Transactional
-    public int devolver(Pedido p, StatusPedido statusAntes) {
+    public int devolver(Pedido p, StatusPedido statusAntes, boolean vendaJaContabilizada) {
         if (p == null || p.id == null) return 0;
+        // O cashback volta sempre, em qualquer estagio: ele nao e comida que estragou, e dinheiro que
+        // o cliente pos num pedido que nao aconteceu.
+        fidelidade.estornar(p.lojaId, p.clienteId, p.valorTotal, p.cashbackUsado, vendaJaContabilizada);
         boolean podeDevolverInsumo = !entrouEmPreparo(statusAntes);
         boolean podeDevolverProduto = !jaSaiuDaLoja(statusAntes);
         if (!podeDevolverInsumo && !podeDevolverProduto) return 0;

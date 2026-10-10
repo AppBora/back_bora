@@ -1,4 +1,8 @@
 spring:
+  lifecycle:
+    # Teto para o encerramento gracioso. Menor que o `-t 30` do `docker stop`, senao o Docker mata
+    # antes de a aplicacao terminar e o graceful nao serve para nada.
+    timeout-per-shutdown-phase: 25s
   task:
     scheduling:
       pool:
@@ -36,6 +40,11 @@ spring:
     enabled: true
 server:
   port: ${PORT:8080}
+  # Deploy e `docker stop -t 30 api` seguido de `run`. Sem isto o Tomcat morria no ato e cortava a
+  # requisicao em andamento no meio: o lojista que estava apertando "Aceitar" levava erro, e o cliente
+  # no meio de um checkout com PIX podia ter o pedido criado sem a cobranca. Com graceful, as chamadas
+  # em voo terminam antes de a JVM sair, dentro do teto abaixo.
+  shutdown: graceful
   error:
     include-message: always
 springdoc:

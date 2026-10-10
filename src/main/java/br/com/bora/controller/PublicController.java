@@ -12,6 +12,7 @@ import br.com.bora.repository.PedidoItemRepository;
 import br.com.bora.repository.PedidoRepository;
 import br.com.bora.repository.ProdutoRepository;
 import br.com.bora.service.ComplementoService;
+import br.com.bora.service.DescontoService;
 import br.com.bora.service.RepetirPedidoService;
 import br.com.bora.service.PixService;
 import lombok.extern.slf4j.Slf4j;
@@ -43,10 +44,12 @@ public class PublicController {
     private final br.com.bora.repository.ComplementoItemRepository compItens;
     private final ComplementoService complementoService;
     private final br.com.bora.repository.CupomRepository cupons;
+    private final DescontoService descontos;
+    private final br.com.bora.security.FreioDoCardapio freio;
     private final br.com.bora.service.OperacaoService operacao;
     private final br.com.bora.repository.TaxaEntregaRepository taxas;
     private final br.com.bora.service.InsumoService insumos;
-    private final br.com.bora.service.DevolucaoDeEstoqueService devolucaoDeEstoque;
+    private final br.com.bora.service.EstornoDaVendaService devolucaoDeEstoque;
     private final br.com.bora.security.RegraDeAcesso regra;
     private final br.com.bora.repository.ConfiguracaoLojaRepository configuracoes;
     private final boolean respeitarHorario;
@@ -60,11 +63,13 @@ public class PublicController {
                             br.com.bora.repository.ComplementoItemRepository compItens,
                             ComplementoService complementoService,
                             br.com.bora.repository.CupomRepository cupons,
+                            DescontoService descontos,
+                            br.com.bora.security.FreioDoCardapio freio,
                             br.com.bora.service.FidelidadeService fidelidade,
                             br.com.bora.service.OperacaoService operacao,
                             br.com.bora.repository.TaxaEntregaRepository taxas,
                             br.com.bora.service.InsumoService insumos,
-                            br.com.bora.service.DevolucaoDeEstoqueService devolucaoDeEstoque,
+                            br.com.bora.service.EstornoDaVendaService devolucaoDeEstoque,
                             br.com.bora.security.RegraDeAcesso regra,
                             br.com.bora.repository.ConfiguracaoLojaRepository configuracoes,
                             br.com.bora.service.RepetirPedidoService repetir,
@@ -90,6 +95,8 @@ public class PublicController {
         this.compItens = compItens;
         this.complementoService = complementoService;
         this.cupons = cupons;
+        this.descontos = descontos;
+        this.freio = freio;
     }
 
 
@@ -154,14 +161,28 @@ public class PublicController {
                 "icons", List.of(icone));
     }
 
-    /** Valida um cupom para exibir o desconto no checkout (não reserva nada). */
+    /**
+     * Valida um codigo de desconto para exibir no checkout (nao reserva nada).
+     *
+     * <p>Atende cupom E promocao: a tela de Promocoes e o botao de promocao relampago do Dashboard
+     * gravam na tabela {@code promocao}, que este endpoint nao consultava — o lojista divulgava o
+     * codigo e o cliente recebia "cupom invalido". Ver {@link DescontoService}.</p>
+     *
+     * <p>O total vai no parametro porque promocao e cupom percentual dependem dele. Sem total, usamos
+     * R$ 100 so para a tela poder mostrar o percentual; o valor que vale e sempre o recalculado na
+     * criacao do pedido.</p>
+     */
     @GetMapping("/loja/{lojaId}/cupom/{codigo}")
-    public Map<String, Object> validarCupom(@PathVariable Long lojaId, @PathVariable String codigo) {
+    public Map<String, Object> validarCupom(@PathVariable Long lojaId, @PathVariable String codigo,
+                                            @RequestParam(required = false) java.math.BigDecimal total,
+                                            jakarta.servlet.http.HttpServletRequest http) {
+        freio.codigoDeDesconto(http); // sem teto, isto virava adivinhador de cupom
         lojaAtiva(lojaId);
-        br.com.bora.entity.Cupom c = cupons.findByLojaIdAndCodigoIgnoreCase(lojaId, codigo.trim())
-                .filter(br.com.bora.entity.Cupom::valido)
+        java.math.BigDecimal base = total != null && total.signum() > 0 ? total : new java.math.BigDecimal("100");
+        var d = descontos.resolver(lojaId, codigo, base)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cupom inválido ou vencido"));
-        return Map.of("codigo", c.codigo, "tipo", c.tipo, "valor", c.valor);
+        return Map.of("codigo", d.codigo(), "tipo", d.tipo(), "valor", d.valorConfigurado(),
+                "desconto", d.valorAbatido());
     }
 
     /** Cardápio público de uma loja: nome + produtos ativos (somente leitura). */
@@ -307,7 +328,11 @@ public class PublicController {
      * formaPagamento "PIX" cria a cobrança na conta Asaas do lojista e devolve o QR Code.
      */
     @PostMapping("/loja/{lojaId}/pedido")
-    public Map<String, Object> pedirOnline(@PathVariable Long lojaId, @RequestBody Map<String, Object> body) {
+    public Map<String, Object> pedirOnline(@PathVariable Long lojaId, @RequestBody Map<String, Object> body,
+                                           jakarta.servlet.http.HttpServletRequest http) {
+        // Teto por origem, ANTES de qualquer efeito: este endpoint e publico e cada chamada cria
+        // pedido, baixa estoque e pode abrir cobranca no Asaas da loja. Ver FreioDoCardapio.
+        freio.pedido(http);
         Loja loja = lojaAtiva(lojaId);
         // O horario que o lojista configura existia so na tela: abertaAgora() nao tinha um unico
         // chamador, e o cardapio aceitava pedido as 3 da manha com a loja fechada.
@@ -439,19 +464,21 @@ public class PublicController {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pedido sem valor");
             }
 
-            // Cupom de desconto (recalculado no servidor; nunca zera o pedido)
+            // Codigo de desconto (recalculado no servidor; nunca zera o pedido). Cupom OU promocao:
+            // ver DescontoService. O uso da promocao so e contabilizado depois que o pedido existe.
             BigDecimal descontoAplicado = BigDecimal.ZERO;
+            DescontoService.Desconto descontoUsado = null;
             String codCupom = str(body.get("cupom"));
             if (codCupom != null && !codCupom.isBlank()) {
-                br.com.bora.entity.Cupom c = cupons.findByLojaIdAndCodigoIgnoreCase(lojaId, codCupom.trim())
-                        .filter(br.com.bora.entity.Cupom::valido)
+                DescontoService.Desconto d = descontos.resolver(lojaId, codCupom, total)
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cupom inválido ou vencido"));
-                descontoAplicado = c.desconto(total);
+                descontoAplicado = d.valorAbatido();
                 if (descontoAplicado.compareTo(total) >= 0) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O cupom não pode zerar o pedido");
                 }
                 total = total.subtract(descontoAplicado);
-                p.observacao = p.observacao + " | Cupom " + c.codigo + " (-R$ " + descontoAplicado + ")";
+                descontoUsado = d;
+                p.observacao = p.observacao + " | Cupom " + d.codigo() + " (-R$ " + descontoAplicado + ")";
             }
 
             // Fidelidade: no cardápio o cliente é identificado pelo telefone — não há cadastro nem login.
@@ -506,11 +533,16 @@ public class PublicController {
             }
             resp.put("cashbackNovo", fidelidade.saldo(lojaId, clienteId));
             resp.put("aguardandoPagamento", comPix);
-            return new Rascunho(p, resp, clienteId, resgate);
+            return new Rascunho(p, resp, clienteId, resgate, descontoUsado);
         });
 
         Map<String, Object> resp = rascunho.resposta();
-        if (!comPix) return resp;
+        if (!comPix) {
+            // Pedido sem PIX ja esta de pe: o uso da promocao conta agora. No caminho com PIX a
+            // contagem espera o passo 3, porque o Asaas ainda pode falhar e desfazer o pedido.
+            descontos.contabilizarUso(rascunho.desconto());
+            return resp;
+        }
 
         // ---- Passo 2: o Asaas FORA da transação. A conexão do banco já voltou para o pool. ----
         Map<String, Object> cobranca;
@@ -530,13 +562,14 @@ public class PublicController {
             atual.atualizadoEm = OffsetDateTime.now();
             pedidos.save(atual);
         }));
+        descontos.contabilizarUso(rascunho.desconto()); // o pedido sobreviveu ao Asaas
         resp.put("pix", cobranca);
         return resp;
     }
 
     /** O que o passo 1 produziu, para os passos seguintes trabalharem sem reabrir transação. */
     private record Rascunho(Pedido pedido, Map<String, Object> resposta, Long clienteId,
-                            BigDecimal resgate) {}
+                            BigDecimal resgate, DescontoService.Desconto desconto) {}
 
     /** PIX que não nasceu: cancela o pedido e devolve o cashback que ele já tinha consumido. */
     private void desfazerPedidoSemPix(Rascunho r) {
@@ -548,9 +581,11 @@ public class PublicController {
             p.aguardandoPagamento = false;
             p.motivoCancelamento = "Não foi possível gerar o PIX";
             pedidos.save(p);
-            fidelidade.devolver(p.lojaId, r.clienteId(), r.resgate());
-            // O pedido chegou a baixar estoque antes de o PIX falhar; devolve tudo.
-            devolucaoDeEstoque.devolver(p, anterior);
+            // O pedido chegou a baixar estoque e a debitar o cashback antes de o PIX falhar; devolve
+            // tudo. O estorno do cashback vive no EstornoDaVendaService, junto com o do estoque — era
+            // uma chamada solta aqui, e os outros caminhos de cancelamento esqueciam dela.
+            // false: este PIX nunca foi pago, entao a venda nao entrou no historico nem gerou cashback.
+            devolucaoDeEstoque.devolver(p, anterior, false);
         }));
     }
     /**
@@ -559,7 +594,9 @@ public class PublicController {
      */
     @GetMapping("/loja/{lojaId}/cashback")
     public Map<String, Object> cashback(@PathVariable Long lojaId, @RequestParam String telefone,
-                                        @RequestParam(required = false) String nome) {
+                                        @RequestParam(required = false) String nome,
+                                        jakarta.servlet.http.HttpServletRequest http) {
+        freio.consultaDeSaldo(http); // so telefone + primeiro nome protegem este saldo
         lojaAtiva(lojaId);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("percentual", fidelidade.percentual(lojaId));

@@ -18,5 +18,19 @@
     <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><optional>true</optional></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
   </dependencies>
-  <build><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build>
+  <build><plugins>
+    <plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin>
+    <!--
+      Os testes `*IT` precisam de um Postgres no ar e ficam FORA do `mvn package`, porque o `package` roda
+      dentro do build da imagem de producao (ver Dockerfile), onde nao ha banco. Isto esta escrito aqui de
+      proposito: por padrao o surefire ja ignoraria `*IT`, e convencao herdada em silencio e como um teste
+      para de rodar sem ninguem notar.
+
+      Para rodar os `*IT`, suba um Postgres 16 em localhost:55432 com banco `bora`, usuario `postgres` e
+      senha `teste` (o comando docker esta no javadoc do PreviaDoAcertoBateComOPagamentoIT) e chame:
+        mvn test -Dtest='*IT' -DfailIfNoTests=false
+    -->
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+      <configuration><excludes><exclude>**/*IT.java</exclude></excludes></configuration></plugin>
+  </plugins></build>
 </project>

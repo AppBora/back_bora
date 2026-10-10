@@ -150,10 +150,6 @@ public class FidelidadeService {
     }
 
     /**
-     * Fecha o ciclo do pedido: soma ao histórico, debita o que foi resgatado e credita o cashback
-     * novo sobre o valor efetivamente pago.
-     */
-    /**
      * Tira do saldo o cashback que o cliente acabou de usar, sem creditar nada.
      *
      * <p>Serve para o PIX: ali o desconto sai do total na hora do pedido, mas quem credita o cashback
@@ -180,8 +176,56 @@ public class FidelidadeService {
         });
     }
 
+    /**
+     * Fecha o ciclo do pedido: soma ao histórico, debita o que foi resgatado e credita o cashback
+     * novo sobre o valor efetivamente pago.
+     */
     public void registrar(Long lojaId, Long clienteId, BigDecimal totalPago, BigDecimal resgate) {
         registrar(lojaId, clienteId, totalPago, resgate, true);
+    }
+
+    /**
+     * Desfaz o que o pedido fez na fidelidade, porque a venda nao aconteceu. E o inverso exato de
+     * {@link #registrar}: devolve o resgate, tira o cashback que a venda gerou e desconta a compra do
+     * historico do cliente.
+     *
+     * <p><b>Por que isto existe:</b> cancelar um pedido no painel devolvia estoque e nao devolvia
+     * cashback. Quem usou R$ 6,57 de saldo num pedido cancelado perdia o saldo. E, do outro lado, quem
+     * fizesse dez pedidos "Na entrega" de R$ 100 e cancelasse depois ficava com os 5% de cada um — saldo
+     * fabricado em cima de venda que nunca existiu, pago pelo lojista.</p>
+     *
+     * @param vendaJaContabilizada o {@code registrar} desta venda chegou a rodar? Pedido PIX que
+     *                             expirou ou que nem gerou cobranca so teve o DEBITO do resgate
+     *                             ({@link #consumir}); nele nao ha historico nem cashback novo para
+     *                             desfazer, e tentar desfazer tiraria saldo que o cliente ganhou em
+     *                             outro pedido.
+     *
+     * <p><b>Limite conhecido:</b> o cashback gerado nao fica gravado no pedido, entao o estorno
+     * recalcula pelo percentual de HOJE. Se a loja mudou o percentual entre a venda e o cancelamento, a
+     * parte estornada difere da creditada. O {@code max(ZERO)} garante que isso nunca deixa saldo
+     * negativo. A correcao definitiva e um razao de movimentos, nao um saldo mutavel.</p>
+     */
+    public void estornar(Long lojaId, Long clienteId, BigDecimal totalPago, BigDecimal resgate,
+                         boolean vendaJaContabilizada) {
+        if (clienteId == null) return;
+        BigDecimal usado = resgate == null ? BigDecimal.ZERO : resgate;
+        BigDecimal pago = totalPago == null ? BigDecimal.ZERO : totalPago;
+        BigDecimal taxa = vendaJaContabilizada
+                ? percentual(lojaId).divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        clientes.findByIdAndLojaId(clienteId, lojaId).ifPresent(c -> {
+            BigDecimal saldo = c.cashback == null ? BigDecimal.ZERO : c.cashback;
+            c.cashback = saldo.add(usado)
+                    .subtract(pago.multiply(taxa))
+                    .max(BigDecimal.ZERO)
+                    .setScale(2, RoundingMode.HALF_UP);
+            if (vendaJaContabilizada) {
+                BigDecimal gasto = c.totalGasto == null ? BigDecimal.ZERO : c.totalGasto;
+                c.totalGasto = gasto.subtract(pago).max(BigDecimal.ZERO);
+                c.qtdPedidos = Math.max(0, (c.qtdPedidos == null ? 0 : c.qtdPedidos) - 1);
+            }
+            clientes.save(c);
+        });
     }
 
     /**

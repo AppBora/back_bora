@@ -34,6 +34,7 @@ class PixPagoDepoisDoPrazoTest {
     private LojaRepository lojas;
     private IntegracaoCanalRepository integracoes;
     private FidelidadeService fidelidade;
+    private EstornoDaVendaService estorno;
     private CobradorDePixService cobrador;
 
     @BeforeEach
@@ -43,7 +44,8 @@ class PixPagoDepoisDoPrazoTest {
         lojas = mock(LojaRepository.class);
         integracoes = mock(IntegracaoCanalRepository.class);
         fidelidade = mock(FidelidadeService.class);
-        cobrador = new CobradorDePixService(pedidos, fidelidade, lojas, integracoes, pix, mock(DevolucaoDeEstoqueService.class), GerenciadorDeTransacaoFalso.novo(), 30);
+        estorno = mock(EstornoDaVendaService.class);
+        cobrador = new CobradorDePixService(pedidos, fidelidade, lojas, integracoes, pix, estorno, GerenciadorDeTransacaoFalso.novo(), 30);
         when(pedidos.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
         when(lojas.findById(1L)).thenReturn(Optional.of(new Loja()));
         when(integracoes.findByLojaIdAndCanal(1L, "PIX")).thenReturn(Optional.empty());
@@ -80,7 +82,13 @@ class PixPagoDepoisDoPrazoTest {
 
         cobrador.expirarAbandonados();
 
-        verify(fidelidade).devolver(1L, 42L, new BigDecimal("20.00"));
+        // A devolucao do cashback saiu daqui para o EstornoDaVendaService, que e o ponto unico dos
+        // quatro caminhos de cancelamento: era chamada na mao em dois deles e os outros dois esqueciam.
+        // O `false` diz que este PIX nunca foi pago, entao ha so o resgate para devolver — se fosse
+        // `true`, o estorno tiraria do cliente um cashback que esta venda nunca creditou. A conta em si
+        // esta provada em CancelamentoDevolveCashbackTest, com o FidelidadeService de verdade.
+        verify(estorno).devolver(p, StatusPedido.RECEBIDO, false);
+        verify(fidelidade, never()).devolver(any(), any(), any());
     }
 
     @Test

@@ -23,8 +23,17 @@ public class Cupom {
     public Boolean ativo = true;
     public LocalDate validade;
 
+    /**
+     * Fuso de Brasilia, explicito.
+     *
+     * <p>O container roda em UTC. Com {@code LocalDate.now()} sem fuso, o cupom com validade "hoje"
+     * deixava de valer as 21h de Brasilia — dentro do horario de jantar, que e o pico da loja. O
+     * lojista divulgava o cupom valido ate hoje e o cliente levava "cupom vencido" na hora do pedido.</p>
+     */
+    private static final java.time.ZoneId ZONE = java.time.ZoneId.of("America/Sao_Paulo");
+
     public boolean valido() {
-        return Boolean.TRUE.equals(ativo) && (validade == null || !validade.isBefore(LocalDate.now()));
+        return Boolean.TRUE.equals(ativo) && (validade == null || !validade.isBefore(LocalDate.now(ZONE)));
     }
 
     public BigDecimal desconto(BigDecimal total) {

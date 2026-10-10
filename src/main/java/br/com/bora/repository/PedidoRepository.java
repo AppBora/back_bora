@@ -47,15 +47,25 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                                 @Param("inicio") OffsetDateTime inicio,
                                 @Param("fim") OffsetDateTime fim);
 
-    /** Acerto de entregadores: soma por entregador das entregas realizadas ainda não acertadas, na janela. */
-    @Query("select p.entregador, count(p), coalesce(sum(p.taxaEntrega), 0), " +
+    /**
+     * Acerto de entregadores: soma por entregador das entregas realizadas ainda não acertadas, na janela.
+     *
+     * <p>Agrupa por {@code lower(trim(...))}, a MESMA chave que o {@link #entregasParaAcerto} usa para
+     * achar as entregas. Agrupando pelo texto cru, "Joao" e "joao " viravam duas linhas de R$ 5,00 na
+     * tela e fechar qualquer uma das duas pagava R$ 10,00, porque o "fazer acerto" juntava as duas.
+     * A previa mostrava um valor e o sistema pagava outro.</p>
+     *
+     * <p>O nome exibido e o {@code min()} do grupo: qualquer uma das variantes serve de entrada para o
+     * {@code entregasParaAcerto}, que normaliza os dois lados.</p>
+     */
+    @Query("select min(p.entregador), count(p), coalesce(sum(p.taxaEntrega), 0), " +
            "coalesce(sum(case when upper(coalesce(p.formaPagamento, '')) like '%DINHEIRO%' then p.valorTotal else 0 end), 0), " +
            "coalesce(sum(p.valorTotal), 0) " +
            "from Pedido p where p.lojaId = :lojaId " +
            "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
-           "and p.entregador is not null and p.entregador <> '' " +
+           "and p.entregador is not null and trim(p.entregador) <> '' " +
            "and p.entregueEm >= :inicio and p.entregueEm < :fim " +
-           "group by p.entregador order by p.entregador")
+           "group by lower(trim(p.entregador)) order by min(p.entregador)")
     List<Object[]> previaAcerto(@Param("lojaId") Long lojaId,
                                 @Param("inicio") OffsetDateTime inicio,
                                 @Param("fim") OffsetDateTime fim);

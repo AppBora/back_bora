@@ -30,7 +30,7 @@ class EstoqueVoltaNoCancelamentoTest {
     private ProdutoRepository produtos;
     private InsumoRepository insumosRepo;
     private ProdutoInsumoRepository fichas;
-    private DevolucaoDeEstoqueService devolucao;
+    private EstornoDaVendaService devolucao;
 
     private Produto refrigerante;   // sem ficha: controla o proprio estoque
     private Produto acai;           // com ficha: consome insumos
@@ -69,7 +69,9 @@ class EstoqueVoltaNoCancelamentoTest {
 
         InsumoService insumoService = new InsumoService(insumosRepo, fichas, produtos,
                 mock(br.com.bora.security.AuthContext.class));
-        devolucao = new DevolucaoDeEstoqueService(itens, produtos, insumoService);
+        // Este teste e sobre ESTOQUE. O estorno de cashback vive no FidelidadeService e tem
+        // teste proprio em CancelamentoDevolveCashbackTest; aqui ele e mock para nao interferir.
+        devolucao = new EstornoDaVendaService(itens, produtos, insumoService, mock(FidelidadeService.class));
     }
 
     private Pedido pedido() {
@@ -93,7 +95,7 @@ class EstoqueVoltaNoCancelamentoTest {
     void pixAbandonado_devolveOEstoqueDoProduto() {
         pedidoTem(item(10L, 3, false));
 
-        int mexidos = devolucao.devolver(pedido(), StatusPedido.RECEBIDO);
+        int mexidos = devolucao.devolver(pedido(), StatusPedido.RECEBIDO, true);
 
         assertEquals(1, mexidos);
         assertEquals(23, refrigerante.estoque, "3 latas de um PIX que ninguem pagou tem que voltar");
@@ -103,7 +105,7 @@ class EstoqueVoltaNoCancelamentoTest {
     void pixAbandonado_devolveOsInsumosDaFicha() {
         pedidoTem(item(11L, 2, true));
 
-        devolucao.devolver(pedido(), StatusPedido.RECEBIDO);
+        devolucao.devolver(pedido(), StatusPedido.RECEBIDO, true);
 
         // 2 acais x 300 g = 600 g de polpa voltam para os 5 kg
         assertEquals(0, new BigDecimal("5.600").compareTo(polpa.estoque),
@@ -114,7 +116,7 @@ class EstoqueVoltaNoCancelamentoTest {
     void cozinhaJaFez_naoDevolveIngrediente() {
         pedidoTem(item(11L, 2, true));
 
-        int mexidos = devolucao.devolver(pedido(), StatusPedido.EM_PREPARO);
+        int mexidos = devolucao.devolver(pedido(), StatusPedido.EM_PREPARO, true);
 
         assertEquals(0, mexidos);
         assertEquals(0, new BigDecimal("5.000").compareTo(polpa.estoque),
@@ -125,7 +127,7 @@ class EstoqueVoltaNoCancelamentoTest {
     void cozinhaJaFez_masORefrigeranteContinuaNaGeladeira() {
         pedidoTem(item(10L, 2, false));
 
-        devolucao.devolver(pedido(), StatusPedido.PRONTO);
+        devolucao.devolver(pedido(), StatusPedido.PRONTO, true);
 
         assertEquals(22, refrigerante.estoque,
                 "lata nao e preparada, e tirada da prateleira: cancelou antes de sair, volta");
@@ -135,7 +137,7 @@ class EstoqueVoltaNoCancelamentoTest {
     void pedidoQueJaSaiuParaEntrega_naoDevolveNada() {
         pedidoTem(item(10L, 2, false), item(11L, 1, true));
 
-        int mexidos = devolucao.devolver(pedido(), StatusPedido.SAIU_PARA_ENTREGA);
+        int mexidos = devolucao.devolver(pedido(), StatusPedido.SAIU_PARA_ENTREGA, true);
 
         assertEquals(0, mexidos);
         assertEquals(20, refrigerante.estoque, "a lata esta na mochila do motoboy, nao na geladeira");
@@ -150,7 +152,7 @@ class EstoqueVoltaNoCancelamentoTest {
         when(fichas.findByLojaIdAndProdutoId(1L, 10L)).thenReturn(List.of(fichaNova()));
         pedidoTem(item(10L, 4, false));
 
-        devolucao.devolver(pedido(), StatusPedido.RECEBIDO);
+        devolucao.devolver(pedido(), StatusPedido.RECEBIDO, true);
 
         assertEquals(24, refrigerante.estoque, "tinha que devolver as 4 latas que realmente baixaram");
         assertEquals(0, new BigDecimal("5.000").compareTo(polpa.estoque),
@@ -166,7 +168,7 @@ class EstoqueVoltaNoCancelamentoTest {
         // estoque inventado o lojista nunca descobre de onde veio.
         pedidoTem(item(11L, 1, null));
 
-        int mexidos = devolucao.devolver(pedido(), StatusPedido.CONFIRMADO);
+        int mexidos = devolucao.devolver(pedido(), StatusPedido.CONFIRMADO, true);
 
         assertEquals(0, mexidos);
         assertEquals(0, new BigDecimal("5.000").compareTo(polpa.estoque),
@@ -177,7 +179,7 @@ class EstoqueVoltaNoCancelamentoTest {
     void itemAntigoSemMarca_tambemNaoMexeNoEstoqueDoProduto() {
         pedidoTem(item(10L, 3, null));
 
-        devolucao.devolver(pedido(), StatusPedido.RECEBIDO);
+        devolucao.devolver(pedido(), StatusPedido.RECEBIDO, true);
 
         assertEquals(20, refrigerante.estoque,
                 "sem saber como baixou, nao devolve: 20 continua 20");
@@ -187,7 +189,7 @@ class EstoqueVoltaNoCancelamentoTest {
     void produtoQueNaoControlaEstoque_naoGanhaSaldoDoNada() {
         pedidoTem(item(11L, 5, false)); // acai nao tem campo estoque preenchido
 
-        int mexidos = devolucao.devolver(pedido(), StatusPedido.RECEBIDO);
+        int mexidos = devolucao.devolver(pedido(), StatusPedido.RECEBIDO, true);
 
         assertEquals(0, mexidos);
         assertNull(acai.estoque, "quem nao controla estoque continua sem numero nenhum");

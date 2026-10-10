@@ -74,7 +74,17 @@ public class RelatorioService {
         String nomeLoja = lojas.findById(lojaId).map(l -> l.getNome()).orElse(null);
         BigDecimal fat = soma(vendas.stream().map(p -> p.valorTotal));
         int qtdPed = vendas.size();
-        int cancelados = todos.size() - vendas.size();
+        // Cancelado e o pedido CANCELADO, nada mais. Isto era `todos.size() - vendas.size()`, e como
+        // `vendas` tambem exclui o PIX gerado e nao pago, todo checkout esperando pagamento aparecia na
+        // tela como cancelamento. Numa loja com PIX ligado isso inflava o numero todos os dias, e o
+        // lojista achava que estava perdendo venda que na verdade ainda podia entrar.
+        int cancelados = (int) todos.stream().filter(p -> p.status == StatusPedido.CANCELADO).count();
+        // Os que ficaram de fora do faturamento por falta de pagamento sao outra coisa, e o lojista
+        // quer saber: ainda podem virar venda.
+        int aguardandoPagamento = (int) todos.stream()
+                .filter(p -> p.status != StatusPedido.CANCELADO)
+                .filter(Pedido::pagamentoPendente)
+                .count();
         BigDecimal ticket = qtdPed == 0 ? BigDecimal.ZERO : fat.divide(BigDecimal.valueOf(qtdPed), 2, RoundingMode.HALF_UP);
 
         // por dia (faturamento) — série dos últimos `janela` dias
@@ -130,6 +140,7 @@ public class RelatorioService {
         out.put("pedidos", qtdPed);
         out.put("ticketMedio", ticket);
         out.put("cancelados", cancelados);
+        out.put("aguardandoPagamento", aguardandoPagamento);
         out.put("cmv", cmv);
         out.put("margem", margem);
         out.put("margemPct", margemPct);

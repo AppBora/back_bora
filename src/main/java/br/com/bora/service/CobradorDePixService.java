@@ -33,7 +33,7 @@ public class CobradorDePixService {
     private final LojaRepository lojas;
     private final IntegracaoCanalRepository integracoes;
     private final PixService pix;
-    private final DevolucaoDeEstoqueService devolucao;
+    private final EstornoDaVendaService devolucao;
     /**
      * Transacao explicita. O metodo abaixo chamava {@code cancelarVencidos()} em si mesmo, e chamada
      * interna NAO passa pelo proxy do Spring: o {@code @Transactional} daquele metodo nunca valeu
@@ -46,7 +46,7 @@ public class CobradorDePixService {
 
     public CobradorDePixService(PedidoRepository pedidos, FidelidadeService fidelidade,
                                 LojaRepository lojas, IntegracaoCanalRepository integracoes, PixService pix,
-                                DevolucaoDeEstoqueService devolucao,
+                                EstornoDaVendaService devolucao,
                                 org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                                 @Value("${bora.pix.minutos-para-expirar:30}") int minutosParaExpirar) {
         this.pedidos = pedidos;
@@ -102,11 +102,11 @@ public class CobradorDePixService {
             p.aguardandoPagamento = false;
             pedidos.save(p);
             // O cashback foi debitado quando o pedido nasceu, para o mesmo saldo não valer em dois
-            // pedidos ao mesmo tempo. Venda que não aconteceu devolve o saldo ao cliente.
-            fidelidade.devolver(p.lojaId, p.clienteId, p.cashbackUsado);
-            // E o estoque tambem. O pedido baixou produto ou insumo quando nasceu, e checkout
-            // abandonado nunca foi para a cozinha: tudo o que ele consumiu volta.
-            devolucao.devolver(p, anterior);
+            // pedidos ao mesmo tempo. Venda que não aconteceu devolve o saldo ao cliente — e devolve o
+            // estoque, porque o pedido baixou produto ou insumo quando nasceu e checkout abandonado
+            // nunca foi para a cozinha. As duas coisas moram no EstornoDaVendaService.
+            // false: este PIX nunca foi pago, entao a venda nao entrou no historico nem gerou cashback.
+            devolucao.devolver(p, anterior, false);
             cancelados.add(p);
         }
         return cancelados;

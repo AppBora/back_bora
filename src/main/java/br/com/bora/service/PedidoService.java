@@ -51,7 +51,7 @@ public class PedidoService {
     private final FidelidadeService fidelidade;
     private final ComplementoService complementos;
     private final AuthContext ctx;
-    private final DevolucaoDeEstoqueService devolucao;
+    private final EstornoDaVendaService devolucao;
     /** Transacao explicita, para agrupar o que precisa cair junto sem prender chamada externa. */
     private final org.springframework.transaction.support.TransactionTemplate tx;
 
@@ -60,7 +60,7 @@ public class PedidoService {
                          IntegracaoService integracoes, TaxaEntregaRepository taxasEntrega,
                          InsumoService insumos, FidelidadeService fidelidade,
                          ComplementoService complementos, AuthContext ctx,
-                         DevolucaoDeEstoqueService devolucao,
+                         EstornoDaVendaService devolucao,
                          org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao) {
         this.fidelidade = fidelidade;
         this.complementos = complementos;
@@ -233,6 +233,10 @@ public class PedidoService {
                 : taxaPara(lojaId, p.clienteId, req.origem());
         p.taxaEntrega = taxa;
         p.valorTotal = total.add(taxa).subtract(resgate);
+        // Em campo proprio, igual ao cardapio. Sem isto o pedido de balcao descontava o cashback e nao
+        // deixava registro de quanto: no cancelamento nao havia o que devolver, e o cliente perdia o
+        // saldo que gastou numa venda que nao aconteceu.
+        if (resgate.signum() > 0) p.cashbackUsado = resgate;
         Pedido salvo = repo.save(p);
         itens.forEach(it -> it.setPedidoId(salvo.id));
         itemRepo.saveAll(itens);
@@ -334,7 +338,9 @@ public class PedidoService {
         p.atualizadoEm = OffsetDateTime.now();
         p.motivoCancelamento = motivo == null || motivo.isBlank() ? "Cancelado pelo marketplace" : motivo;
         Pedido salvo = repo.save(p);
-        devolucao.devolver(salvo, anterior); // mesma regra do cancelamento pelo painel
+        // Mesma regra do cancelamento pelo painel. true: pedido de marketplace nunca espera PIX, entao
+        // a venda ja tinha entrado no historico do cliente quando nasceu.
+        devolucao.devolver(salvo, anterior, true);
         LogStatus registro = new LogStatus();
         registro.setLojaId(salvo.lojaId);
         registro.setPedidoId(salvo.id);
@@ -466,11 +472,15 @@ public class PedidoService {
         // erro 500, tentar de novo dava "estado final" e o estoque nunca voltava.
         // As chamadas externas (marketplace, WhatsApp) ficam FORA, antes e depois.
         final StatusPedido anteriorFinal = anterior;
+        // PIX gerado e nao pago nunca entrou no historico do cliente nem gerou cashback: houve apenas o
+        // debito do resgate. Lido ANTES da gravacao, porque e o estado em que a venda nasceu que decide
+        // o que existe para desfazer.
+        final boolean vendaJaContabilizada = !p.pagamentoPendente();
         Pedido salvo = tx.execute(st -> {
             Pedido gravado = repo.save(p);
-            // Venda que nao aconteceu devolve o que consumiu. A regra depende do estagio em que o
-            // pedido estava: ver DevolucaoDeEstoqueService.
-            if (status == StatusPedido.CANCELADO) devolucao.devolver(gravado, anteriorFinal);
+            // Venda que nao aconteceu devolve o que consumiu: estoque, insumo e cashback. A regra
+            // depende do estagio em que o pedido estava: ver EstornoDaVendaService.
+            if (status == StatusPedido.CANCELADO) devolucao.devolver(gravado, anteriorFinal, vendaJaContabilizada);
             registrarLog(gravado, anteriorFinal, status); // RN07
             return gravado;
         });
