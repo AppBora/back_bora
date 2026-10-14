@@ -10,6 +10,9 @@ public interface PagamentoAssinaturaRepository extends JpaRepository<PagamentoAs
 
     boolean existsByAsaasPaymentId(String asaasPaymentId);
 
+    /** Para acrescentar a observacao do registro manual ao que acabou de ser gravado. */
+    java.util.Optional<br.com.bora.entity.PagamentoAssinatura> findFirstByAsaasPaymentId(String asaasPaymentId);
+
     java.util.Optional<PagamentoAssinatura> findByAsaasPaymentId(String asaasPaymentId);
 
     /** Mensalidades recebidas dentro de um intervalo (usado pelo faturamento do mês). */

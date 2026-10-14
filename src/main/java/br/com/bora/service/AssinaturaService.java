@@ -30,6 +30,11 @@ public class AssinaturaService {
     private final AssinaturaRepository repo;
     private final LojaRepository lojas;
     private final UsuarioRepository usuarios;
+    /** Fuso do negocio. O container roda em UTC: sem isto, "hoje" vira amanha depois das 21h. */
+    private static final java.time.ZoneId ZONE = java.time.ZoneId.of("America/Sao_Paulo");
+
+    private static final org.slf4j.Logger AUDITORIA = org.slf4j.LoggerFactory.getLogger("AUDITORIA");
+
     private final AsaasClient asaas;
     private final AuthContext ctx;
     private final br.com.bora.repository.PagamentoAssinaturaRepository pagamentos;
@@ -220,6 +225,84 @@ public class AssinaturaService {
      * uma vez. Sem a trava do identificador, a mesma mensalidade entraria duas vezes no faturamento do
      * mês — e dois pedidos de nota fiscal sairiam para o mesmo cliente.</p>
      */
+    /** O que aconteceu no registro manual, para a tela contar a verdade ao dono. */
+    public record PagamentoRegistrado(boolean baixadoNoAsaas, String cobranca, String recado) {}
+
+    /**
+     * Registra um pagamento que o lojista fez FORA do Asaas (PIX direto na conta, dinheiro).
+     *
+     * <p><b>Por que isto existe:</b> quem muda o estado da assinatura e o webhook do Asaas. Pagamento
+     * feito fora dele nunca dispara webhook, entao o lojista paga e o sistema continua achando que
+     * nao — e o corte por falta de pagamento tira a loja do ar na data da carencia. Foi o que
+     * aconteceu com a Zira em 14/10/2026: ela pagou direto e o acesso dela vencia em 23/10.</p>
+     *
+     * <h2>Dar baixa no Asaas e parte do conserto, nao enfeite</h2>
+     * <p>Registrar so no nosso banco deixaria a cobranca ABERTA la. O Asaas continua cobrando e
+     * reenvia o aviso de atraso, que cai no nosso webhook como {@code PAYMENT_OVERDUE} — marcando a
+     * assinatura INADIMPLENTE outra vez e abrindo nova carencia. O registro manual seria desfeito pelo
+     * proprio Asaas, e a loja cortada dez dias depois. Por isso tentamos a baixa primeiro.</p>
+     *
+     * <p>Se a baixa der certo, o Asaas ainda dispara {@code PAYMENT_RECEIVED} e o webhook passa por
+     * aqui de novo — sem duplicar, porque o {@link #registrarPagamento} ja ignora id repetido.</p>
+     *
+     * <p>Se nao houver cobranca aberta, ou o Asaas nao responder, o registro e feito do mesmo jeito
+     * (com id {@code manual:...}) e o recado diz que a cobranca continua aberta la. Melhor a loja no
+     * ar com a cobranca pendente do que a loja fora do ar por um pagamento que aconteceu.</p>
+     */
+    @Transactional
+    public PagamentoRegistrado registrarPagamentoRecebidoForaDoAsaas(
+            Long lojaId, BigDecimal valor, java.time.LocalDate pagoEm, String observacao) {
+
+        Assinatura a = repo.findByLojaId(lojaId).orElseThrow(() -> new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "Esta loja não tem assinatura; não há pagamento a registrar."));
+        if (valor == null || valor.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o valor recebido.");
+        }
+        java.time.LocalDate dia = pagoEm != null ? pagoEm : java.time.LocalDate.now(ZONE);
+        if (dia.isAfter(java.time.LocalDate.now(ZONE))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A data do pagamento não pode ser no futuro.");
+        }
+
+        // 1) Baixa no Asaas, para ele parar de cobrar e de reenviar o aviso de atraso.
+        boolean baixado = false;
+        String cobranca = null;
+        if (asaas.configurado() && a.getAsaasSubscriptionId() != null) {
+            cobranca = asaas.cobrancaAbertaDaAssinatura(a.getAsaasSubscriptionId());
+            if (cobranca != null) {
+                baixado = asaas.receberEmDinheiro(cobranca, valor.doubleValue(), dia.toString());
+            }
+        }
+
+        // 2) O mesmo efeito do PAYMENT_RECEIVED: a loja volta a ter acesso sem data de fim.
+        a.setStatus(StatusAssinatura.ATIVA);
+        ativarLoja(lojaId, true);
+        prazoDeAcesso(lojaId, null);
+
+        // 3) O registro, para o faturamento da plataforma contar este dinheiro.
+        String idDoRegistro = baixado && cobranca != null ? cobranca : "manual:" + lojaId + ":" + dia;
+        registrarPagamento(a, idDoRegistro,
+                valor, dia.atStartOfDay(ZONE).toOffsetDateTime());
+        if (observacao != null && !observacao.isBlank()) {
+            pagamentos.findFirstByAsaasPaymentId(idDoRegistro).ifPresent(p -> {
+                p.descricao = (p.descricao == null ? "" : p.descricao + " · ") + observacao.trim();
+                pagamentos.save(p);
+            });
+        }
+
+        AUDITORIA.warn("AUDITORIA cobranca: pagamento de R$ {} da loja {} registrado A MAO (recebido "
+                        + "fora do Asaas em {}); baixa no Asaas: {} (cobranca {})",
+                valor, lojaId, dia, baixado ? "FEITA" : "NAO FEITA", cobranca);
+
+        String recado = baixado
+                ? "Pagamento registrado e cobrança baixada no Asaas. O acesso da loja voltou a não ter prazo."
+                : cobranca == null
+                    ? "Pagamento registrado. Não havia cobrança aberta no Asaas para dar baixa."
+                    : "Pagamento registrado, MAS a baixa no Asaas falhou: a cobrança " + cobranca
+                      + " continua aberta lá. Dê a baixa no painel do Asaas, senão o aviso de atraso "
+                      + "dele vai marcar a loja como inadimplente de novo.";
+        return new PagamentoRegistrado(baixado, cobranca, recado);
+    }
+
     private void registrarPagamento(Assinatura a, String paymentId, BigDecimal valor, OffsetDateTime pagoEm) {
         if (paymentId == null || paymentId.isBlank()) return; // aviso sem cobrança: nada a guardar
         if (pagamentos.existsByAsaasPaymentId(paymentId)) return;

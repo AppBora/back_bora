@@ -273,6 +273,55 @@ public class PlataformaController {
      * cliente exigiria saber a senha dele — e ela deixa de valer assim que o lojista a troca.
      * O papel continua ADMINISTRADOR_BORA no token; o que muda é o contexto de loja.</p>
      */
+    /**
+     * Registra um pagamento que o lojista fez FORA do Asaas (PIX direto na conta, dinheiro).
+     *
+     * <p><b>O que isto resolve:</b> quem muda o estado da assinatura e o webhook do Asaas, e pagamento
+     * feito fora dele nunca dispara webhook. O lojista paga, o sistema continua achando que nao, e o
+     * corte por falta de pagamento tira a loja do ar na data da carencia. Aconteceu com a Zira em
+     * 14/10/2026: pagou direto e o acesso vencia em 23/10.</p>
+     *
+     * <p>Alem de registrar, tenta dar BAIXA na cobranca aberta no Asaas — sem isso ele continua
+     * cobrando e o aviso de atraso que reenvia desfaz o registro. A resposta diz se a baixa saiu, e o
+     * que fazer quando nao sai. Ver {@code AssinaturaService.registrarPagamentoRecebidoForaDoAsaas}.</p>
+     *
+     * <p>Corpo: {@code {"valor": 199.00, "pagoEm": "2026-10-14", "observacao": "PIX na conta"}}.
+     * Sem {@code pagoEm}, vale hoje no fuso de Brasilia.</p>
+     */
+    @PostMapping("/lojas/{lojaId}/pagamento-recebido")
+    public Map<String, Object> registrarPagamentoRecebido(@PathVariable Long lojaId,
+                                                          @RequestBody(required = false) Map<String, Object> body) {
+        ctx.requireAdminBora();
+        exigirLoja(lojaId);
+        Map<String, Object> corpo = body == null ? Map.of() : body;
+
+        java.math.BigDecimal valor;
+        try {
+            Object v = corpo.get("valor");
+            valor = v == null ? null : new java.math.BigDecimal(String.valueOf(v).replace(",", "."));
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Valor inválido.");
+        }
+        java.time.LocalDate pagoEm = null;
+        Object d = corpo.get("pagoEm");
+        if (d != null && !String.valueOf(d).isBlank()) {
+            try {
+                pagoEm = java.time.LocalDate.parse(String.valueOf(d));
+            } catch (Exception e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Data do pagamento inválida (use AAAA-MM-DD).");
+            }
+        }
+
+        var r = assinaturas.registrarPagamentoRecebidoForaDoAsaas(
+                lojaId, valor, pagoEm, (String) corpo.get("observacao"));
+
+        Map<String, Object> resp = new java.util.LinkedHashMap<>();
+        resp.put("baixadoNoAsaas", r.baixadoNoAsaas());
+        resp.put("cobranca", r.cobranca());
+        resp.put("recado", r.recado());
+        return resp;
+    }
+
     @PostMapping("/lojas/{lojaId}/acessar")
     public Map<String, Object> acessarLoja(@PathVariable Long lojaId) {
         ctx.requireAdminBora();
