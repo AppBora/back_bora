@@ -26,9 +26,11 @@ public class IntegracaoCanal {
     @Column(name = "client_id")
     public String clientId;
     @Column(name = "client_secret")
+    @jakarta.persistence.Convert(converter = br.com.bora.config.SegredoGuardado.class)
     public String clientSecret;   // credencial (token/secret) — preenchida pelo lojista
 
     @Column(name = "webhook_token")
+    @jakarta.persistence.Convert(converter = br.com.bora.config.SegredoGuardado.class)
     public String webhookToken;   // segredo que valida os webhooks de entrada
 
     @Column(name = "auto_aceitar")
@@ -37,8 +39,10 @@ public class IntegracaoCanal {
     // ---- OAuth do marketplace (V28) ----
     // O app e da plataforma (env); aqui ficam os tokens que ESTA loja autorizou.
     @Column(name = "access_token")
+    @jakarta.persistence.Convert(converter = br.com.bora.config.SegredoGuardado.class)
     public String accessToken;
     @Column(name = "refresh_token")
+    @jakarta.persistence.Convert(converter = br.com.bora.config.SegredoGuardado.class)
     public String refreshToken;
     @Column(name = "token_expira_em")
     public OffsetDateTime tokenExpiraEm;

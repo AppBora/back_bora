@@ -20,8 +20,22 @@ public class ProdutoService {
         this.ctx = ctx;
     }
 
-    public List<Produto> listar() {
-        return repo.findByLojaIdOrderByNomeAsc(ctx.lojaId());
+    /**
+     * A lista do painel, sem a foto em base64. Ver {@link br.com.bora.dto.ProdutoResumo}.
+     *
+     * <p>Quem precisa da foto de um produto so pede a dela, pela URL que vem no {@code imagemUrl} —
+     * e o navegador cacheia. O caminho de SALVAR nao muda: a tela so manda {@code imagemUrl} quando o
+     * lojista escolhe foto nova, e o {@code atualizar} so mexe na coluna quando o campo vem.</p>
+     */
+    public List<br.com.bora.dto.ProdutoResumo> listar() {
+        Long lojaId = ctx.lojaId();
+        return repo.resumoDaLoja(lojaId).stream()
+                .map(r -> br.com.bora.dto.ProdutoResumo.de(
+                        (Long) r[0], (String) r[1], (String) r[2],
+                        (java.math.BigDecimal) r[3], (java.math.BigDecimal) r[4],
+                        (Integer) r[5], (Integer) r[6], (Boolean) r[7],
+                        lojaId, Boolean.TRUE.equals(r[8])))
+                .toList();
     }
 
     public Produto criar(Produto p) {

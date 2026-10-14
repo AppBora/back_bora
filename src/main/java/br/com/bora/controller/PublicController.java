@@ -398,12 +398,27 @@ public class PublicController {
             if (nome == null || nome.isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe seu nome");
             }
+            // Entrega SEM ENDERECO e SEM TELEFONE passava: so o nome era exigido. A loja recebia um
+            // pedido para entregar e nao tinha para onde ir nem como ligar — e o cliente so descobria
+            // o problema quando o pedido nao chegava. O endereco nem tinha asterisco na tela.
+            //
+            // Retirada nao precisa de endereco (o cliente vem buscar), mas o telefone continua
+            // exigido: e como a loja avisa que esta pronto.
+            if (!retirada && (endereco == null || endereco.trim().length() < 8)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Informe o endereco da entrega, com rua e numero.");
+            }
+            String telDigitos = telefone == null ? "" : telefone.replaceAll("[^0-9]", "");
+            if (telDigitos.length() < 10 || telDigitos.length() > 13) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Informe um telefone com DDD para a loja falar com voce.");
+            }
 
             Pedido p = new Pedido();
             p.lojaId = lojaId;
             p.origem = "Cardápio Digital";
             p.formaPagamento = "PIX".equals(forma) ? "PIX (aguardando)" : "Na entrega";
-            if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("\\D", "");
+            if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("[^0-9]", "");
             StringBuilder ob = new StringBuilder("Cliente: ").append(nome.trim());
             if (telefone != null && !telefone.isBlank()) ob.append(" | Tel: ").append(telefone.trim());
             if (retirada) ob.append(" | RETIRADA NO BALCAO");

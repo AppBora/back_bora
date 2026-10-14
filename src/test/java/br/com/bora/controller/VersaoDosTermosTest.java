@@ -31,7 +31,16 @@ class VersaoDosTermosTest {
     @Test
     void aConstanteBateComADataPublicadaNosTermos() throws IOException {
         Path termos = Paths.get("..", "bora-landing", "termos.html");
-        assumeTrue(Files.exists(termos), "termos.html nao esta neste checkout");
+        // Este teste precisa dos DOIS repositorios. Dentro do build da imagem so existe o `src`, entao
+        // ali ele se pula — e por anos ele se pulou em silencio, o que e pior que nao existir: aparecia
+        // como "skipped" no meio de 336 verdes e ninguem olhava.
+        //
+        // O portao de verdade e o passo 2 do `bora-landing/deploy/deploy-api.sh`, que roda ESTE teste
+        // a partir do checkout completo e ABORTA o deploy se a data divergir. Aqui o pulo fica
+        // explicito, para quem roda `mvn test` sozinho saber que a cobertura esta no deploy.
+        assumeTrue(Files.exists(termos),
+                "termos.html nao esta neste checkout (normal dentro da imagem). "
+                + "Quem garante isto no deploy e o passo 2 do deploy-api.sh.");
 
         String constante = Files.readString(
                 Paths.get("src/main/java/br/com/bora/service/TermosService.java"));

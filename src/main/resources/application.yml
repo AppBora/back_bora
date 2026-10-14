@@ -38,6 +38,18 @@ spring:
         format_sql: true
   flyway:
     enabled: true
+bora:
+  seguranca:
+    # Cifra em repouso as credenciais de TERCEIROS no banco (chave do Asaas do lojista, client secret e
+    # tokens de marketplace). Ver config/SegredoGuardado.java.
+    #
+    # SEM VALOR PADRAO de proposito: vazio mantem tudo em texto puro, exatamente como antes, com aviso
+    # no log. Assim este codigo sobe sem coordenar com a configuracao do servidor.
+    #
+    # Gerar: openssl rand -base64 48
+    # PERDER A CHAVE E PERDER AS CREDENCIAIS: guardar junto do api.env no gerenciador de senhas.
+    segredo-colunas: ${BORA_SEGREDO_COLUNAS:}
+
 server:
   port: ${PORT:8080}
   # Deploy e `docker stop -t 30 api` seguido de `run`. Sem isto o Tomcat morria no ato e cortava a

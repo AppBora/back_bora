@@ -17,7 +17,7 @@ public class ProdutoController {
     }
 
     @GetMapping
-    public List<Produto> listar() {
+    public List<br.com.bora.dto.ProdutoResumo> listar() {
         return service.listar();
     }
 

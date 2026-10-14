@@ -61,6 +61,7 @@ public class Loja {
      *  NUNCA serializar: é credencial de pagamento viva. */
     @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "asaas_api_key")
+    @jakarta.persistence.Convert(converter = br.com.bora.config.SegredoGuardado.class)
     public String asaasApiKey;
 
     /** Situação do recebimento: null/PENDENTE (falta KYC) · ATIVO · ERRO. */

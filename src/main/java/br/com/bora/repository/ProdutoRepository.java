@@ -44,4 +44,17 @@ public interface ProdutoRepository extends JpaRepository<Produto, Long> {
     int devolverEstoque(@org.springframework.data.repository.query.Param("id") Long id,
                         @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
                         @org.springframework.data.repository.query.Param("qtd") int qtd);
+
+    /**
+     * Produtos da loja SEM a coluna da foto.
+     *
+     * <p>Ver {@link br.com.bora.dto.ProdutoResumo}: a foto vive como data URL dentro de
+     * {@code imagem_url} (453 kB na Zira), e toda abertura de Produtos, PDV, Estoque, Contagem e Novo
+     * Pedido lia isso. Aqui a consulta nem toca na coluna — devolve so se existe foto.</p>
+     */
+    @org.springframework.data.jpa.repository.Query("""
+            select p.id, p.nome, p.categoria, p.preco, p.custo, p.estoque, p.estoqueMinimo, p.ativo,
+                   case when p.imagemUrl is null or p.imagemUrl = '' then false else true end
+              from Produto p where p.lojaId = :lojaId order by p.nome""")
+    java.util.List<Object[]> resumoDaLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 }

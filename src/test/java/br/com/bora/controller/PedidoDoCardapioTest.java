@@ -373,4 +373,81 @@ class PedidoDoCardapioTest {
         assertNotNull(guardado, "sem registro, o repetir nao tem como refazer o item");
         assertEquals("Granola", guardado.get(0).nome());
     }
+
+    // ---------------------------------------------------------------- entrega sem para onde ir
+    //
+    // O cardapio aceitava pedido de ENTREGA sem endereco e sem telefone: so o nome era exigido, e o
+    // endereco nem tinha asterisco na tela. A loja recebia um pedido para entregar e nao tinha para
+    // onde ir nem como ligar — e o cliente so descobria quando o pedido nao chegava.
+
+    @Test
+    void entregaSemEnderecoEhRecusada() {
+        var e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("endereco", ""), requisicao()));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+        assertTrue(e.getReason().toLowerCase().contains("endereco") || e.getReason().toLowerCase().contains("endereço"),
+                "o recado tem que dizer o que falta: " + e.getReason());
+        verify(pedidos, never()).save(any());
+    }
+
+    @Test
+    void entregaComEnderecoCurtoDemaisEhRecusada() {
+        // "Rua A" nao da para entregar: falta numero.
+        var e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("endereco", "Rua A"), requisicao()));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+    }
+
+    @Test
+    void pedidoSemTelefoneEhRecusado() {
+        var e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("telefone", ""), requisicao()));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+        assertTrue(e.getReason().toLowerCase().contains("telefone"), e.getReason());
+    }
+
+    @Test
+    void telefoneSemDddEhRecusado() {
+        var e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("telefone", "999990001"), requisicao()));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+    }
+
+    @Test
+    void telefoneComMascaraEhAceito() {
+        // O cliente digita do jeito que quiser; quem normaliza e o servidor.
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("telefone", "(15) 99999-0001"), requisicao()));
+    }
+
+    @Test
+    void retiradaNaoPrecisaDeEnderecoMasPrecisaDeTelefone() {
+        // Quem vai buscar na loja nao tem entrega; o telefone continua, porque e como a loja avisa
+        // que o pedido ficou pronto.
+        assertDoesNotThrow(() -> controller.pedirOnline(1L,
+                corpo("tipoEntrega", "RETIRADA", "endereco", ""), requisicao()));
+
+        var e = assertThrows(ResponseStatusException.class, () -> controller.pedirOnline(1L,
+                corpo("tipoEntrega", "RETIRADA", "endereco", "", "telefone", ""), requisicao()));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+    }
+
+    @Test
+    void oPedidoGuardaEnderecoBairroETipoEmCOLUNA_naoSoNoTexto() {
+        controller.pedirOnline(1L, corpo("endereco", "Rua das Flores, 123 ap 2"), requisicao());
+
+        Pedido p = salvo();
+        assertEquals("Rua das Flores, 123 ap 2", p.enderecoEntrega,
+                "o card do painel mostrava cliente.endereco, que no cliente recorrente e o antigo");
+        assertEquals("ENTREGA", p.tipoEntrega);
+    }
+
+    @Test
+    void naRetiradaOPedidoNaoGuardaEnderecoDeEntrega() {
+        controller.pedirOnline(1L, corpo("tipoEntrega", "RETIRADA", "endereco", ""), requisicao());
+
+        Pedido p = salvo();
+        assertEquals("RETIRADA", p.tipoEntrega);
+        assertNull(p.enderecoEntrega);
+        assertTrue(p.ehRetirada());
+    }
 }
