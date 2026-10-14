@@ -159,7 +159,10 @@ class PromocaoDaDescontoDeVerdadeTest {
     void cupomVencidoNaoVale() {
         Cupom c = new Cupom();
         c.lojaId = LOJA; c.codigo = "DEZ"; c.valor = new BigDecimal("10");
-        c.validade = LocalDate.now().minusDays(1);
+        // Fuso explicito: a validade do cupom e uma regra de negocio em horario de Brasilia, e o
+        // container roda em UTC. Com LocalDate.now() sem fuso, este teste passava na minha maquina e
+        // falhava no build da imagem depois das 21h — o mesmo defeito que o Cupom.valido() tinha.
+        c.validade = LocalDate.now(java.time.ZoneId.of("America/Sao_Paulo")).minusDays(1);
         when(cupons.findByLojaIdAndCodigoIgnoreCase(LOJA, "DEZ")).thenReturn(Optional.of(c));
         when(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA, "DEZ")).thenReturn(Optional.empty());
 
