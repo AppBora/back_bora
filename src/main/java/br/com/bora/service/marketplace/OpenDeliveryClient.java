@@ -357,23 +357,23 @@ public class OpenDeliveryClient implements MarketplaceClient {
      * (cliente retirou), que a especificacao so aceita em pedido TAKEOUT.
      */
     @Override
-    public void enviarStatus(IntegracaoCanal i, String orderId, String statusInterno) {
+    public boolean enviarStatus(IntegracaoCanal i, String orderId, String statusInterno) {
         String verbo = verbo(i, statusInterno);
-        if (verbo == null) return;
+        if (verbo == null) return true; // nada a enviar neste status
         if ("dispatch".equals(verbo) || "delivered".equals(verbo)) {
             Map<String, Object> pedido = detalhePedido(i, orderId);
             if ("TAKEOUT".equalsIgnoreCase(str(pedido.get("type")))) {
                 if ("dispatch".equals(verbo)) {
                     log.info("Open Delivery: pedido {} e retirada; dispatch nao se aplica e nao foi enviado", orderId);
-                    return;
+                    return true;
                 }
                 verbo = "pickedUp";
             } else if (entregaPelaPlataforma(pedido)) {
                 log.info("Open Delivery: pedido {} e entregue pela 99; {} nao se aplica e nao foi enviado", orderId, verbo);
-                return;
+                return true;
             }
         }
-        post(i, orderId, verbo, null);
+        return post(i, orderId, verbo, null);
     }
 
     private String verbo(IntegracaoCanal i, String statusInterno) {
@@ -463,17 +463,21 @@ public class OpenDeliveryClient implements MarketplaceClient {
         post(i, orderId, "denyCancellation", corpo);
     }
 
-    private void post(IntegracaoCanal i, String orderId, String verbo, Object corpo) {
+    /** @return true se a 99 aceitou; false na falha, para o chamador saber que ha o que reenviar. */
+    private boolean post(IntegracaoCanal i, String orderId, String verbo, Object corpo) {
         try {
             RestClient.RequestBodySpec req = autenticado(i).post().uri(ORDERS + "/{id}/{verbo}", orderId, verbo);
             if (corpo != null) req = req.contentType(MediaType.APPLICATION_JSON).body(corpo);
             var resposta = req.retrieve().toBodilessEntity();
             log.info("Open Delivery: pedido {} -> {}{}", orderId, verbo, requestId(resposta.getHeaders()));
+            return true;
         } catch (HttpStatusCodeException e) {
             log.warn("Open Delivery: falha ao enviar {} do pedido {}: {}{}",
                     verbo, orderId, e.getMessage(), requestId(e.getResponseHeaders()));
+            return false;
         } catch (Exception e) {
             log.warn("Open Delivery: falha ao enviar {} do pedido {}: {}", verbo, orderId, e.getMessage());
+            return false;
         }
     }
 

@@ -409,6 +409,15 @@ public class PublicController {
             if (retirada) ob.append(" | RETIRADA NO BALCAO");
             if (endereco != null && !endereco.isBlank()) ob.append(" | End: ").append(endereco.trim());
             if (!retirada && bairro != null && !bairro.isBlank()) ob.append(" | Bairro: ").append(bairro.trim());
+
+            // E em COLUNA, nao so no texto. O texto continua para quem ja esta acostumado a ler a
+            // observacao, mas quem entrega passa a ler o campo: o card do painel mostrava
+            // `cliente.endereco`, que no cliente recorrente e o endereco antigo dele. Ver V48.
+            p.tipoEntrega = retirada ? "RETIRADA" : "ENTREGA";
+            if (!retirada) {
+                if (endereco != null && !endereco.isBlank()) p.enderecoEntrega = endereco.trim();
+                if (bairro != null && !bairro.isBlank()) p.bairroEntrega = bairro.trim();
+            }
             if (obs != null && !obs.isBlank()) ob.append(" | Obs: ").append(obs.trim());
             p.observacao = ob.toString();
 
@@ -451,10 +460,9 @@ public class PublicController {
                 // Fica gravado no item qual dos dois caminhos rodou. Quem cancelar o pedido devolve
                 // exatamente isso, sem depender da ficha que o lojista tiver no dia do cancelamento.
                 item.setConsumiuFicha(custoFicha != null);
-                if (custoFicha == null && prod.estoque != null) {
-                    prod.estoque = prod.estoque - qtd;
-                    produtos.save(prod);
-                }
+                // No BANCO, nao em Java: no pico, dois pedidos do mesmo item liam o mesmo estoque
+                // antes de qualquer um gravar e uma das baixas desaparecia.
+                if (custoFicha == null) produtos.baixarEstoque(prod.id, lojaId, qtd);
                 BigDecimal sub = unit.multiply(BigDecimal.valueOf(qtd));
                 item.setSubtotal(sub);
                 itens.save(item);
@@ -509,6 +517,9 @@ public class PublicController {
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("pedidoId", p.id);
             resp.put("codigo", p.codigo);
+            // Sem isto o cliente nao tem como acompanhar o proprio pedido: o status passou a exigir
+            // assinatura (ver statusPedido).
+            resp.put("acompanharToken", repetir.token(lojaId, p.id));
             resp.put("valorTotal", total);
             resp.put("desconto", descontoAplicado);
             resp.put("cashbackUsado", resgate);
@@ -626,8 +637,28 @@ public class PublicController {
     }
 
     /** Status público do pedido (para a tela de acompanhamento do QR PIX). */
+    /**
+     * Status do pedido para a tela de acompanhamento do cliente, protegido por assinatura.
+     *
+     * <p><b>O furo que isto fecha:</b> este endpoint nao pedia nada. Os ids de pedido sao sequenciais e
+     * globais, entao quem varresse {@code 1..N} lia o codigo, o status, o horario e o
+     * {@code motivoCancelamento} — texto livre digitado pela equipe — de QUALQUER pedido de QUALQUER
+     * loja. Dava para medir o movimento de um concorrente contando pedidos por dia.</p>
+     *
+     * <p>A assinatura e a mesma do "repetir pedido" ({@link RepetirPedidoService#token}), que ja existia
+     * no projeto: HMAC curto, comparado em tempo constante. Token errado devolve o MESMO 404 de pedido
+     * inexistente, para a resposta nao dizer se o pedido existe.</p>
+     *
+     * <p><b>Consequencia conhecida:</b> link de acompanhamento que o cliente recebeu ANTES deste deploy
+     * nao tem o {@code t} e para de funcionar. O link so serve enquanto o pedido esta em andamento
+     * (horas), entao o estrago e pequeno e preferivel a deixar a varredura aberta.</p>
+     */
     @GetMapping("/loja/{lojaId}/pedido/{pedidoId}/status")
-    public Map<String, Object> statusPedido(@PathVariable Long lojaId, @PathVariable Long pedidoId) {
+    public Map<String, Object> statusPedido(@PathVariable Long lojaId, @PathVariable Long pedidoId,
+                                            @RequestParam(name = "t", required = false) String token) {
+        if (!repetir.tokenValido(lojaId, pedidoId, token)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado");
+        }
         Pedido p = pedidos.findByIdAndLojaId(pedidoId, lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado"));
         Map<String, Object> m = new LinkedHashMap<>();

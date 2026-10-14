@@ -11,6 +11,8 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
 /**
@@ -66,6 +68,30 @@ class EstoqueVoltaNoCancelamentoTest {
         when(fichas.findByLojaIdAndProdutoId(1L, 10L)).thenReturn(List.of());
         when(insumosRepo.findByIdAndLojaId(99L, 1L)).thenReturn(Optional.of(polpa));
         when(insumosRepo.save(any(Insumo.class))).thenAnswer(i -> i.getArgument(0));
+
+        // A conta de estoque saiu do Java e virou UPDATE no banco (duas vendas simultaneas perdiam uma
+        // baixa). Aqui os mocks aplicam o mesmo efeito que o banco aplicaria, inclusive a condicao
+        // `estoque is not null`, para as afirmacoes deste teste continuarem sendo sobre o RESULTADO —
+        // quais itens voltam, quanto, e que a ficha de hoje nao vale — e nao sobre quem fez a soma.
+        // Que o Postgres faz a conta certa, e sob concorrencia, esta provado em EstoqueNaoPerdeBaixaIT.
+        when(produtos.devolverEstoque(anyLong(), anyLong(), anyInt())).thenAnswer(inv -> {
+            Produto alvo = produtos.findByIdAndLojaId(inv.getArgument(0), inv.getArgument(1)).orElse(null);
+            if (alvo == null || alvo.estoque == null) return 0;
+            alvo.estoque = alvo.estoque + (int) inv.getArgument(2);
+            return 1;
+        });
+        when(produtos.baixarEstoque(anyLong(), anyLong(), anyInt())).thenAnswer(inv -> {
+            Produto alvo = produtos.findByIdAndLojaId(inv.getArgument(0), inv.getArgument(1)).orElse(null);
+            if (alvo == null || alvo.estoque == null) return 0;
+            alvo.estoque = alvo.estoque - (int) inv.getArgument(2);
+            return 1;
+        });
+        when(insumosRepo.mexerNoEstoque(anyLong(), anyLong(), any(BigDecimal.class))).thenAnswer(inv -> {
+            Insumo alvo = insumosRepo.findByIdAndLojaId(inv.getArgument(0), inv.getArgument(1)).orElse(null);
+            if (alvo == null || alvo.estoque == null) return 0;
+            alvo.estoque = alvo.estoque.add(inv.getArgument(2));
+            return 1;
+        });
 
         InsumoService insumoService = new InsumoService(insumosRepo, fichas, produtos,
                 mock(br.com.bora.security.AuthContext.class));

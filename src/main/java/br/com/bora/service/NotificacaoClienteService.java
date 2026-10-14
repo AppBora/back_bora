@@ -23,13 +23,16 @@ public class NotificacaoClienteService {
     private final ClienteRepository clientes;
     private final IntegracaoCanalRepository integracoes;
     private final WhatsAppSender whats;
+    private final RepetirPedidoService repetir;
 
     public NotificacaoClienteService(LojaRepository lojas, ClienteRepository clientes,
-                                     IntegracaoCanalRepository integracoes, WhatsAppSender whats) {
+                                     IntegracaoCanalRepository integracoes, WhatsAppSender whats,
+                                     RepetirPedidoService repetir) {
         this.lojas = lojas;
         this.clientes = clientes;
         this.integracoes = integracoes;
         this.whats = whats;
+        this.repetir = repetir; // assina o link de acompanhamento
     }
 
     public void notificarFase(Pedido p, StatusPedido status) {
@@ -50,7 +53,10 @@ public class NotificacaoClienteService {
             if (tel == null || tel.replaceAll("\\D", "").length() < 10) return;
 
             String cod = p.codigo == null ? String.valueOf(p.id) : p.codigo;
-            String link = "https://borahapp.com.br/acompanhar.html?loja=" + p.lojaId + "&pedido=" + p.id;
+            // O `t` e obrigatorio: o status do pedido passou a exigir assinatura, senao qualquer um
+            // varria os pedidos de qualquer loja pelo id sequencial.
+            String link = "https://borahapp.com.br/acompanhar.html?loja=" + p.lojaId + "&pedido=" + p.id
+                    + "&t=" + repetir.token(p.lojaId, p.id);
             String texto = switch (status) {
                 case CONFIRMADO -> "✅ *" + loja.nome + "*: seu pedido " + cod + " foi confirmado! Já vamos começar o preparo.";
                 case EM_PREPARO -> "👨‍🍳 *" + loja.nome + "*: seu pedido " + cod + " está sendo preparado!";

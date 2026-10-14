@@ -33,7 +33,8 @@ public class UsuarioService {
 
     public List<UsuarioView> listar() {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
-        return repo.findByLojaId(ctx.lojaId()).stream().map(this::view).toList();
+        // Por vinculo tambem: so pela coluna loja_id, a tela das lojas de rede aparecia vazia.
+        return repo.daLoja(ctx.lojaId()).stream().map(this::view).toList();
     }
 
     public UsuarioView criar(NovoUsuario n) {

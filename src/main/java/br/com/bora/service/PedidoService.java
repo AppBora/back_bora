@@ -182,6 +182,14 @@ public class PedidoService {
         p.formaPagamento = req.formaPagamento();
         p.origem = req.origem();
         p.observacao = req.observacao();
+        // Entrega em coluna, nao deduzida do texto. Quando o operador nao informa, vale o cadastro do
+        // cliente — mas gravado NO PEDIDO, para o card de amanha nao mostrar o endereco de depois que
+        // o cliente se mudou. Ver V48.
+        p.tipoEntrega = "RETIRADA".equalsIgnoreCase(req.tipoEntrega()) ? "RETIRADA" : "ENTREGA";
+        if (!"RETIRADA".equals(p.tipoEntrega)) {
+            p.enderecoEntrega = primeiroNaoVazio(req.enderecoEntrega(), enderecoDoCadastro(lojaId, p.clienteId));
+            p.bairroEntrega = primeiroNaoVazio(req.bairroEntrega(), bairroDoCadastro(lojaId, p.clienteId));
+        }
         p.status = StatusPedido.RECEBIDO;
         p.criadoEm = OffsetDateTime.now();
         p.atualizadoEm = OffsetDateTime.now();
@@ -215,10 +223,9 @@ public class PedidoService {
             it.setSubtotal(subtotal);
             itens.add(it);
 
-            if (custoFicha == null && prod.estoque != null) { // baixa de estoque do produto (só sem ficha)
-                prod.estoque = prod.estoque - qtd;
-                produtos.save(prod);
-            }
+            // Baixa de estoque do produto (so sem ficha), no BANCO. Era ler, subtrair e gravar: duas
+            // vendas do mesmo item ao mesmo tempo liam o mesmo estoque e uma das baixas desaparecia.
+            if (custoFicha == null) produtos.baixarEstoque(prod.id, lojaId, qtd);
         }
 
         // resgate de cashback como desconto (RN fidelidade)
@@ -242,6 +249,21 @@ public class PedidoService {
         itemRepo.saveAll(itens);
         acumularFidelidade(lojaId, p.clienteId, p.valorTotal, resgate); // CRM / cashback
         return salvo;
+    }
+
+    private static String primeiroNaoVazio(String a, String b) {
+        if (a != null && !a.isBlank()) return a.trim();
+        return b == null || b.isBlank() ? null : b.trim();
+    }
+
+    private String enderecoDoCadastro(Long lojaId, Long clienteId) {
+        if (clienteId == null) return null;
+        return clientes.findByIdAndLojaId(clienteId, lojaId).map(c -> c.endereco).orElse(null);
+    }
+
+    private String bairroDoCadastro(Long lojaId, Long clienteId) {
+        if (clienteId == null) return null;
+        return clientes.findByIdAndLojaId(clienteId, lojaId).map(c -> c.bairro).orElse(null);
     }
 
     /** Cliente informado tem que ser desta loja — senão o pedido nasce apontando para outro tenant. */
@@ -302,12 +324,29 @@ public class PedidoService {
             itens.add(pi);
         }
         p.valorTotal = in.total() != null && in.total().signum() > 0 ? in.total() : soma;
+        // O marketplace manda endereco e bairro no payload; eles iam so para o texto da observacao.
+        // Em coluna, a tela de Entregas agrupa por bairro e quem entrega le o endereco deste pedido.
+        p.enderecoEntrega = in.endereco() == null || in.endereco().isBlank() ? null : in.endereco().trim();
+        p.bairroEntrega = in.bairro() == null || in.bairro().isBlank() ? null : in.bairro().trim();
+        // Retirada vinha so como o texto "RETIRADA NO BALCAO" que o normalizador escreve na observacao.
+        p.tipoEntrega = p.ehRetirada() ? "RETIRADA" : "ENTREGA";
         Pedido salvo = repo.save(p);
         itens.forEach(it -> it.setPedidoId(salvo.id));
         itemRepo.saveAll(itens);
         // Sem telefone de verdade o cliente nunca usaria o cashback aqui: registra a compra, sem saldo.
         fidelidade.registrar(lojaId, salvo.clienteId, p.valorTotal, BigDecimal.ZERO, telReal != null);
         return salvo;
+    }
+
+    /**
+     * Marca que o marketplace aceitou o aceite automatico deste pedido.
+     *
+     * <p>UPDATE direcionado, nao {@code save} da entidade: o poller pode estar com uma copia lida ha
+     * segundos, e gravar a entidade inteira sobrescreveria o que o lojista mexeu nesse meio-tempo.</p>
+     */
+    @Transactional
+    public void marcarAceiteEnviado(Long lojaId, Long pedidoId) {
+        repo.marcarAceiteEnviado(lojaId, pedidoId);
     }
 
     /** Encontra o cliente pelo telefone (ou cria) — base do CRM com pedidos de marketplace. */

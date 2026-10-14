@@ -64,7 +64,16 @@ public interface MarketplaceClient {
     Map<String, Object> detalhePedido(IntegracaoCanal i, String orderId);
 
     /** Empurra a mudanca de status. Cada implementacao traduz o status interno para o verbo do canal. */
-    void enviarStatus(IntegracaoCanal i, String orderId, String statusInterno);
+    /**
+     * Empurra o status para o marketplace.
+     *
+     * @return true quando o marketplace aceitou (ou quando nao havia o que enviar). <b>false</b> quando
+     *         a chamada falhou. Antes isto era {@code void} e a falha virava um {@code log.warn}: o
+     *         aceite automatico que falhava se perdia para sempre, o poller confirmava o evento de
+     *         qualquer jeito, e o iFood cancelava o pedido sozinho por falta de aceite -- depois de a
+     *         cozinha ter preparado.
+     */
+    boolean enviarStatus(IntegracaoCanal i, String orderId, String statusInterno);
 
     /**
      * Cancelamento carrega o MOTIVO, que o status sozinho nao transporta. iFood e Open Delivery

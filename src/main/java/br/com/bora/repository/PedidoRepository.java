@@ -137,4 +137,14 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     /** Último pedido de cada loja, para o painel de clientes da plataforma. */
     @Query("select p.lojaId, max(p.criadoEm) from Pedido p group by p.lojaId")
     java.util.List<Object[]> ultimoPedidoPorLoja();
+
+    /** Grava que o marketplace aceitou o aceite automatico. So a coluna da marca, nada mais. */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Pedido p set p.aceiteEnviadoEm = :agora where p.id = :id and p.lojaId = :lojaId")
+    int marcarAceiteEnviado(@Param("lojaId") Long lojaId, @Param("id") Long id,
+                            @Param("agora") OffsetDateTime agora);
+
+    default int marcarAceiteEnviado(Long lojaId, Long id) {
+        return marcarAceiteEnviado(lojaId, id, OffsetDateTime.now());
+    }
 }

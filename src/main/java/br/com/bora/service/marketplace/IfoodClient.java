@@ -351,21 +351,23 @@ public class IfoodClient implements MarketplaceClient {
     }
 
     @Override
-    public void enviarStatus(IntegracaoCanal i, String orderId, String statusInterno) {
+    public boolean enviarStatus(IntegracaoCanal i, String orderId, String statusInterno) {
         String verbo = verbo(i, statusInterno);
-        if (verbo == null) return; // status sem correspondência no iFood
+        if (verbo == null) return true; // status sem correspondencia no iFood: nao ha o que enviar
         // Retirada no balcão não sai para entrega, e na entrega pelo iFood quem sai é o entregador dele:
         // nos dois casos o "dispatch" não se aplica e o iFood recusaria.
         if ("dispatch".equals(verbo) && semDespacho(i, orderId)) {
             log.info("iFood: pedido {} é retirada ou entrega do iFood; dispatch não se aplica e não foi enviado", orderId);
-            return;
+            return true;
         }
         try {
             autenticado(i).post().uri(ORDERS + "/{id}/{verbo}", orderId, verbo)
                     .retrieve().toBodilessEntity();
             log.info("iFood: pedido {} -> {}", orderId, verbo);
+            return true;
         } catch (Exception e) {
             log.warn("iFood: falha ao enviar {} do pedido {}: {}", verbo, orderId, e.getMessage());
+            return false;
         }
     }
 

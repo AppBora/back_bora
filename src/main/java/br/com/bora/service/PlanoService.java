@@ -57,7 +57,9 @@ public class PlanoService {
 
     public void checarLimiteUsuarios(Long lojaId) {
         Plano p = plano(lojaId);
-        if (usuarios.countByLojaIdAndAtivoTrue(lojaId) >= p.maxUsuarios) {
+        // Conta por vinculo tambem: so pela coluna loja_id, a loja de rede contava zero usuario e o
+        // limite de 15 do plano nao valia nela.
+        if (usuarios.contarAtivosDaLoja(lojaId) >= p.maxUsuarios) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Limite de usuários do plano " + p + " atingido (" + p.maxUsuarios + "). Faça upgrade.");
         }

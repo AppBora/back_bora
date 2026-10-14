@@ -116,7 +116,7 @@ class PedidoServiceContaDoBalcaoTest {
                         List.of(new ComplementoService.Escolhido(1L, "Borda Catupiry", new BigDecimal("12.00")))));
 
         service.criar(new NovoPedidoRequest(3L, "101", "Dinheiro", "Delivery", null, false,
-                List.of(new ItemPedidoRequest(10L, 2, List.of(1L))), null));
+                List.of(new ItemPedidoRequest(10L, 2, List.of(1L))), null, null, null, null));
 
         // (47 + 12) x 2 = 118, mais 7 de taxa
         assertEquals(0, new BigDecimal("125.00").compareTo(salvo().valorTotal), "total do pedido");
@@ -139,7 +139,7 @@ class PedidoServiceContaDoBalcaoTest {
         when(fidelidade.resgatePossivel(eq(1L), eq(3L), any(BigDecimal.class))).thenReturn(new BigDecimal("6.57"));
 
         service.criar(new NovoPedidoRequest(3L, "102", "PIX", "Delivery", null, true,
-                List.of(new ItemPedidoRequest(10L, 1, null)), null));
+                List.of(new ItemPedidoRequest(10L, 1, null)), null, null, null, null));
 
         assertEquals(0, new BigDecimal("23.43").compareTo(salvo().valorTotal), "30 - 6,57 de cashback");
     }
@@ -153,7 +153,7 @@ class PedidoServiceContaDoBalcaoTest {
         when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(1L, "Setor Bueno")).thenReturn(Optional.of(t));
 
         service.criar(new NovoPedidoRequest(3L, "103", "Dinheiro", "Balcao", null, false,
-                List.of(new ItemPedidoRequest(10L, 1, null)), null));
+                List.of(new ItemPedidoRequest(10L, 1, null)), null, null, null, null));
 
         assertEquals(0, BigDecimal.ZERO.compareTo(salvo().taxaEntrega), "no balcao nao ha frete");
         assertEquals(0, new BigDecimal("30.00").compareTo(salvo().valorTotal));
@@ -168,7 +168,7 @@ class PedidoServiceContaDoBalcaoTest {
         when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(1L, "Setor Bueno")).thenReturn(Optional.of(t));
 
         service.criar(new NovoPedidoRequest(3L, "104", "PIX", "Delivery", null, false,
-                List.of(new ItemPedidoRequest(10L, 1, null)), BigDecimal.ZERO)); // cortesia
+                List.of(new ItemPedidoRequest(10L, 1, null)), BigDecimal.ZERO, null, null, null)); // cortesia
 
         assertEquals(0, BigDecimal.ZERO.compareTo(salvo().taxaEntrega), "frete de cortesia informado na mao");
         assertEquals(0, new BigDecimal("30.00").compareTo(salvo().valorTotal));
@@ -180,7 +180,7 @@ class PedidoServiceContaDoBalcaoTest {
 
         assertThrows(ResponseStatusException.class, () -> service.criar(
                 new NovoPedidoRequest(null, "105", "PIX", "Delivery", null, false,
-                        List.of(new ItemPedidoRequest(77L, 1, null)), null)));
+                        List.of(new ItemPedidoRequest(77L, 1, null)), null, null, null, null)));
 
         verify(repo, never()).save(any(Pedido.class));
     }
@@ -188,7 +188,7 @@ class PedidoServiceContaDoBalcaoTest {
     @Test
     void pedidoSemItemEhRecusado() {
         assertThrows(ResponseStatusException.class, () -> service.criar(
-                new NovoPedidoRequest(null, "106", "PIX", "Delivery", null, false, List.of(), null)));
+                new NovoPedidoRequest(null, "106", "PIX", "Delivery", null, false, List.of(), null, null, null, null)));
         verify(repo, never()).save(any(Pedido.class));
     }
 
@@ -206,7 +206,7 @@ class PedidoServiceContaDoBalcaoTest {
                         List.of(new ComplementoService.Escolhido(12L, "Granola", new BigDecimal("2.00")))));
 
         service.criar(new NovoPedidoRequest(null, "1", "Dinheiro", "Balcão", null, false,
-                List.of(new ItemPedidoRequest(10L, 1, List.of(12L))), null));
+                List.of(new ItemPedidoRequest(10L, 1, List.of(12L))), null, null, null, null));
 
         var salvos = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(itemRepo).saveAll(salvos.capture());
@@ -226,7 +226,7 @@ class PedidoServiceContaDoBalcaoTest {
                 .thenReturn(new ComplementoService.Escolha(BigDecimal.ZERO, List.of()));
 
         service.criar(new NovoPedidoRequest(null, "1", "Dinheiro", "Balcão", null, false,
-                List.of(new ItemPedidoRequest(10L, 1, List.of())), null));
+                List.of(new ItemPedidoRequest(10L, 1, List.of())), null, null, null, null));
 
         var salvos = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(itemRepo).saveAll(salvos.capture());

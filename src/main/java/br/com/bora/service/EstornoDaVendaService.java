@@ -138,10 +138,9 @@ public class EstornoDaVendaService {
      * nascer com um saldo inventado no primeiro cancelamento.
      */
     private boolean devolverProduto(Long lojaId, Long produtoId, int qtd) {
-        Produto prod = produtos.findByIdAndLojaId(produtoId, lojaId).orElse(null);
-        if (prod == null || prod.estoque == null) return false;
-        prod.estoque = prod.estoque + qtd;
-        produtos.save(prod);
-        return true;
+        // No banco, pelo mesmo motivo da baixa: dois cancelamentos simultaneos do mesmo pedido liam o
+        // mesmo estoque e devolviam em dobro. O `where estoque is not null` mantem a regra antiga de
+        // nao inventar saldo para produto que nao controla estoque.
+        return produtos.devolverEstoque(produtoId, lojaId, qtd) > 0;
     }
 }

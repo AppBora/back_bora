@@ -203,8 +203,11 @@ public class MarketplacePoller {
         // O mesmo pedido volta em mais de um evento (no iFood: PLACED e depois CONFIRMED). Já existindo,
         // não há nada a importar — e reenviar o aceite ao marketplace é o que não pode: era o "confirm"
         // em dobro visto no primeiro pedido real (19/09).
-        if (pedidos.buscarExterno(i.lojaId, i.canal, orderId).isPresent()) {
+        var jaImportado = pedidos.buscarExterno(i.lojaId, i.canal, orderId);
+        if (jaImportado.isPresent()) {
+            // Ja importado: nada a criar. Mas pode haver ACEITE a reenviar — ver reenviarAceiteSeFaltou.
             log.debug("[{}] loja {}: pedido externo {} já importado; evento ignorado", i.canal, i.lojaId, orderId);
+            reenviarAceiteSeFaltou(client, i, orderId, jaImportado.get());
             return;
         }
         Map<String, Object> detalhe = client.detalhePedido(i, orderId);
@@ -223,7 +226,41 @@ public class MarketplacePoller {
 
         // Aceite automatico: confirma no marketplace assim que o pedido entra aqui.
         if (Boolean.TRUE.equals(i.autoAceitar)) {
-            client.enviarStatus(i, orderId, MarketplaceClient.ACEITE_INICIAL);
+            marcarAceite(client, i, orderId, criado);
+        }
+    }
+
+    /**
+     * Reenvia o aceite de um pedido que ja esta aqui e que o marketplace nunca aceitou.
+     *
+     * <p><b>O defeito que isto fecha:</b> o aceite automatico era enviado e, se falhasse, o cliente do
+     * marketplace engolia a excecao com um {@code log.warn}. O evento era confirmado de qualquer jeito,
+     * e este caminho — "ja importado" — saia sem tentar de novo. O pedido ficava no painel da loja e o
+     * iFood o cancelava sozinho por falta de aceite, depois de a cozinha ter preparado.</p>
+     *
+     * <p>Nao da para deduzir isso do status: o pedido fica RECEBIDO aqui ate alguem clicar, aceito ou
+     * nao. Quem diz e a coluna {@code aceite_enviado_em} (V48). Sem ela, retentar reconfirmaria — que
+     * foi o "confirm em dobro" do primeiro pedido real de iFood, em 19/09.</p>
+     */
+    private void reenviarAceiteSeFaltou(MarketplaceClient client, IntegracaoCanal i, String orderId, Pedido p) {
+        if (!Boolean.TRUE.equals(i.autoAceitar)) return;
+        if (p.aceiteEnviadoEm != null) return;                 // o marketplace ja aceitou
+        if (p.status != br.com.bora.entity.StatusPedido.RECEBIDO) return;          // alguem ja mexeu no pedido na mao
+        log.warn("[{}] loja {}: pedido {} (#{}) esta sem aceite confirmado; reenviando",
+                i.canal, i.lojaId, orderId, p.id);
+        marcarAceite(client, i, orderId, p);
+    }
+
+    /** Envia o aceite e, so se o marketplace aceitar, grava a marca. */
+    private void marcarAceite(MarketplaceClient client, IntegracaoCanal i, String orderId, Pedido p) {
+        if (client.enviarStatus(i, orderId, MarketplaceClient.ACEITE_INICIAL)) {
+            pedidos.marcarAceiteEnviado(p.lojaId, p.id);
+        } else {
+            // Fica sem a marca de proposito: o proximo evento do mesmo pedido tenta de novo. E o erro
+            // vai para `ultimo_erro` da integracao, que a tela de Integracoes mostra.
+            i.ultimoErro = "Aceite do pedido " + orderId + " recusado pelo " + IntegracaoService.label(i.canal)
+                    + "; sera reenviado";
+            repo.save(i);
         }
     }
 

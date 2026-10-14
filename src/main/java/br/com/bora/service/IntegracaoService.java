@@ -106,8 +106,16 @@ public class IntegracaoService {
         return CATALOGO.getOrDefault(canal == null ? "" : canal.toUpperCase(), canal);
     }
 
-    /** Lista TODOS os marketplaces do catálogo, com o estado de conexão da loja. */
+    /**
+     * Lista TODOS os marketplaces do catálogo, com o estado de conexão da loja.
+     *
+     * <p>Exige papel porque a resposta inclui o {@code webhookPath}, e dentro dele vai o token do
+     * webhook da loja em claro. Sem isto, um OPERADOR pegava o token e injetava pedido falso de
+     * marketplace na propria loja. Os outros metodos deste servico ja exigiam papel; este ficou de
+     * fora.</p>
+     */
     public List<Map<String, Object>> listar() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
         Long lojaId = ctx.lojaId();
         Map<String, IntegracaoCanal> existentes = new HashMap<>();
         repo.findByLojaIdOrderByCanalAsc(lojaId).forEach(i -> existentes.put(i.canal, i));

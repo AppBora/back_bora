@@ -42,6 +42,31 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
             order by u.id""")
     List<Usuario> donosDaLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 
+    /**
+     * Todos os usuários que ENXERGAM esta loja — pela coluna {@code loja_id} ou por vínculo.
+     *
+     * <p>Mesmo defeito que o {@link #donosDaLoja} descreve, no lugar seguinte: a tela de Usuários e o
+     * limite de 15 do plano liam só {@code loja_id}, a loja onde o usuário nasceu. Nas lojas 19 e 20
+     * (Zirá Centro e Zona Norte) a dona entra normalmente, porque o login usa vínculo — mas a tela de
+     * Usuários dessas duas aparecia VAZIA, e o limite do plano contava zero. Anotamos isso como
+     * "ninguém consegue entrar nessas lojas", o que era falso e mandou a investigação para o lado
+     * errado.</p>
+     */
+    @org.springframework.data.jpa.repository.Query("""
+            select u from Usuario u
+            where u.lojaId = :lojaId
+               or exists (select 1 from UsuarioLoja v where v.usuarioId = u.id and v.lojaId = :lojaId)
+            order by u.nome""")
+    List<Usuario> daLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
+    /** Quantos usuários ATIVOS enxergam esta loja — base do x/15 do plano. */
+    @org.springframework.data.jpa.repository.Query("""
+            select count(u) from Usuario u
+            where u.ativo = true
+              and (u.lojaId = :lojaId
+                   or exists (select 1 from UsuarioLoja v where v.usuarioId = u.id and v.lojaId = :lojaId))""")
+    long contarAtivosDaLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
     /** Usuários ativos por loja, para o painel de clientes (x/15 do plano). */
     @org.springframework.data.jpa.repository.Query("select u.lojaId, count(u) from Usuario u where u.ativo = true and u.lojaId is not null group by u.lojaId")
     List<Object[]> ativosPorLoja();

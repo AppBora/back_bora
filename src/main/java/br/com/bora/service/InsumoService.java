@@ -101,10 +101,9 @@ public class InsumoService {
             if (in == null) continue;
             BigDecimal qtdUnit = pi.quantidade == null ? BigDecimal.ZERO : pi.quantidade;
             custoUnit = custoUnit.add((in.custo == null ? BigDecimal.ZERO : in.custo).multiply(qtdUnit));
-            if (in.estoque != null) {
-                in.estoque = in.estoque.subtract(qtdUnit.multiply(BigDecimal.valueOf(qtdPedido)));
-                insumos.save(in);
-            }
+            // Baixa no banco, nao em Java: duas vendas simultaneas do mesmo produto liam o mesmo
+            // estoque antes de qualquer uma gravar, e uma das baixas desaparecia.
+            insumos.mexerNoEstoque(in.id, lojaId, qtdUnit.multiply(BigDecimal.valueOf(qtdPedido)).negate());
         }
         return custoUnit;
     }
@@ -127,10 +126,7 @@ public class InsumoService {
             Insumo in = insumos.findByIdAndLojaId(pi.insumoId, lojaId).orElse(null);
             if (in == null) continue;
             BigDecimal qtdUnit = pi.quantidade == null ? BigDecimal.ZERO : pi.quantidade;
-            if (in.estoque != null) {
-                in.estoque = in.estoque.add(qtdUnit.multiply(BigDecimal.valueOf(qtdPedido)));
-                insumos.save(in);
-            }
+            insumos.mexerNoEstoque(in.id, lojaId, qtdUnit.multiply(BigDecimal.valueOf(qtdPedido)));
         }
         return true;
     }
