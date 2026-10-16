@@ -106,6 +106,38 @@ public class PixService {
         }
     }
 
+    /**
+     * O dinheiro desta cobranca ENTROU? Pergunta ao Asaas.
+     *
+     * <p>Existe porque quem confirma pagamento aqui e o webhook, e webhook falha: o Asaas interrompe
+     * o envio depois de erros seguidos, o lojista pode apagar o webhook no painel dele, e ja houve
+     * loja em producao com a conta viva e ZERO webhooks registrados. Sem esta pergunta, a rotina que
+     * expira o checkout abandonado cancelava a venda PAGA: devolvia estoque e cashback, o cliente
+     * ficava sem a comida e com o dinheiro fora, e a cozinha nunca via o pedido.</p>
+     *
+     * <p>{@code RECEIVED_IN_CASH} entra na lista porque e como o Asaas marca a baixa manual — se o
+     * lojista deu baixa na mao, o dinheiro existe do mesmo jeito.</p>
+     *
+     * @return true so quando o Asaas AFIRMA que recebeu. Nunca lanca, e qualquer duvida (erro de
+     *         rede, cobranca sumida) devolve false: na duvida o pedido segue o caminho de sempre.
+     */
+    @SuppressWarnings("unchecked")
+    public boolean cobrancaFoiPaga(Loja loja, IntegracaoCanal i, String paymentId) {
+        if (paymentId == null || paymentId.isBlank()) return false;
+        String apiKey = loja != null && loja.asaasApiKey != null && !loja.asaasApiKey.isBlank()
+                ? loja.asaasApiKey : (i == null ? null : i.clientSecret);
+        if (apiKey == null || apiKey.isBlank()) return false;
+        try {
+            Map<String, Object> r = client(apiKey).get().uri("/payments/{id}", paymentId)
+                    .retrieve().body(Map.class);
+            String status = r == null || r.get("status") == null ? "" : String.valueOf(r.get("status"));
+            return "RECEIVED".equals(status) || "CONFIRMED".equals(status) || "RECEIVED_IN_CASH".equals(status);
+        } catch (Exception e) {
+            log.warn("Nao consegui conferir a cobranca {} no Asaas: {}", paymentId, e.getMessage());
+            return false;
+        }
+    }
+
     public Map<String, Object> criarCobranca(IntegracaoCanal i, Loja loja, Pedido pedido,
                                              String nomeCliente, String cpfCnpj) {
         // Preferir a subconta do lojista (recebimento white-label); cair para a chave legada se não houver.

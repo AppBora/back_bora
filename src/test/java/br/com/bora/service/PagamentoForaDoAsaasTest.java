@@ -37,6 +37,19 @@ import static org.mockito.Mockito.*;
  */
 class PagamentoForaDoAsaasTest {
 
+    /**
+     * Hoje no fuso de BRASILIA, nao no do JVM.
+     *
+     * <p>O servico compara a data informada com {@code LocalDate.now(America/Sao_Paulo)} — e esta
+     * certo: quem digita a data e o dono, no horario dele. O teste e que usava {@code LocalDate.now()}
+     * cru. A imagem roda em UTC, e a suite tambem (-Duser.timezone=UTC): das 21h a meia-noite de
+     * Brasilia o "hoje" do teste ja era AMANHA para o servico, e os 9 testes quebravam — como
+     * aconteceu em 15/10/2026 as 22h35. Teste que so passa em certas horas do dia nao prova nada.</p>
+     */
+    private static LocalDate hojeNoBrasil() {
+        return LocalDate.now(java.time.ZoneId.of("America/Sao_Paulo"));
+    }
+
     private static final Long LOJA = 18L;
     private static final String ASSINATURA = "sub_cm8016j2p9r674d3";
     private static final String COBRANCA = "pay_aj14zjq8wbcfqhfx";
@@ -85,7 +98,7 @@ class PagamentoForaDoAsaasTest {
 
     private AssinaturaService.PagamentoRegistrado registrar(String valor) {
         return service.registrarPagamentoRecebidoForaDoAsaas(
-                LOJA, new BigDecimal(valor), LocalDate.now(), "PIX direto na conta");
+                LOJA, new BigDecimal(valor), hojeNoBrasil(), "PIX direto na conta");
     }
 
     @Test
@@ -101,7 +114,7 @@ class PagamentoForaDoAsaasTest {
     void aCobrancaEhBAIXADANoAsaas_senaoOAvisoDeAtrasoDesfazIsto() {
         var r = registrar("199.00");
 
-        verify(asaas).receberEmDinheiro(COBRANCA, 199.00, LocalDate.now().toString());
+        verify(asaas).receberEmDinheiro(COBRANCA, 199.00, hojeNoBrasil().toString());
         assertTrue(r.baixadoNoAsaas());
         assertEquals(COBRANCA, r.cobranca());
     }
@@ -190,7 +203,7 @@ class PagamentoForaDoAsaasTest {
     @Test
     void dataNoFuturoEhRecusada() {
         var e = assertThrows(ResponseStatusException.class, () -> service.registrarPagamentoRecebidoForaDoAsaas(
-                LOJA, new BigDecimal("199.00"), LocalDate.now().plusDays(1), null));
+                LOJA, new BigDecimal("199.00"), hojeNoBrasil().plusDays(1), null));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
         assertTrue(e.getReason().contains("futuro"), e.getReason());
     }
@@ -199,7 +212,7 @@ class PagamentoForaDoAsaasTest {
     void semDataInformada_valeHoje() {
         service.registrarPagamentoRecebidoForaDoAsaas(LOJA, new BigDecimal("199.00"), null, null);
 
-        verify(asaas).receberEmDinheiro(eq(COBRANCA), anyDouble(), eq(LocalDate.now().toString()));
+        verify(asaas).receberEmDinheiro(eq(COBRANCA), anyDouble(), eq(hojeNoBrasil().toString()));
     }
 
     @Test

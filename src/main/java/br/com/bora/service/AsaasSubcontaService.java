@@ -181,10 +181,65 @@ public class AsaasSubcontaService {
         return view(loja);
     }
 
+    /**
+     * O aviso de pagamento existe MESMO na subconta do lojista?
+     *
+     * <p>Pergunta ao Asaas e procura um webhook ligado, nao interrompido, apontando para a URL desta
+     * loja. O Asaas desliga sozinho um webhook que falha varias vezes seguidas ({@code interrupted}),
+     * e o lojista pode apagar o webhook pelo painel dele: nos dois casos a nossa coluna continua
+     * preenchida e nada mais confirma pagamento.</p>
+     *
+     * @return TRUE existe e esta valendo · FALSE nao existe · null nao deu para perguntar.
+     */
+    @SuppressWarnings("unchecked")
+    private Boolean webhookNoAsaas(Loja loja) {
+        if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) return Boolean.FALSE;
+        try {
+            Map<String, Object> r = client(loja.asaasApiKey).get().uri("/webhooks").retrieve().body(Map.class);
+            List<Map<String, Object>> lista = r == null ? null : (List<Map<String, Object>>) r.get("data");
+            if (lista == null) return Boolean.FALSE;
+            String nossa = urlPublica + "/public/pix-webhook/" + loja.getId();
+            return lista.stream().anyMatch(w -> nossa.equals(str(w.get("url")))
+                    && !Boolean.FALSE.equals(w.get("enabled"))
+                    && !Boolean.TRUE.equals(w.get("interrupted")));
+        } catch (Exception e) {
+            log.warn("Loja {}: nao consegui conferir o webhook no Asaas: {}", loja.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Apaga os avisos ANTIGOS desta loja antes de criar outro.
+     *
+     * <p>Sem isto, cada clique em "Religar aviso de pagamento" deixava mais um webhook de pe. Como o
+     * token muda a cada criacao, os antigos passam a chegar com token velho e levam 401 do nosso lado
+     * — o Asaas trata isso como falha, e falha repetida interrompe TODOS os webhooks da conta.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private void apagarWebhooksAntigos(Loja loja) {
+        try {
+            Map<String, Object> r = client(loja.asaasApiKey).get().uri("/webhooks").retrieve().body(Map.class);
+            List<Map<String, Object>> lista = r == null ? null : (List<Map<String, Object>>) r.get("data");
+            if (lista == null) return;
+            String nossa = urlPublica + "/public/pix-webhook/" + loja.getId();
+            for (Map<String, Object> w : lista) {
+                if (!nossa.equals(str(w.get("url")))) continue;   // webhook de outra loja ou do lojista
+                String id = str(w.get("id"));
+                if (id == null) continue;
+                client(loja.asaasApiKey).delete().uri("/webhooks/{id}", id).retrieve().toBodilessEntity();
+                log.info("Loja {}: aviso de pagamento antigo {} removido antes de criar o novo", loja.getId(), id);
+            }
+        } catch (Exception e) {
+            // Nao impede de criar o novo: ficar com dois e ruim, ficar com nenhum e pior.
+            log.warn("Loja {}: nao consegui limpar os avisos antigos: {}", loja.getId(), e.getMessage());
+        }
+    }
+
     /** Cria, na subconta do lojista, o webhook que confirma o pagamento do PIX. */
     @SuppressWarnings("unchecked")
     private void criarWebhookPix(Loja loja, String email) {
         if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) return;
+        apagarWebhooksAntigos(loja);
         try {
             String token = UUID.randomUUID().toString().replace("-", "");
             Map<String, Object> body = new LinkedHashMap<>();
@@ -216,7 +271,16 @@ public class AsaasSubcontaService {
         m.put("status", loja.asaasStatus == null ? (provisionada ? "PENDENTE" : "DESATIVADO") : loja.asaasStatus);
         m.put("walletId", loja.asaasWalletId);
         m.put("onboardingUrl", loja.asaasOnboardingUrl);
-        m.put("webhookOk", loja.asaasWebhookToken != null && !loja.asaasWebhookToken.isBlank());
+        // Nao basta a coluna estar preenchida: ela so diz que UM DIA a criacao do webhook deu certo.
+        // Conferido em producao (15/10/2026): a loja 18 tinha o token gravado e a subconta dela tinha
+        // ZERO webhooks no Asaas. A tela mostrava "ativo", escondia o botao de religar, e o primeiro
+        // PIX pago seria cancelado em 30 minutos com o dinheiro ja na conta do lojista.
+        Boolean noAsaas = provisionada ? webhookNoAsaas(loja) : Boolean.FALSE;
+        boolean temToken = loja.asaasWebhookToken != null && !loja.asaasWebhookToken.isBlank();
+        // null = nao deu para perguntar (Asaas fora do ar). Nesse caso nao acusamos falha que nao
+        // medimos: vale a coluna, e `webhookConferido` conta a verdade para quem quiser saber.
+        m.put("webhookOk", temToken && !Boolean.FALSE.equals(noAsaas));
+        m.put("webhookConferido", noAsaas != null);
         // Sem onboardingUrl a tela precisa dizer POR ONDE concluir o cadastro: o acesso e por este e-mail.
         if (provisionada) m.put("email", emailDoAdmin(loja));
         return m;
