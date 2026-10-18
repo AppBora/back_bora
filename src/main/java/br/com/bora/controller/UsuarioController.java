@@ -22,6 +22,12 @@ public class UsuarioController {
         return service.listar();
     }
 
+    /** Quem pediu ajuda com a senha e ainda nao foi atendido. A tela mostra como aviso no topo. */
+    @GetMapping("/pedidos-de-senha")
+    public List<java.util.Map<String, Object>> pedidosDeSenha() {
+        return service.pedidosDeSenhaEmAberto();
+    }
+
     @PostMapping
     public UsuarioView criar(@RequestBody NovoUsuario novo) {
         return service.criar(novo);

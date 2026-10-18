@@ -21,9 +21,12 @@ public class UsuarioService {
     private final PasswordEncoder encoder;
     private final AuthContext ctx;
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
+    private final PedidoDeSenhaService pedidosDeSenha;
 
     public UsuarioService(UsuarioRepository repo, PlanoService planos, PasswordEncoder encoder, AuthContext ctx,
-                          br.com.bora.repository.UsuarioLojaRepository vinculos) {
+                          br.com.bora.repository.UsuarioLojaRepository vinculos,
+                          PedidoDeSenhaService pedidosDeSenha) {
+        this.pedidosDeSenha = pedidosDeSenha;
         this.repo = repo;
         this.planos = planos;
         this.encoder = encoder;
@@ -72,6 +75,23 @@ public class UsuarioService {
         return view(repo.save(u));
     }
 
+    /** O que ainda nao foi atendido na loja de quem esta olhando. So o admin: e ele quem resolve. */
+    public java.util.List<java.util.Map<String, Object>> pedidosDeSenhaEmAberto() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        return pedidosDeSenha.emAberto(ctx.lojaId()).stream().map(p -> {
+            Usuario u = repo.findById(p.usuarioId).orElse(null);
+            java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("usuarioId", p.usuarioId);
+            m.put("nome", u == null ? "(usuário removido)" : u.getNome());
+            m.put("email", u == null ? null : u.getEmail());
+            m.put("criadoEm", p.criadoEm);
+            // Diz se o WhatsApp saiu de fato. Hoje sai nulo em toda loja: nenhuma tem credencial
+            // valida da Meta. Mentir aqui faria o dono achar que a pessoa ja foi avisada.
+            m.put("avisadoPorWhatsapp", p.avisadoEm != null);
+            return m;
+        }).toList();
+    }
+
     /** Redefine a senha de um usuário da loja. Só o admin — é ele quem responde pelos acessos. */
     public UsuarioView definirSenha(Long id, String nova) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
@@ -80,7 +100,11 @@ public class UsuarioService {
         }
         Usuario u = buscar(id);
         u.setSenhaHash(encoder.encode(nova));
-        return view(repo.save(u));
+        UsuarioView v = view(repo.save(u));
+        // O aviso de "esqueci minha senha" some pela ACAO que resolve. Um botao separado de "marcar
+        // como resolvido" so acumularia aviso velho na tela ate ninguem mais olhar para ela.
+        pedidosDeSenha.atendido(id);
+        return v;
     }
 
     public UsuarioView definirAtivo(Long id, boolean ativo) {

@@ -25,11 +25,14 @@ public class AuthController {
 
     private final br.com.bora.security.FreioDeTentativas freio;
     private final br.com.bora.security.RegraDeAcesso regra;
+    private final br.com.bora.service.PedidoDeSenhaService pedidosDeSenha;
 
     public AuthController(UsuarioRepository repo, PasswordEncoder encoder, JwtService jwt, AuthContext ctx,
                           br.com.bora.service.RedeService rede, br.com.bora.repository.LojaRepository lojas,
                           br.com.bora.security.FreioDeTentativas freio,
-                          br.com.bora.security.RegraDeAcesso regra) {
+                          br.com.bora.security.RegraDeAcesso regra,
+                          br.com.bora.service.PedidoDeSenhaService pedidosDeSenha) {
+        this.pedidosDeSenha = pedidosDeSenha;
         this.regra = regra;
         this.freio = freio;
         this.lojas = lojas;
@@ -91,6 +94,29 @@ public class AuthController {
         u.setSenhaHash(encoder.encode(nova));
         repo.save(u);
         return java.util.Map.of("trocada", true);
+    }
+
+    /**
+     * "Esqueci minha senha": registra o pedido para o administrador da loja ver.
+     *
+     * <p>Responde SEMPRE a mesma coisa, exista o e-mail ou nao. Responder diferente transformaria a
+     * tela de login num verificador de clientes: bastava digitar enderecos para descobrir quem usa o
+     * BoraHapp. Quem decide o que gravar e o {@link br.com.bora.service.PedidoDeSenhaService}.</p>
+     *
+     * <p>O freio do login vale aqui tambem, pela mesma chave: sem isso o endpoint vira um gerador
+     * infinito de linha no banco e de mensagem para o lojista.</p>
+     */
+    @PostMapping("/pedido-de-senha")
+    public java.util.Map<String, Object> pedidoDeSenha(@RequestBody java.util.Map<String, String> body,
+                                                       jakarta.servlet.http.HttpServletRequest http) {
+        String email = body == null ? null : body.get("email");
+        String chave = "pedido-senha:" + br.com.bora.security.FreioDeTentativas.chave(
+                email, br.com.bora.security.FreioDeTentativas.origem(http));
+        freio.conferir(chave);
+        freio.errou(chave);   // todo pedido conta: aqui nao existe "acertou" que zere o placar
+        pedidosDeSenha.registrar(email);
+        return java.util.Map.of("registrado", true,
+                "recado", "Se esse e-mail estiver cadastrado, o administrador da loja ja foi avisado.");
     }
 
     @GetMapping("/me")

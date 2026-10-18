@@ -49,6 +49,14 @@ bora:
     # Gerar: openssl rand -base64 48
     # PERDER A CHAVE E PERDER AS CREDENCIAIS: guardar junto do api.env no gerenciador de senhas.
     segredo-colunas: ${BORA_SEGREDO_COLUNAS:}
+  suporte:
+    # Para onde vai o aviso de "esqueci minha senha", alem do administrador da propria loja. E o
+    # mesmo numero que a tela de login ja mostra como suporte. Vazio desliga esse segundo destino.
+    #
+    # AVISO: o envio depende da Cloud API da Meta, e em 18/10/2026 NENHUMA loja tinha credencial
+    # valida (a da loja 1 venceu em 08/07, a da loja 18 tem 9 caracteres). Enquanto isso, o aviso
+    # que funciona e o que aparece na tela de Usuarios do administrador.
+    whatsapp: ${BORA_SUPORTE_WHATSAPP:5515998602332}
 
 server:
   port: ${PORT:8080}
@@ -68,6 +76,7 @@ springdoc:
   swagger-ui:
     enabled: ${SPRINGDOC_SWAGGER_UI_ENABLED:false}
     path: /swagger-ui.html
+
 asaas:
   base-url: ${ASAAS_BASE_URL:https://sandbox.asaas.com/api/v3}
   api-key: ${ASAAS_API_KEY:}
