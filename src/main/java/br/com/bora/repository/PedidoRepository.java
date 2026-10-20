@@ -147,4 +147,13 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     default int marcarAceiteEnviado(Long lojaId, Long id) {
         return marcarAceiteEnviado(lojaId, id, OffsetDateTime.now());
     }
+
+    // ---- Limpeza da movimentacao de teste (LimpezaDeTestesService) ----
+    // `deleteByLojaId` derivado faz SELECT e depois um DELETE por linha. Com 12 pedidos tanto faz;
+    // numa loja com milhares seria uma viagem por pedido, entao aqui vai como UPDATE unico.
+    long countByLojaId(Long lojaId);
+
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("delete from Pedido p where p.lojaId = :lojaId")
+    int deleteByLojaId(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 }

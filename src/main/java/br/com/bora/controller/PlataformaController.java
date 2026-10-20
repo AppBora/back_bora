@@ -40,6 +40,7 @@ public class PlataformaController {
     private final br.com.bora.repository.ConfiguracaoLojaRepository configLoja;
     private final br.com.bora.service.marketplace.CredenciaisMarketplace credenciais;
     private final String splitPadrao;
+    private final br.com.bora.service.LimpezaDeTestesService limpeza;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
 
@@ -56,7 +57,9 @@ public class PlataformaController {
                                 br.com.bora.security.JwtService jwt,
                                 br.com.bora.repository.ConfiguracaoLojaRepository configLoja,
                                 br.com.bora.service.marketplace.CredenciaisMarketplace credenciais,
+                                br.com.bora.service.LimpezaDeTestesService limpeza,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
+        this.limpeza = limpeza;
         this.splitPadrao = splitPadrao;
         this.credenciais = credenciais;
         this.assinaturas = assinaturas;
@@ -971,5 +974,36 @@ public class PlataformaController {
         p.notaEmitidaEm = java.time.OffsetDateTime.now();
         pagamentos.save(p);
         return Map.of("id", p.id, "notaNumero", p.notaNumero, "notaEmitidaEm", p.notaEmitidaEm);
+    }
+
+    // ================= Limpeza da movimentacao de teste =================
+    //
+    // Quem vende o sistema testa dentro da conta do cliente, e o lixo fica no Relatorio da loja para
+    // sempre, misturado com a venda de verdade. A alternativa era `delete` na mao por ssh, na
+    // producao de um cliente pagante.
+    //
+    // Nos dois, a trava de papel esta no SERVICO (ctx.requireAdminBora()), nao aqui: e la que ela
+    // continua valendo se alguem abrir outra porta de entrada depois.
+
+    /** Quanto existe hoje. A tela mostra estes numeros ANTES de pedir a confirmacao. */
+    @GetMapping("/lojas/{lojaId}/dados-de-teste")
+    public java.util.Map<String, Object> previaDaLimpeza(@PathVariable Long lojaId) {
+        return limpeza.previa(lojaId);
+    }
+
+    /**
+     * Apaga pedidos, itens, historico e acertos da loja. Nao toca em cardapio, integracao,
+     * assinatura nem usuario.
+     *
+     * <p>Corpo: {@code { "confirmacao": "<nome exato da loja>", "zerarClientes": false }}. O nome e
+     * exigido porque a tela da plataforma lista as lojas lado a lado, e a diferenca entre limpar a
+     * "Zira Centro" e a "Zira Zona Norte" e uma linha de distancia no mouse.</p>
+     */
+    @PostMapping("/lojas/{lojaId}/limpar-dados-de-teste")
+    public java.util.Map<String, Object> limparDadosDeTeste(@PathVariable Long lojaId,
+                                                            @RequestBody java.util.Map<String, Object> corpo) {
+        Object c = corpo == null ? null : corpo.get("confirmacao");
+        boolean zerar = corpo != null && Boolean.TRUE.equals(corpo.get("zerarClientes"));
+        return limpeza.limpar(lojaId, c == null ? null : String.valueOf(c), zerar);
     }
 }

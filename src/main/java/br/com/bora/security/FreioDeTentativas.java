@@ -73,15 +73,35 @@ public class FreioDeTentativas {
      * atacante martelando o e-mail de um lojista trancaria esse lojista de propósito, e cinco pessoas
      * diferentes errando a senha trancariam umas às outras.</p>
      *
-     * <p>O cabeçalho é falsificável por quem fala direto com a aplicação — aqui ninguém fala, porque a
-     * porta 8080 não é publicada no host. Se um dia for, este valor deixa de ser confiável.</p>
+     * <h2>Por que o ÚLTIMO da lista, e não o primeiro</h2>
+     * <p><b>Medido em 19/10/2026, com o Caddy v2.11.4 — a mesma versão que roda em produção:</b> sem
+     * {@code trusted_proxies} configurado, o Caddy <b>descarta</b> o {@code X-Forwarded-For} que o
+     * cliente mandou e escreve só o IP que ele mesmo viu no socket. Mandando
+     * {@code X-Forwarded-For: 1.2.3.4} e {@code "203.0.113.99, 9.9.9.9"}, a aplicação recebeu nos
+     * dois casos apenas o IP real. Ou seja: hoje a lista tem <b>um item só</b>, e ele é confiável.</p>
+     *
+     * <p>Ler o último em vez do primeiro, então, <b>não conserta nada que esteja quebrado hoje</b> —
+     * com um item só, os dois são o mesmo. É defesa para o dia em que a topologia mudar: um
+     * {@code trusted_proxies} no Caddyfile, um CDN na frente, ou a troca do proxy fazem a lista
+     * passar a ter o valor do cliente. Nesse dia, o primeiro item vira texto escolhido pelo atacante,
+     * e uma chave nova a cada chamada é um freio que não freia.</p>
+     *
+     * <p>O último item é sempre o que o proxy mais próximo escreveu, e esse é o único que a gente
+     * tem motivo para acreditar. Se um dia entrar outro proxy <b>antes</b> do Caddy, este método
+     * precisa pular tantos itens quantos forem os proxies confiáveis — não dá para adivinhar isso
+     * aqui, e aí o lugar certo de resolver passa a ser o {@code trusted_proxies}.</p>
      */
     public static String origem(jakarta.servlet.http.HttpServletRequest http) {
         if (http == null) return "";
         String encaminhado = http.getHeader("X-Forwarded-For");
         if (encaminhado != null && !encaminhado.isBlank()) {
-            String primeiro = encaminhado.split(",")[0].trim();   // o cliente original é o primeiro da lista
-            if (!primeiro.isEmpty()) return primeiro;
+            String[] saltos = encaminhado.split(",");
+            // De trás para frente: o que o nosso proxy escreveu está no fim. Lista com item vazio
+            // ("1.2.3.4, , ") não pode cair num valor em branco, que viraria balde único.
+            for (int i = saltos.length - 1; i >= 0; i--) {
+                String salto = saltos[i].trim();
+                if (!salto.isEmpty()) return salto;
+            }
         }
         return http.getRemoteAddr();
     }

@@ -20,4 +20,10 @@ public interface ClienteRepository extends JpaRepository<Cliente, Long> {
     Optional<Cliente> findByIdAndLojaId(Long id, Long lojaId);
     Optional<Cliente> findFirstByLojaIdAndTelefone(Long lojaId, String telefone);
     Optional<Cliente> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno);
+
+    long countByLojaId(Long lojaId);
+
+    long countByLojaIdAndCashbackGreaterThan(Long lojaId, java.math.BigDecimal valor);
+
+    java.util.List<br.com.bora.entity.Cliente> findByLojaId(Long lojaId);
 }

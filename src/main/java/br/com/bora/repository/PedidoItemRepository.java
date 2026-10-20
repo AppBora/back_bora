@@ -9,4 +9,10 @@ public interface PedidoItemRepository extends JpaRepository<PedidoItem, Long> {
     List<PedidoItem> findByLojaId(Long lojaId);
     List<PedidoItem> findByLojaIdAndPedidoIdIn(Long lojaId, java.util.Collection<Long> pedidoIds);
     void deleteByLojaIdAndPedidoId(Long lojaId, Long pedidoId);
+
+    long countByLojaId(Long lojaId);
+
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("delete from PedidoItem i where i.lojaId = :lojaId")
+    int deleteByLojaId(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 }

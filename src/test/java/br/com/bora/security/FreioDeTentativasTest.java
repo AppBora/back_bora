@@ -53,15 +53,39 @@ class FreioDeTentativasTest {
                 FreioDeTentativas.chave("  dono@loja.local  ", "1.2.3.4"));
     }
 
+    /**
+     * Como a chamada chega HOJE: o Caddy descarta o cabecalho do cliente e escreve so o IP que ele
+     * viu. Medido em 19/10/2026 com o caddy:2.11.4, a mesma versao da producao, sem trusted_proxies.
+     *
+     * <p>A versao anterior deste teste montava {@code "189.0.0.7, 172.18.0.2"} -- cliente seguido do
+     * IP do proprio Caddy -- e afirmava que o primeiro item era o cliente. Esse cenario nao acontece:
+     * o Caddy nao se acrescenta na lista, e nao repassa o que o cliente mandou. Era teste verde sobre
+     * uma premissa que nao existe.</p>
+     */
     @Test
-    void aOrigemVemDoClienteOriginal_naoDoProxy() {
+    void comUMitemSO_aOrigemEhEsseItem() {
         jakarta.servlet.http.HttpServletRequest http =
                 org.mockito.Mockito.mock(jakarta.servlet.http.HttpServletRequest.class);
-        org.mockito.Mockito.when(http.getHeader("X-Forwarded-For")).thenReturn("189.0.0.7, 172.18.0.2");
-        org.mockito.Mockito.when(http.getRemoteAddr()).thenReturn("172.18.0.2"); // o Caddy
+        org.mockito.Mockito.when(http.getHeader("X-Forwarded-For")).thenReturn("189.0.0.7");
+        org.mockito.Mockito.when(http.getRemoteAddr()).thenReturn("172.18.0.2"); // o container do Caddy
 
         assertEquals("189.0.0.7", FreioDeTentativas.origem(http),
-                "sem isto o contador vira um balde so e um atacante tranca a conta do lojista");
+                "sem olhar o cabecalho, o contador vira um balde so e um atacante tranca o lojista");
+    }
+
+    /**
+     * E se a topologia mudar (trusted_proxies, CDN na frente, outro proxy): o valor que o CLIENTE
+     * escolheu nao pode virar a chave, senao trocar o cabecalho a cada chamada da chave nova toda vez
+     * e o freio deixa de frear. O ultimo item e sempre o que o proxy mais proximo escreveu.
+     */
+    @Test
+    void seAlistaTIVERmaisDEum_valeOqueOproxyEscreveu() {
+        jakarta.servlet.http.HttpServletRequest http =
+                org.mockito.Mockito.mock(jakarta.servlet.http.HttpServletRequest.class);
+        org.mockito.Mockito.when(http.getHeader("X-Forwarded-For")).thenReturn("1.2.3.4, 189.0.0.7");
+        org.mockito.Mockito.when(http.getRemoteAddr()).thenReturn("172.18.0.2");
+
+        assertEquals("189.0.0.7", FreioDeTentativas.origem(http));
     }
 
     @Test
