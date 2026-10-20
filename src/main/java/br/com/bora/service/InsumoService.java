@@ -39,7 +39,11 @@ public class InsumoService {
         Insumo alvo = i.id == null ? new Insumo()
                 : insumos.findByIdAndLojaId(i.id, loja).orElseThrow(() -> nf("Insumo"));
         alvo.lojaId = loja; alvo.nome = i.nome; alvo.unidade = i.unidade == null ? "un" : i.unidade;
-        alvo.custo = i.custo == null ? BigDecimal.ZERO : i.custo; alvo.estoque = i.estoque; alvo.estoqueMinimo = i.estoqueMinimo;
+        alvo.custo = i.custo == null ? BigDecimal.ZERO : i.custo; alvo.estoqueMinimo = i.estoqueMinimo;
+        // O ESTOQUE so entra na CRIACAO. Era `alvo.estoque = i.estoque` sempre, e o formulario mandava
+        // o numero carregado na abertura da tela: corrigir o custo do insumo as 21h apagava o consumo
+        // da noite inteira. Mesma causa do produto. Depois de criado, quem mexe e o mexerNoEstoque.
+        if (i.id == null) alvo.estoque = i.estoque;
         if (alvo.nome == null || alvo.nome.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome do insumo é obrigatório");
         return insumos.save(alvo);
     }
@@ -84,6 +88,42 @@ public class InsumoService {
             fichas.save(pi);
         }
         return ficha(produtoId);
+    }
+
+    /**
+     * Mexer no estoque do insumo: a operacao separada do cadastro. Espelho do
+     * {@code ProdutoService.mexerNoEstoque} -- ver {@link br.com.bora.dto.MexerNoEstoqueRequest}.
+     */
+    @Transactional
+    public Insumo mexerNoEstoque(Long id, br.com.bora.dto.MexerNoEstoqueRequest req) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        Long loja = ctx.lojaId();
+        Insumo alvo = insumos.findByIdAndLojaId(id, loja).orElseThrow(() -> nf("Insumo"));
+        if (req == null || req.tipo() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o tipo: DEFINIR ou AJUSTAR");
+        }
+        if (req.tipo() == br.com.bora.dto.MexerNoEstoqueRequest.Tipo.DEFINIR) {
+            if (req.quantidade() != null && req.quantidade().signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O estoque nao pode ser negativo");
+            }
+            insumos.definirEstoque(id, loja, req.quantidade());
+        } else {
+            if (req.quantidade() == null || req.quantidade().signum() == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe quanto somar ou tirar");
+            }
+            if (alvo.estoque == null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "\"" + alvo.nome + "\" nao controla estoque. Informe uma quantidade inicial "
+                                + "antes de usar os botoes de ajuste.");
+            }
+            if (insumos.somarAoEstoque(id, loja, req.quantidade()) == 0) {
+                BigDecimal agora = insumos.findByIdAndLojaId(id, loja).orElseThrow(() -> nf("Insumo")).estoque;
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "\"" + alvo.nome + "\" esta com " + agora + " em estoque; o ajuste deixaria o "
+                                + "saldo negativo.");
+            }
+        }
+        return insumos.findByIdAndLojaId(id, loja).orElseThrow(() -> nf("Insumo"));
     }
 
     /**

@@ -299,6 +299,152 @@ class EstoqueNaoPerdeBaixaIT {
         assertNull(insumos.findByIdAndLojaId(i.id, LOJA).orElseThrow().estoque);
     }
 
+    // =============================================================================================
+    // `definirEstoque` e `somarAoEstoque`: a operacao de estoque separada do cadastro (item 4).
+    //
+    // O defeito: `atualizar` gravava `p.estoque = dados.estoque` sem condicao, com o numero que a tela
+    // carregou. Corrigir o preco as 21h apagava as vendas da noite. E as telas de Estoque e Contagem
+    // ajustavam estoque mandando o CADASTRO INTEIRO, apagando os campos que elas nao conhecem.
+    //
+    // Isto precisa de banco de verdade por duas razoes: o `definirEstoque` tem que mexer em UMA coluna
+    // e deixar as outras em paz (um `save()` da entidade grava a linha toda), e o `somarAoEstoque` tem
+    // que recusar ficar negativo pela clausula, nao por `if` em Java.
+    // =============================================================================================
+
+    @Test
+    void definirEstoqueMexeSOnaColunaDoEstoque() {
+        // O coracao do conserto. O produto tem codigo do marketplace, categoria e custo; a tela de
+        // Estoque nao conhece nenhum deles. Antes, cada ajuste mandava o cadastro que ela conhece e
+        // apagava o resto -- inclusive o codigo que faz o pedido do iFood baixar estoque (v119).
+        Produto p = produtoCom(30);
+        p.codigoExterno = "7470";
+        p.categoria = "Açaí";
+        p.custo = new BigDecimal("8.50");
+        p.estoqueMinimo = 5;
+        produtos.save(p);
+
+        assertEquals(1, produtos.definirEstoque(p.id, LOJA, 12));
+
+        Produto depois = produtos.findByIdAndLojaId(p.id, LOJA).orElseThrow();
+        assertEquals(12, depois.estoque);
+        assertEquals("7470", depois.codigoExterno, "o codigo do marketplace NAO pode ser apagado");
+        assertEquals("Açaí", depois.categoria);
+        assertEquals(0, depois.custo.compareTo(new BigDecimal("8.50")));
+        assertEquals(5, depois.estoqueMinimo);
+        assertEquals("Copo 500ml", depois.nome);
+    }
+
+    @Test
+    void definirEstoqueComNULOfazPARARdeControlar() {
+        Produto p = produtoCom(30);
+
+        assertEquals(1, produtos.definirEstoque(p.id, LOJA, null));
+
+        assertNull(produtos.findByIdAndLojaId(p.id, LOJA).orElseThrow().estoque);
+    }
+
+    @Test
+    void definirEstoqueEmProdutoQueNAOcontrolavaPassaAcontrolar() {
+        // O caminho que todas as 5 lojas vao percorrer: hoje nenhum produto controla estoque.
+        Produto p = produtoCom(null);
+
+        assertEquals(1, produtos.definirEstoque(p.id, LOJA, 40));
+
+        assertEquals(40, estoqueDe(p.id));
+    }
+
+    @Test
+    void definirEstoqueNaoAlcancaProdutoDeOutraLoja() {
+        Produto p = produtoCom(30);
+
+        assertEquals(0, produtos.definirEstoque(p.id, LOJA + 1, 1));
+
+        assertEquals(30, estoqueDe(p.id));
+    }
+
+    @Test
+    void somarAoEstoqueSobeEdesce() {
+        Produto p = produtoCom(10);
+
+        assertEquals(1, produtos.somarAoEstoque(p.id, LOJA, 5));
+        assertEquals(15, estoqueDe(p.id));
+        assertEquals(1, produtos.somarAoEstoque(p.id, LOJA, -3));
+        assertEquals(12, estoqueDe(p.id));
+    }
+
+    @Test
+    void somarAoEstoqueRECUSAficarNegativo() {
+        // Ajuste a mao nao e venda: saldo negativo so faz sentido quando veio de uma venda que nao
+        // podia ser recusada (balcao, marketplace).
+        Produto p = produtoCom(2);
+
+        assertEquals(0, produtos.somarAoEstoque(p.id, LOJA, -3));
+
+        assertEquals(2, estoqueDe(p.id), "recusar nao pode mexer no saldo");
+    }
+
+    @Test
+    void somarAoEstoqueAteZEROehPermitido() {
+        Produto p = produtoCom(3);
+
+        assertEquals(1, produtos.somarAoEstoque(p.id, LOJA, -3));
+
+        assertEquals(0, estoqueDe(p.id));
+    }
+
+    @Test
+    void somarAoEstoqueNaoINVENTAsaldoEmQuemNaoControla() {
+        Produto p = produtoCom(null);
+
+        assertEquals(0, produtos.somarAoEstoque(p.id, LOJA, 5));
+
+        assertNull(produtos.findByIdAndLojaId(p.id, LOJA).orElseThrow().estoque);
+    }
+
+    @Test
+    void doisAjustesSeguidosCONTAMosDOIS() {
+        // A razao de a conta ser do banco: antes era `(p.estoque || 0) + delta` no navegador, a partir
+        // de uma lista carregada antes. Dois cliques rapidos gravavam o mesmo numero e um sumia.
+        Produto p = produtoCom(10);
+        Produto lidoAntes = produtos.findByIdAndLojaId(p.id, LOJA).orElseThrow();
+        assertEquals(10, lidoAntes.estoque);
+
+        produtos.somarAoEstoque(lidoAntes.id, LOJA, 1);
+        produtos.somarAoEstoque(lidoAntes.id, LOJA, 1);
+
+        assertEquals(12, estoqueDe(p.id), "os dois cliques tem que contar");
+    }
+
+    @Test
+    void oInsumoTambemTemDefinirEsomar() {
+        Insumo i = insumoCom("5.000");
+
+        assertEquals(1, insumos.definirEstoque(i.id, LOJA, new BigDecimal("2.250")));
+        assertEquals(0, insumos.findByIdAndLojaId(i.id, LOJA).orElseThrow().estoque
+                .compareTo(new BigDecimal("2.250")));
+
+        assertEquals(1, insumos.somarAoEstoque(i.id, LOJA, new BigDecimal("0.750")));
+        assertEquals(0, insumos.findByIdAndLojaId(i.id, LOJA).orElseThrow().estoque
+                .compareTo(new BigDecimal("3.000")));
+
+        assertEquals(0, insumos.somarAoEstoque(i.id, LOJA, new BigDecimal("-9.000")),
+                "ajuste a mao nao pode ficar negativo");
+        assertEquals(0, insumos.findByIdAndLojaId(i.id, LOJA).orElseThrow().estoque
+                .compareTo(new BigDecimal("3.000")));
+    }
+
+    @Test
+    void definirEstoqueDoInsumoNaoMexeNoCustoNemNaUnidade() {
+        Insumo i = insumoCom("5.000");
+
+        insumos.definirEstoque(i.id, LOJA, new BigDecimal("1.000"));
+
+        Insumo depois = insumos.findByIdAndLojaId(i.id, LOJA).orElseThrow();
+        assertEquals(0, depois.custo.compareTo(new BigDecimal("12.00")));
+        assertEquals("kg", depois.unidade);
+        assertEquals("Polpa de acai", depois.nome);
+    }
+
     @Test
     void aDEVOLUCAOdoInsumoNUNCAeRecusadaPorFalta() {
         // Por que `consumirSeTiver` e `mexerNoEstoque` sao metodos SEPARADOS, e nao um com sinal:

@@ -79,6 +79,54 @@ public interface ProdutoRepository extends JpaRepository<Produto, Long> {
                         @org.springframework.data.repository.query.Param("qtd") int qtd);
 
     /**
+     * Troca o saldo pelo valor informado, e NADA MAIS.
+     *
+     * <p>Uma coluna, uma consulta. De proposito: o caminho antigo era carregar o produto, mexer no
+     * campo e {@code save()} -- e um {@code save()} grava a linha inteira, inclusive os campos que
+     * quem pediu o ajuste nem sabe que existem. Foi assim que a tela de Estoque passou a apagar o
+     * {@code codigo_externo}: ela manda o cadastro que conhece, e o resto ia a nulo.</p>
+     *
+     * <p>{@code valor} nulo e um valor legitimo: quer dizer <b>para de controlar estoque</b>, o
+     * "vazio = nao controla" da tela.</p>
+     *
+     * @return 1 se gravou, 0 se o produto nao e desta loja
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("""
+            update Produto p set p.estoque = :valor
+            where p.id = :id and p.lojaId = :lojaId""")
+    int definirEstoque(@org.springframework.data.repository.query.Param("id") Long id,
+                       @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
+                       @org.springframework.data.repository.query.Param("valor") Integer valor);
+
+    /**
+     * Soma ao saldo no banco. Os botoes + e - da tela de Estoque.
+     *
+     * <p><b>O defeito que isto fecha:</b> o ajuste era feito no NAVEGADOR --
+     * {@code (p.estoque || 0) + delta} a partir de uma lista carregada minutos antes -- e gravado como
+     * valor absoluto. Clicar "+1" as 21h com a lista de 18h gravava o saldo de 18h mais um, e as
+     * vendas da noite desapareciam.</p>
+     *
+     * <p>Recusa descer abaixo de zero: ajuste manual negativo nao e venda, e um saldo negativo so faz
+     * sentido quando veio de uma venda que nao podia ser recusada (ver {@code baixarEstoque}).</p>
+     *
+     * <p>Nao e o {@code devolverEstoque} de proposito, mesmo fazendo uma conta parecida: aquele e lido
+     * pelo estorno do cancelamento, e la a devolucao NUNCA pode ser recusada -- nem por saldo, nem por
+     * ficar negativa. Juntar os dois faria uma mudanca em um mexer calado no outro.</p>
+     *
+     * @return 1 se ajustou, 0 se o produto nao controla estoque, nao e desta loja, ou o ajuste
+     *         deixaria o saldo negativo
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("""
+            update Produto p set p.estoque = p.estoque + :delta
+            where p.id = :id and p.lojaId = :lojaId
+              and p.estoque is not null and p.estoque + :delta >= 0""")
+    int somarAoEstoque(@org.springframework.data.repository.query.Param("id") Long id,
+                       @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
+                       @org.springframework.data.repository.query.Param("delta") int delta);
+
+    /**
      * Produtos da loja SEM a coluna da foto.
      *
      * <p>Ver {@link br.com.bora.dto.ProdutoResumo}: a foto vive como data URL dentro de

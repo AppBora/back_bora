@@ -22,6 +22,13 @@ public class InsumoController {
     @PutMapping("/insumos/{id}") public Insumo editar(@PathVariable Long id, @RequestBody Insumo i) { i.id = id; return service.salvar(i); }
     @DeleteMapping("/insumos/{id}") public void excluir(@PathVariable Long id) { service.excluir(id); }
 
+    /** Mexer no estoque do insumo, separado do cadastro. Ver MexerNoEstoqueRequest. */
+    @PutMapping("/insumos/{id}/estoque")
+    public Insumo mexerNoEstoque(@PathVariable Long id,
+                                 @RequestBody br.com.bora.dto.MexerNoEstoqueRequest req) {
+        return service.mexerNoEstoque(id, req);
+    }
+
     @GetMapping("/produtos/{id}/ficha") public List<Map<String, Object>> ficha(@PathVariable Long id) { return service.ficha(id); }
     @PutMapping("/produtos/{id}/ficha") public List<Map<String, Object>> salvarFicha(@PathVariable Long id, @RequestBody List<Map<String, Object>> itens) { return service.salvarFicha(id, itens); }
 }

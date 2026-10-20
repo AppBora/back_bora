@@ -56,7 +56,14 @@ public class ProdutoService {
         p.categoria = dados.categoria;
         p.preco = dados.preco;
         p.custo = dados.custo;
-        p.estoque = dados.estoque;
+        // O ESTOQUE NAO ENTRA AQUI. Era `p.estoque = dados.estoque`, sem condicao, e o formulario
+        // mandava o numero que a tela tinha carregado -- talvez horas antes. O lojista abria Produtos
+        // as 18h, a loja vendia 12 durante a noite, ele corrigia so o PRECO as 21h, e as 12 baixas
+        // desapareciam, sem log e sem aviso.
+        //
+        // Quem mexe em estoque agora e o `mexerNoEstoque`, que e uma operacao propria e explicita.
+        // Isso faz o apagamento ser IMPOSSIVEL, em vez de depender de o formulario mandar o numero
+        // certo. Ver MexerNoEstoqueRequest.
         p.estoqueMinimo = dados.estoqueMinimo;
         if (dados.imagemUrl != null) p.imagemUrl = dados.imagemUrl.isBlank() ? null : dados.imagemUrl;
         if (dados.ativo != null) p.ativo = dados.ativo;
@@ -100,6 +107,53 @@ public class ProdutoService {
         if (codigo == null) return null;
         String limpo = codigo.trim();
         return limpo.isEmpty() ? null : limpo;
+    }
+
+    /**
+     * Mexer no estoque: a operacao separada do cadastro.
+     *
+     * <p>Ver {@link br.com.bora.dto.MexerNoEstoqueRequest} para o porque de ser um endpoint proprio e
+     * nao um campo do formulario.</p>
+     *
+     * <p><b>DEFINIR</b> sempre vence, mesmo que tenha havido vendas entre a leitura da tela e o
+     * clique: o lojista andou na prateleira e contou, entao o numero dele e a verdade. <b>AJUSTAR</b>
+     * soma no banco, nunca em Java, e recusa descer abaixo de zero.</p>
+     *
+     * @return o produto com o saldo novo, para a tela mostrar a verdade em vez de recarregar tudo
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public Produto mexerNoEstoque(Long id, br.com.bora.dto.MexerNoEstoqueRequest req) {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        Long lojaId = ctx.lojaId();
+        Produto p = buscar(id);
+        if (req == null || req.tipo() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o tipo: DEFINIR ou AJUSTAR");
+        }
+        if (req.tipo() == br.com.bora.dto.MexerNoEstoqueRequest.Tipo.DEFINIR) {
+            Integer valor = req.quantidade() == null ? null : req.quantidade().intValue();
+            if (valor != null && valor < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "O estoque nao pode ser negativo");
+            }
+            repo.definirEstoque(id, lojaId, valor);
+        } else {
+            if (req.quantidade() == null || req.quantidade().signum() == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe quanto somar ou tirar");
+            }
+            if (p.estoque == null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "\"" + p.nome + "\" nao controla estoque. Informe uma quantidade inicial antes "
+                                + "de usar os botoes de ajuste.");
+            }
+            if (repo.somarAoEstoque(id, lojaId, req.quantidade().intValue()) == 0) {
+                // O saldo e lido DEPOIS da tentativa, porque entre o clique e agora pode ter havido
+                // venda -- e o numero que o lojista precisa ler e o de agora, nao o da tela dele.
+                Integer agora = buscar(id).estoque;
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "\"" + p.nome + "\" esta com " + agora + " em estoque; o ajuste deixaria o "
+                                + "saldo negativo. Use a Contagem para informar o valor contado.");
+            }
+        }
+        return buscar(id);
     }
 
     public void excluir(Long id) {
