@@ -131,6 +131,92 @@ public class AsaasClient {
     }
 
     /**
+     * A assinatura ainda existe no Asaas?
+     *
+     * <h2>Por que isto nao pode ser um booleano</h2>
+     * <p>Sao TRES respostas, nao duas, e confundi-las custa dinheiro. "Nao consegui falar com o
+     * Asaas" nao e "a assinatura nao existe": tratar erro de rede como ausencia faria o
+     * {@code assinar} cancelar e recriar no escuro, que e exatamente o defeito que ele veio
+     * consertar.</p>
+     *
+     * <p>O caso real: a assinatura da Zira esta {@code deleted: true} no Asaas e o nosso banco nao
+     * sabe. Sem distinguir NAO_EXISTE de INDISPONIVEL, ou a loja fica sem como pagar, ou a cobranca e
+     * recriada a cada falha de rede.</p>
+     */
+    public enum EstadoDaAssinatura {
+        /** Existe e nao esta deletada. */
+        VIVA,
+        /** O Asaas respondeu 404, ou respondeu com {@code deleted: true}. */
+        NAO_EXISTE,
+        /** Nao deu para saber: rede, 5xx, chave errada. NUNCA decidir nada no escuro com isto. */
+        INDISPONIVEL
+    }
+
+    /** Ver {@link EstadoDaAssinatura}. */
+    @SuppressWarnings("unchecked")
+    public EstadoDaAssinatura estadoDaAssinatura(String subscriptionId) {
+        if (subscriptionId == null || subscriptionId.isBlank()) return EstadoDaAssinatura.NAO_EXISTE;
+        if (!configurado()) return EstadoDaAssinatura.INDISPONIVEL;
+        try {
+            Map<String, Object> resp = http.get()
+                    .uri("/subscriptions/" + subscriptionId)
+                    .header("access_token", apiKey)
+                    .retrieve()
+                    .onStatus(st -> st.value() == 404, (req, res) -> { })   // 404 nao e excecao aqui
+                    .body(Map.class);
+            if (resp == null || resp.get("id") == null) return EstadoDaAssinatura.NAO_EXISTE;
+            if (Boolean.TRUE.equals(resp.get("deleted"))) return EstadoDaAssinatura.NAO_EXISTE;
+            return EstadoDaAssinatura.VIVA;
+        } catch (Exception e) {
+            log.warn("Asaas: nao deu para consultar a assinatura {}: {}", subscriptionId, e.getMessage());
+            return EstadoDaAssinatura.INDISPONIVEL;
+        }
+    }
+
+    /** A fatura em aberto, com o link para o lojista pagar. */
+    public record FaturaAberta(String id, String link, String vencimento, Double valor) {}
+
+    /**
+     * A fatura em aberto da assinatura, com o LINK de pagamento.
+     *
+     * <p>O {@link #cobrancaAbertaDaAssinatura} devolve so o id, e serve ao registro de pagamento
+     * feito fora do Asaas. Este devolve o link, porque o lojista inadimplente precisa de um lugar
+     * para PAGAR -- antes a unica coisa que o painel oferecia a ele era "Reativar assinatura", que
+     * apagava a divida e criava outra cobranca com mais 7 dias de cortesia.</p>
+     *
+     * <p>Devolve null quando nao ha nada aberto OU quando a consulta falhou: quem usa isto so mostra
+     * um link a mais na tela, entao a ambiguidade nao decide nada. Para DECIDIR, use o
+     * {@link #estadoDaAssinatura}.</p>
+     */
+    @SuppressWarnings("unchecked")
+    public FaturaAberta faturaAbertaDaAssinatura(String subscriptionId) {
+        if (subscriptionId == null || subscriptionId.isBlank() || !configurado()) return null;
+        for (String status : new String[]{"OVERDUE", "PENDING"}) {
+            try {
+                Map<String, Object> resp = http.get()
+                        .uri("/payments?subscription=" + subscriptionId + "&status=" + status + "&limit=1")
+                        .header("access_token", apiKey)
+                        .retrieve().body(Map.class);
+                Object dados = resp == null ? null : resp.get("data");
+                if (dados instanceof java.util.List<?> lista && !lista.isEmpty()
+                        && lista.get(0) instanceof Map<?, ?> m && m.get("id") != null) {
+                    Object valor = m.get("value");
+                    return new FaturaAberta(
+                            String.valueOf(m.get("id")),
+                            m.get("invoiceUrl") == null ? null : String.valueOf(m.get("invoiceUrl")),
+                            m.get("dueDate") == null ? null : String.valueOf(m.get("dueDate")),
+                            valor instanceof Number n ? n.doubleValue() : null);
+                }
+            } catch (Exception e) {
+                log.warn("Asaas: falha ao procurar fatura {} da assinatura {}: {}",
+                        status, subscriptionId, e.getMessage());
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Da baixa numa cobranca como recebida em dinheiro (ou PIX direto, fora do Asaas).
      *
      * <p><b>Por que isto e necessario e nao so cosmetico:</b> registrar o pagamento apenas no nosso

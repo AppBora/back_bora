@@ -27,7 +27,11 @@ public class AssinaturaController {
      */
     @GetMapping
     public org.springframework.http.ResponseEntity<AssinaturaView> status() {
-        AssinaturaView v = AssinaturaView.de(service.status());
+        var a = service.status();
+        // O link da fatura so e buscado no Asaas quando ha fatura para mostrar (PENDENTE ou
+        // INADIMPLENTE) -- ver AssinaturaService.faturaEmAberto. Assinatura em dia nao paga uma ida a
+        // rede nesta tela.
+        AssinaturaView v = AssinaturaView.de(a, service.faturaEmAberto(a));
         return v == null ? org.springframework.http.ResponseEntity.noContent().build()
                          : org.springframework.http.ResponseEntity.ok(v);
     }

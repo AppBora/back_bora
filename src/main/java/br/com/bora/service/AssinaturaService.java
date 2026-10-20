@@ -60,14 +60,62 @@ public class AssinaturaService {
         return repo.findByLojaId(ctx.lojaId()).orElse(null);
     }
 
-    /** Assina o plano atual da loja no Asaas (cria cliente + assinatura mensal). */
+    /**
+     * Assina o plano atual da loja no Asaas (cria cliente + assinatura mensal).
+     *
+     * <h2>Os dois defeitos que isto fecha (medidos em 20/10/2026)</h2>
+     *
+     * <p><b>1. Teste gratis infinito.</b> So saia cedo com status ATIVA. Com PENDENTE, INADIMPLENTE ou
+     * CANCELADA, cancelava a assinatura no Asaas e criava outra com vencimento em {@code hoje + 7}.
+     * O lojista inadimplente clicava "Reativar assinatura", a fatura atrasada desaparecia e ele
+     * ganhava mais 7 dias de cortesia -- quantas vezes quisesse. E o caminho esta aberto de proposito
+     * para quem esta bloqueado ({@code BloqueioPorAssinaturaFilter} libera {@code /api/assinatura}),
+     * ou seja, estava aberto justamente para quem tinha motivo de usar.</p>
+     *
+     * <p><b>2. Cancela aqui, falha ali, loja sem cobranca.</b> Cancelava no Asaas e SO DEPOIS criava,
+     * tudo numa transacao. Se a criacao falhasse, o nosso banco fazia rollback e voltava a apontar
+     * para a assinatura antiga -- que la fora ja estava morta. O painel dizia que estava tudo certo e
+     * a receita daquela loja sumia, calado. <b>E o estado em que a loja da Zira esta.</b></p>
+     *
+     * <h2>A regra agora</h2>
+     * <ol>
+     *   <li><b>ATIVA ou PENDENTE</b> -> devolve a que existe, sem tocar no Asaas. Clicar de novo nao
+     *       pode criar cobranca nem mover vencimento. Idempotente.</li>
+     *   <li><b>INADIMPLENTE com a assinatura VIVA no Asaas</b> -> <b>recusa</b>. Tem fatura em aberto,
+     *       e o caminho e pagar aquela fatura, nao criar outra. O painel mostra o link de pagamento
+     *       (ver {@link #faturaEmAberto}), que antes nao existia -- a unica acao oferecida ao
+     *       inadimplente era justamente a que apagava a divida.</li>
+     *   <li><b>A assinatura NAO EXISTE mais no Asaas</b> (deletada por fora, como a da Zira) -> cria
+     *       outra. Nao ha o que cancelar, e sem isto a loja ficaria sem nenhuma forma de voltar a
+     *       pagar.</li>
+     *   <li><b>CANCELADA</b> -> reassina.</li>
+     *   <li><b>Nao deu para falar com o Asaas</b> -> recusa com 503. Nunca cancelar nem criar no
+     *       escuro: foi assim que a assinatura da Zira se perdeu.</li>
+     * </ol>
+     *
+     * <p><b>A cortesia de 7 dias vale uma vez so</b>, na primeira assinatura da loja. Reassinando, o
+     * vencimento e amanha -- quem ja usou o periodo de teste nao ganha outro por clicar de novo.</p>
+     *
+     * <p><b>A ordem e CRIA, depois cancela.</b> Se a criacao falhar, nada foi cancelado e o estado
+     * continua consistente. O risco que sobra e o inverso: cancelamento falhando deixa duas
+     * assinaturas vivas e o lojista cobrado em dobro. Entre os dois, dobro e melhor que zero -- dobro
+     * e visivel, o lojista reclama e da para estornar; zero e invisivel. E o id orfao fica GRAVADO em
+     * {@code asaasSubscriptionAnterior} (V52), nao numa linha de log que rotaciona.</p>
+     */
     @Transactional
     public Assinatura assinar(String cpfCnpj) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         Long lojaId = ctx.lojaId();
-        Assinatura jaAtiva = repo.findByLojaId(lojaId).orElse(null);
-        if (jaAtiva != null && jaAtiva.getStatus() == StatusAssinatura.ATIVA) {
-            return jaAtiva; // já há assinatura ativa — não recria nem reverte para PENDENTE
+        Assinatura existente = repo.findByLojaId(lojaId).orElse(null);
+        // O estado da assinatura ANTERIOR no Asaas, descoberto uma vez. Ele decide duas coisas: se
+        // reassinar e permitido (abaixo) e, mais tarde, se ha o que cancelar -- a antiga da Zira esta
+        // deletada la fora, e mandar cancelar o que ja morreu faria o cancelamento "falhar" e o
+        // sistema anunciar uma cobranca em duplicidade que nao existe.
+        AsaasClient.EstadoDaAssinatura estadoAnterior = null;
+        if (existente != null && existente.getAsaasSubscriptionId() != null) {
+            estadoAnterior = estadoParaDecidir(existente);
+            Assinatura recusaOuDevolve = decidirSobreAssinaturaQueJaExiste(existente, estadoAnterior);
+            if (recusaOuDevolve != null) return recusaOuDevolve;
         }
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
@@ -86,21 +134,113 @@ public class AssinaturaService {
         a.setPlano(plano);
         // precoComModulos, não precoEfetivo: o Módulo IA (+R$ 99) precisa entrar na cobrança.
         a.setValor(loja.precoComModulos()); // respeita preço negociado por loja (ex.: fundador R$149)
-        // Reassinando (cancelada ou inadimplente): encerra a assinatura anterior no Asaas antes de
-        // criar outra. Sem isto, o id antigo era sobrescrito e o cliente ficava com DUAS cobranças.
-        if (a.getAsaasSubscriptionId() != null && asaas.configurado()) {
-            asaas.cancelarAssinatura(a.getAsaasSubscriptionId());
-        }
         if (a.getAsaasCustomerId() == null) {
             a.setAsaasCustomerId(asaas.criarCliente(loja.getNome(), email, documentoDaCobranca(loja, cpfCnpj)));
         }
-        String nextDue = LocalDate.now().plusDays(7).toString(); // 7 dias de cortesia antes da 1ª cobrança
+
+        // A cortesia de 7 dias vale UMA VEZ, na primeira assinatura da loja. Reassinando, o vencimento
+        // e amanha: quem ja usou o periodo de teste nao ganha outro por clicar de novo. Era aqui que
+        // nascia o teste gratis infinito.
+        String anterior = a.getAsaasSubscriptionId();
+        boolean primeiraVez = anterior == null;
+        String nextDue = LocalDate.now().plusDays(primeiraVez ? 7 : 1).toString();
+
+        // CRIA primeiro, cancela depois. Ver o javadoc deste metodo: na ordem antiga, uma falha na
+        // criacao deixava a loja sem cobranca nenhuma e o painel dizendo que estava tudo certo.
         Map<String, Object> sub = asaas.criarAssinatura(a.getAsaasCustomerId(), loja.precoComModulos().doubleValue(),
                 "BoraHapp " + plano.name() + " - " + loja.getNome(), nextDue);
-        a.setAsaasSubscriptionId(sub == null ? null : (String) sub.get("id"));
+        String novoId = sub == null ? null : (String) sub.get("id");
+        if (novoId == null) {
+            // Nada foi cancelado, entao a assinatura antiga (se havia) continua valendo. Recusar aqui e
+            // melhor que gravar uma assinatura sem id e achar que esta tudo bem.
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "O Asaas nao criou a cobranca agora. Nada foi alterado; tente de novo em alguns minutos.");
+        }
+        a.setAsaasSubscriptionId(novoId);
+        a.setAsaasSubscriptionAnterior(null);
+
+        // So cancela o que esta VIVO. A antiga deletada por fora (o caso da Zira) nao tem o que
+        // cancelar: mandar cancelar devolveria falha e o sistema anunciaria cobranca em duplicidade
+        // que nao existe -- alarme falso no painel do lojista e no log de auditoria.
+        boolean anteriorEstaViva = estadoAnterior == AsaasClient.EstadoDaAssinatura.VIVA;
+        if (anterior != null && anteriorEstaViva && asaas.configurado() && !anterior.equals(novoId)) {
+            if (!asaas.cancelarAssinatura(anterior)) {
+                // Duas assinaturas vivas: o lojista vai ser cobrado em dobro. Fica GRAVADO, nao so no
+                // log, porque alguem precisa cancelar a antiga a mao no Asaas.
+                a.setAsaasSubscriptionAnterior(anterior);
+                AUDITORIA.error("COBRANCA EM DUPLICIDADE na loja {}: criei a assinatura {} mas NAO consegui "
+                                + "cancelar a anterior {}. O lojista sera cobrado DUAS vezes. Cancele a "
+                                + "anterior no Asaas e limpe assinatura.asaas_subscription_anterior.",
+                        lojaId, novoId, anterior);
+            }
+        }
+
         a.setStatus(StatusAssinatura.PENDENTE);
         a.setAtualizadoEm(OffsetDateTime.now());
         return repo.save(a);
+    }
+
+    /**
+     * O que fazer quando a loja JA tem assinatura no Asaas.
+     *
+     * @return a assinatura a devolver sem mexer em nada, ou {@code null} para seguir e reassinar
+     * @throws ResponseStatusException quando reassinar seria errado (fatura em aberto) ou arriscado
+     *                                 (Asaas indisponivel)
+     */
+    private Assinatura decidirSobreAssinaturaQueJaExiste(Assinatura a,
+                                                        AsaasClient.EstadoDaAssinatura estado) {
+        StatusAssinatura st = a.getStatus();
+
+        // Clicar de novo em cima de algo que ja existe e esta em ordem nao pode criar cobranca nem
+        // mover vencimento. PENDENTE entra aqui junto com ATIVA: a assinatura e a fatura ja existem,
+        // o lojista so ainda nao pagou a primeira -- recriar daria mais 7 dias de cortesia.
+        if (st == StatusAssinatura.ATIVA || st == StatusAssinatura.PENDENTE) return a;
+
+        if (estado == AsaasClient.EstadoDaAssinatura.INDISPONIVEL) {
+            // Nao decidir no escuro. Cancelar/criar sem saber o estado la fora foi o que perdeu a
+            // assinatura da Zira.
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Nao consegui confirmar a sua assinatura no sistema de cobranca agora. "
+                            + "Nada foi alterado; tente de novo em alguns minutos.");
+        }
+
+        if (estado == AsaasClient.EstadoDaAssinatura.VIVA && st == StatusAssinatura.INADIMPLENTE) {
+            // A divida existe e a cobranca esta de pe: o caminho e PAGAR aquela fatura. Recriar
+            // apagava a fatura atrasada e abria outra cortesia de 7 dias.
+            var fatura = faturaEmAberto(a);
+            String comoPagar = fatura != null && fatura.link() != null
+                    ? " Pague pelo link que esta na tela de Planos."
+                    : " O link de pagamento foi enviado por e-mail pelo Asaas.";
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Voce tem uma fatura em aberto. Reativar nao apaga essa fatura." + comoPagar);
+        }
+
+        // NAO_EXISTE (deletada por fora, como a da Zira) ou CANCELADA: segue e cria outra.
+        return null;
+    }
+
+    /**
+     * Consulta o Asaas UMA VEZ sobre a assinatura anterior.
+     *
+     * <p>Devolve null quando nem precisa perguntar: assinatura em ordem (ATIVA ou PENDENTE) nao vai
+     * ser recriada, e perguntar seria uma ida a rede por nada num botao que o lojista clica sem
+     * pensar.</p>
+     */
+    private AsaasClient.EstadoDaAssinatura estadoParaDecidir(Assinatura a) {
+        StatusAssinatura st = a.getStatus();
+        if (st == StatusAssinatura.ATIVA || st == StatusAssinatura.PENDENTE) return null;
+        return asaas.estadoDaAssinatura(a.getAsaasSubscriptionId());
+    }
+
+    /** A fatura em aberto da assinatura da loja, com o link de pagamento. Null quando nao ha. */
+    public AsaasClient.FaturaAberta faturaEmAberto(Assinatura a) {
+        if (a == null || a.getAsaasSubscriptionId() == null) return null;
+        if (a.getStatus() != StatusAssinatura.INADIMPLENTE && a.getStatus() != StatusAssinatura.PENDENTE) {
+            // So consulta o Asaas quando faz diferenca. Assinatura em dia nao tem fatura para mostrar,
+            // e esta chamada custa uma ida a rede numa tela que o lojista abre a toda hora.
+            return null;
+        }
+        return asaas.faturaAbertaDaAssinatura(a.getAsaasSubscriptionId());
     }
 
     /**
