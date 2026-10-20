@@ -310,6 +310,11 @@ public class PedidoService {
 
         List<PedidoItem> itens = new ArrayList<>();
         BigDecimal soma = BigDecimal.ZERO;
+        // Uma consulta por PEDIDO, nao por item: o catalogo da loja tem dezenas de linhas e o pedido
+        // tem poucas. Carregar aqui evita um findBy por item.
+        List<Produto> catalogo = in.itens() == null || in.itens().isEmpty()
+                ? List.of() : produtos.findByLojaId(lojaId);
+        int semCasar = 0;
         if (in.itens() != null) for (var it : in.itens()) {
             int qtd = it.quantidade() == null || it.quantidade() < 1 ? 1 : it.quantidade();
             BigDecimal preco = it.precoUnitario() == null ? BigDecimal.ZERO : it.precoUnitario();
@@ -319,9 +324,35 @@ public class PedidoService {
             pi.setLojaId(lojaId);
             pi.setDescricao(it.nome() == null ? "Item" : it.nome());
             pi.setQuantidade(qtd);
+            // O PRECO continua vindo do marketplace, nao do nosso cadastro: quem cobrou do cliente
+            // foi o iFood, com o preco que esta la. Igualar ao nosso preco faria o pedido fechar por
+            // um valor que ninguem pagou.
             pi.setPrecoUnitario(preco);
             pi.setSubtotal(sub);
+
+            // Achar o produto e o que faltava: sem ele nao havia como baixar estoque nem saber o
+            // custo. Pedido de marketplace entrava como se nada tivesse saido da prateleira.
+            Produto prod = resolverProduto(catalogo, it);
+            if (prod == null) {
+                semCasar++;
+            } else {
+                pi.setProdutoId(prod.id);
+                // Mesma regra do balcao e do cardapio: com ficha tecnica consome os insumos e usa o
+                // custo da ficha; sem ficha, baixa o proprio produto e usa o custo dele.
+                BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
+                pi.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+                pi.setConsumiuFicha(custoFicha != null);   // o cancelamento le isto para devolver certo
+                if (custoFicha == null) produtos.baixarEstoque(prod.id, lojaId, qtd);
+            }
             itens.add(pi);
+        }
+        if (semCasar > 0) {
+            // Nao derruba o pedido: comida vendida tem que entrar de qualquer jeito. Mas fica escrito,
+            // porque estoque errado e caro e silencioso.
+            AUDITORIA.warn("Pedido {} de {} na loja {}: {} item(ns) sem produto correspondente no cadastro. "
+                            + "Estoque e custo NAO foram lancados para eles. Preencha o 'Codigo no "
+                            + "marketplace' do produto em Produtos, ou deixe o nome igual ao de la.",
+                    in.externalId(), canalCodigo, lojaId, semCasar);
         }
         p.valorTotal = in.total() != null && in.total().signum() > 0 ? in.total() : soma;
         // O marketplace manda endereco e bairro no payload; eles iam so para o texto da observacao.
@@ -526,6 +557,60 @@ public class PedidoService {
         integracoes.notificarStatus(salvo, status.name()); // sincroniza status com o marketplace (se conectado)
         notifCliente.notificarFase(salvo, status); // Operação Assistida: avisa o cliente no WhatsApp
         return salvo;
+    }
+
+    /**
+     * Qual produto da loja foi vendido neste item do marketplace.
+     *
+     * <h2>Por que nao da para casar pelo nome que vem pronto</h2>
+     * <p>O normalizador monta o campo {@code nome} para a TELA: ele junta complemento e observacao
+     * ("Acai 500ml (+ Granola) -- obs: sem cebola"). Esse texto nao casa com {@code produto.nome} em
+     * nenhum item com adicional, que numa acaiteria e quase todo item.</p>
+     *
+     * <h2>A ordem</h2>
+     * <ol>
+     *   <li><b>Codigo do marketplace</b> ({@code externalCode} do payload, gravado em
+     *       {@code produto.codigo_externo}). E o unico jeito confiavel: foi o proprio lojista que
+     *       cadastrou o mesmo codigo dos dois lados.</li>
+     *   <li><b>Nome limpo</b>, normalizado: sem acento, sem espaco sobrando, caixa ignorada. Casa
+     *       quando o lojista escreveu o produto igual la e aqui, que e o caso comum.</li>
+     * </ol>
+     *
+     * <p>Nao achou: devolve {@code null} e o item entra como entrava antes -- sem baixa e sem custo.
+     * <b>Nunca</b> derruba o pedido por isso, e <b>nunca</b> chuta por aproximacao: baixar o estoque
+     * do produto errado e pior que nao baixar nenhum, porque ninguem percebe.</p>
+     *
+     * <p>Nome repetido no cadastro tambem devolve {@code null} -- com dois candidatos, escolher um e
+     * adivinhar.</p>
+     */
+    private Produto resolverProduto(List<Produto> catalogo, br.com.bora.dto.InboundOrder.InboundItem it) {
+        if (catalogo.isEmpty()) return null;
+
+        String codigo = it.codigoExterno() == null ? null : it.codigoExterno().trim();
+        if (codigo != null && !codigo.isEmpty()) {
+            for (Produto p : catalogo) {
+                if (p.codigoExterno != null && codigo.equalsIgnoreCase(p.codigoExterno.trim())) return p;
+            }
+        }
+
+        String alvo = chaveDoNome(it.nomeLimpo());
+        if (alvo == null) return null;
+        Produto achado = null;
+        for (Produto p : catalogo) {
+            if (alvo.equals(chaveDoNome(p.nome))) {
+                if (achado != null) return null;   // dois com o mesmo nome: nao da para escolher
+                achado = p;
+            }
+        }
+        return achado;
+    }
+
+    /** Nome comparavel: sem acento, sem espaco duplicado, em minusculas. */
+    private static String chaveDoNome(String nome) {
+        if (nome == null || nome.isBlank()) return null;
+        String semAcento = java.text.Normalizer.normalize(nome.trim(), java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
+        return semAcento.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
     }
 
     /**

@@ -67,7 +67,7 @@ class ListaDeProdutosNaoCarregaFotoIT {
         return produtos.resumoDaLoja(LOJA).stream()
                 .map(r -> ProdutoResumo.de((Long) r[0], (String) r[1], (String) r[2],
                         (BigDecimal) r[3], (BigDecimal) r[4], (Integer) r[5], (Integer) r[6],
-                        (Boolean) r[7], LOJA, Boolean.TRUE.equals(r[8])))
+                        (Boolean) r[7], LOJA, Boolean.TRUE.equals(r[8]), (String) r[9]))
                 .toList();
     }
 

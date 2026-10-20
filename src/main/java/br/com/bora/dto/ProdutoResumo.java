@@ -29,13 +29,17 @@ public record ProdutoResumo(
         Integer estoque,
         Integer estoqueMinimo,
         Boolean ativo,
-        String imagemUrl) {
+        String imagemUrl,
+        /** O codigo deste produto no iFood/99. A tela de Produtos edita este campo. */
+        String codigoExterno) {
 
     /** Monta a partir da projeção, resolvendo o endereço da foto. */
     public static ProdutoResumo de(Long id, String nome, String categoria, BigDecimal preco,
                                    BigDecimal custo, Integer estoque, Integer estoqueMinimo,
-                                   Boolean ativo, Long lojaId, boolean temImagem) {
+                                   Boolean ativo, Long lojaId, boolean temImagem,
+                                   String codigoExterno) {
         return new ProdutoResumo(id, nome, categoria, preco, custo, estoque, estoqueMinimo, ativo,
-                temImagem ? "/public/loja/" + lojaId + "/produto/" + id + "/imagem" : null);
+                temImagem ? "/public/loja/" + lojaId + "/produto/" + id + "/imagem" : null,
+                codigoExterno);
     }
 }

@@ -51,7 +51,9 @@ public class MarketplaceNormalizer {
         List<InboundOrder.InboundItem> itens = new ArrayList<>();
         for (Object o : listOf(r.get("items"))) {
             Map<String, Object> i = mapOf(o);
-            StringBuilder nome = new StringBuilder(firstNonBlank(str(i.get("name")), "Item"));
+            String nomeLimpo = str(i.get("name"));
+            String codigoExterno = str(i.get("externalCode"));
+            StringBuilder nome = new StringBuilder(firstNonBlank(nomeLimpo, "Item"));
             List<String> opcoes = new ArrayList<>();
             for (Object op : listOf(i.get("options"))) {
                 Map<String, Object> m = mapOf(op);
@@ -77,7 +79,8 @@ public class MarketplaceNormalizer {
             if (totalItem != null && qtd != null && qtd > 0) {
                 unitario = totalItem.divide(BigDecimal.valueOf(qtd), 2, java.math.RoundingMode.HALF_UP);
             }
-            itens.add(new InboundOrder.InboundItem(nome.toString(), qtd, unitario));
+            itens.add(new InboundOrder.InboundItem(nome.toString(), qtd, unitario,
+                    codigoExterno, nomeLimpo));
         }
 
         boolean retirada = "TAKEOUT".equalsIgnoreCase(str(r.get("orderType")));
@@ -225,7 +228,9 @@ public class MarketplaceNormalizer {
         List<InboundOrder.InboundItem> itens = new ArrayList<>();
         for (Object o : listOf(r.get("items"))) {
             Map<String, Object> i = mapOf(o);
-            StringBuilder nome = new StringBuilder(firstNonBlank(str(i.get("name")), "Item"));
+            String nomeLimpo = str(i.get("name"));
+            String codigoExterno = str(i.get("externalCode"));
+            StringBuilder nome = new StringBuilder(firstNonBlank(nomeLimpo, "Item"));
             List<String> opcoes = new ArrayList<>();
             for (Object op : listOf(i.get("options"))) {
                 Map<String, Object> m = mapOf(op);
@@ -244,7 +249,8 @@ public class MarketplaceNormalizer {
             if (totalItem != null && qtd != null && qtd > 0) {
                 unitario = totalItem.divide(BigDecimal.valueOf(qtd), 2, java.math.RoundingMode.HALF_UP);
             }
-            itens.add(new InboundOrder.InboundItem(nome.toString(), qtd, unitario));
+            itens.add(new InboundOrder.InboundItem(nome.toString(), qtd, unitario,
+                    codigoExterno, nomeLimpo));
         }
 
         // Retirada (Open Delivery type TAKEOUT; a 99 liberou em 22/09): o objeto delivery nao vem e vem

@@ -54,7 +54,14 @@ public interface ProdutoRepository extends JpaRepository<Produto, Long> {
      */
     @org.springframework.data.jpa.repository.Query("""
             select p.id, p.nome, p.categoria, p.preco, p.custo, p.estoque, p.estoqueMinimo, p.ativo,
-                   case when p.imagemUrl is null or p.imagemUrl = '' then false else true end
+                   case when p.imagemUrl is null or p.imagemUrl = '' then false else true end,
+                   p.codigoExterno
               from Produto p where p.lojaId = :lojaId order by p.nome""")
     java.util.List<Object[]> resumoDaLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
+    /** Quem na loja ja usa este codigo do marketplace. Para avisar ANTES do banco recusar. */
+    Optional<Produto> findFirstByLojaIdAndCodigoExterno(Long lojaId, String codigoExterno);
+
+    /** Produtos da loja para casar com o item do marketplace. Uma consulta por pedido, nao por item. */
+    java.util.List<Produto> findByLojaId(Long lojaId);
 }

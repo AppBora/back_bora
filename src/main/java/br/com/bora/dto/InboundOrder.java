@@ -45,5 +45,23 @@ public record InboundOrder(
         this(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao, total, itens, null, null, null);
     }
 
-    public record InboundItem(String nome, Integer quantidade, BigDecimal precoUnitario) {}
+    /**
+     * Um item do pedido que veio de fora.
+     *
+     * @param nome          o texto que vai para a TELA: ja traz complemento e observacao juntos
+     *                      ("Acai 500ml (+ Granola) -- obs: sem cebola"). Nao serve para casar com
+     *                      o cadastro.
+     * @param codigoExterno o {@code externalCode} do payload -- o codigo que o lojista cadastrou no
+     *                      marketplace. E o jeito confiavel de saber QUAL produto foi vendido.
+     * @param nomeLimpo     o nome do produto sozinho, sem complemento nem observacao. Usado para
+     *                      achar o produto quando o codigo nao foi preenchido no cadastro.
+     */
+    public record InboundItem(String nome, Integer quantidade, BigDecimal precoUnitario,
+                              String codigoExterno, String nomeLimpo) {
+
+        /** Para os canais que ainda nao trazem codigo (Rappi, Uber Eats e os testes antigos). */
+        public InboundItem(String nome, Integer quantidade, BigDecimal precoUnitario) {
+            this(nome, quantidade, precoUnitario, null, null);
+        }
+    }
 }
