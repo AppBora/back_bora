@@ -156,4 +156,23 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.data.jpa.repository.Query("delete from Pedido p where p.lojaId = :lojaId")
     int deleteByLojaId(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
+    /**
+     * Apaga o pedido pelo id, dentro da loja.
+     *
+     * <p>Por que nao o {@code delete(entidade)}: o estorno que roda antes da exclusao usa consultas
+     * com {@code clearAutomatically = true}, que LIMPAM o contexto do Hibernate. O objeto do pedido
+     * fica desanexado, e {@code delete(entidade)} num objeto desanexado faz {@code merge} primeiro --
+     * ou seja, grava o estado que esta em memoria de volta na linha, e so depois apaga. Funciona, mas
+     * depende de um detalhe do ORM que ninguem lembra de olhar.</p>
+     *
+     * <p>Aqui a exclusao e pelo id e pela loja, e nao depende do estado do objeto. A clausula da loja
+     * tambem e uma segunda tranca de tenant, alem da que o {@code buscarDaLoja} ja faz.</p>
+     *
+     * @return 1 se apagou, 0 se o pedido nao e desta loja (ou ja tinha sido apagado)
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("delete from Pedido p where p.id = :id and p.lojaId = :lojaId")
+    int apagarDaLoja(@org.springframework.data.repository.query.Param("id") Long id,
+                     @org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 }

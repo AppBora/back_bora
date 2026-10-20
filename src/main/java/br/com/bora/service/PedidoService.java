@@ -654,17 +654,58 @@ public class PedidoService {
      * Exclusao definitiva — para pedido de teste ou lancado errado; pedido de verdade que nao vai sair
      * se cancela. Leva junto itens e historico (nao ha chave estrangeira: antes ficavam orfaos) e
      * desconta o contador do card do marketplace, que so subia.
+     *
+     * <h2>O defeito que isto fecha (medido em 20/10/2026)</h2>
+     * <p>Excluir apagava pedido, itens e historico e <b>nao devolvia nada</b>: nem estoque, nem
+     * insumo, nem cashback. E este e justamente o botao oferecido para "pedido de teste ou lancado
+     * errado", o caso em que tudo tem que voltar. O cliente perdia o saldo que gastou numa venda que
+     * o lojista acabou de declarar que nunca existiu, e o estoque ficava baixado para sempre.</p>
+     *
+     * <p>Pior: os itens eram apagados <b>primeiro</b>. O estorno le os itens para saber o que
+     * devolver ({@code PedidoItem.consumiuFicha} diz se foi produto ou insumo), entao depois daquela
+     * linha nao havia mais como recalcular nem a mao.</p>
+     *
+     * <h2>As duas regras que nao sao obvias</h2>
+     * <p><b>Devolver ANTES de apagar.</b> O {@link EstornoDaVendaService#devolver} consulta os itens
+     * no banco; depois do {@code delete} eles nao existem.</p>
+     *
+     * <p><b>Pedido JA CANCELADO nao devolve de novo.</b> O estorno rodou no cancelamento. Excluir um
+     * pedido cancelado — que e o caminho natural: cancela o teste, depois apaga — devolveria estoque e
+     * cashback <b>em dobro</b>. O conserto ingenuo (chamar o estorno sempre) troca um defeito que
+     * tira do cliente por um que da de graca, e esse ninguem reclama, entao ninguem descobre.</p>
+     *
+     * <p>O estagio decide o que volta, igual ao cancelamento: pedido ENTREGUE devolve so o cashback,
+     * porque a comida foi embora e o ingrediente acabou. Quem sabe disso e o
+     * {@code EstornoDaVendaService}; aqui so passamos o status que o pedido tinha.</p>
      */
     @Transactional
     public void excluir(Long id) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA"); // RN06
         Pedido p = buscarDaLoja(id);
+
+        // Lido ANTES de qualquer coisa: e o estado em que a venda nasceu que decide o que existe para
+        // desfazer. PIX gerado e nao pago nunca entrou no historico do cliente nem gerou cashback --
+        // houve apenas o debito do resgate.
+        boolean vendaJaContabilizada = !p.pagamentoPendente();
+        boolean jaEstornado = p.status == StatusPedido.CANCELADO;
+
+        int devolvidos = jaEstornado ? 0 : devolucao.devolver(p, p.status, vendaJaContabilizada);
+
         itemRepo.deleteByLojaIdAndPedidoId(p.lojaId, p.id);
         logs.deleteByLojaIdAndPedidoId(p.lojaId, p.id);
         if (p.canalExterno != null) integracoes.descontarRecebido(p.lojaId, p.canalExterno);
-        repo.delete(p);
-        AUDITORIA.warn("AUDITORIA pedido: usuario {} EXCLUIU o pedido {} (codigo {}, origem {}, status {}, R$ {}) da loja {}",
-                ctx.atual().userId(), p.id, p.codigo, p.origem, p.status, p.valorTotal, p.lojaId);
+        // Pelo id, nao pela entidade: o estorno acima roda consultas que limpam o contexto do
+        // Hibernate e o objeto fica desanexado. Ver PedidoRepository.apagarDaLoja.
+        repo.apagarDaLoja(p.id, p.lojaId);
+
+        AUDITORIA.warn("AUDITORIA pedido: usuario {} EXCLUIU o pedido {} (codigo {}, origem {}, "
+                        + "status {}, R$ {}) da loja {}. Devolucao: {}",
+                ctx.atual().userId(), p.id, p.codigo, p.origem, p.status, p.valorTotal, p.lojaId,
+                jaEstornado
+                        ? "nada, o pedido ja estava CANCELADO e o estorno rodou la"
+                        : devolvidos + " item(ns) com estoque devolvido" + (vendaJaContabilizada
+                                ? ", e o cashback da venda foi desfeito"
+                                : "; a venda nunca foi paga, so o resgate de cashback voltou"));
     }
 
     public List<LogStatus> historico(Long pedidoId) {
