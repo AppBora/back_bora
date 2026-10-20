@@ -284,6 +284,42 @@ class EstoqueDoMarketplaceTest {
         assertEquals("Pizza Calabresa", in.itens().get(0).nomeLimpo());
     }
 
+    // ------------------------------------------------------------------ nunca recusar
+
+    @Test
+    void semEstoqueOpedidoDoIFoodENTRAdoMesmoJeito() {
+        // O marketplace NUNCA recusa por falta de estoque: o pedido ja foi aceito do outro lado e o
+        // cliente vai receber a comida. Recusar aqui perderia a venda e deixaria o painel sem o
+        // pedido, com o entregador chegando. O saldo vai a negativo de proposito -- e informacao de
+        // que a contagem esta errada, nao motivo para derrubar a venda.
+        //
+        // Quem recusa e so o cardapio publico, onde o cliente nao tem nada na mao. Ver
+        // VendaSemEstoqueTest.
+        Produto p = produto(11L, "Açaí 500ml", "7470", "8.50");
+        p.estoque = 1;
+        when(produtos.findByLojaId(1L)).thenReturn(List.of(p));
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt())).thenReturn(null);
+
+        assertDoesNotThrow(() -> chega("Açaí 500ml", "7470", "Açaí 500ml", 5));
+
+        verify(produtos).baixarEstoque(11L, 1L, 5);
+        verify(produtos, never()).baixarEstoqueSeTiver(anyLong(), anyLong(), anyInt());
+        assertEquals(11L, gravados.get(0).getProdutoId(), "o item tem que entrar igual");
+    }
+
+    @Test
+    void oMarketplaceUsaOconsumirFichaQueNAOrecusa() {
+        // A sobrecarga de 3 argumentos e a que deixa passar. Se alguem trocar para a de 4 com `true`,
+        // um pedido ja aceito no iFood passaria a ser recusado aqui.
+        when(produtos.findByLojaId(1L)).thenReturn(List.of(produto(11L, "Açaí 500ml", "7470", "8.50")));
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt())).thenReturn(new BigDecimal("6.40"));
+
+        chega("Açaí 500ml", "7470", "Açaí 500ml", 2);
+
+        verify(insumos).consumirFicha(1L, 11L, 2);
+        verify(insumos, never()).consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean());
+    }
+
     @Test
     void canalSemCodigoContinuaFuncionando() {
         // Rappi e Uber Eats não mandam externalCode. O construtor curto do InboundItem existe para

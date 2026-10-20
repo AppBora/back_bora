@@ -232,9 +232,31 @@ public class PublicController {
             m.put("preco", p.preco);
             m.put("imagem", enderecoDaImagem(lojaId, p.id, p.imagemUrl));
             m.put("complementos", gruposPorProduto.getOrDefault(p.id, List.of()));
+            // Esgotado JA NO MENU. Sem isto o cliente montava o carrinho inteiro e so descobria no
+            // "confirmar pedido" -- a pior forma de contar isso a ele, e a mesma razao pela qual o
+            // cardapio ja avisa antes que a loja esta fechada.
+            //
+            // E uma FOTO, nao uma reserva: entre abrir o cardapio e confirmar, alguem pode comprar o
+            // ultimo. Quem garante de verdade e a baixa no banco, na hora de gravar o pedido. Produto
+            // que nao controla estoque (estoque nulo) nunca aparece esgotado -- e o caso de todos os
+            // 123 produtos da producao hoje.
+            boolean esgotado = (p.estoque != null && p.estoque < 1)
+                    || !insumos.fichaDaParaFazer(lojaId, p.id, 1);
+            m.put("esgotado", esgotado);
             return m;
         }).toList());
         return resp;
+    }
+
+    /**
+     * O que o cliente do cardapio le quando o item acabou.
+     *
+     * <p>Diz o PRODUTO e diz o que fazer. Nao diz "insumo", nao diz "estoque negativo" e nao diz
+     * quanto ainda tem -- saldo da loja nao e assunto de quem esta comprando.</p>
+     */
+    private static String esgotou(String produto) {
+        return "Acabou o estoque de \"" + (produto == null ? "um item" : produto)
+                + "\". Tire do carrinho para continuar, ou diminua a quantidade.";
     }
 
     private String enderecoDaMarca(Long lojaId, String qual, String valor) {
@@ -328,6 +350,12 @@ public class PublicController {
      * formaPagamento "PIX" cria a cobrança na conta Asaas do lojista e devolve o QR Code.
      */
     @PostMapping("/loja/{lojaId}/pedido")
+    // TRANSACAO, e nao e detalhe: este metodo grava o pedido, depois os itens num laco, e o laco pode
+    // recusar no meio ("Produto indisponivel", "Quantidade invalida" e agora "acabou o estoque"). Sem
+    // transacao, a recusa no terceiro item deixava o pedido gravado, os dois primeiros itens gravados,
+    // e o estoque dos dois ja baixado -- lixo no painel e estoque errado por um pedido que o cliente
+    // nunca recebeu. Com transacao, recusar nao deixa rastro.
+    @Transactional
     public Map<String, Object> pedirOnline(@PathVariable Long lojaId, @RequestBody Map<String, Object> body,
                                            jakarta.servlet.http.HttpServletRequest http) {
         // Teto por origem, ANTES de qualquer efeito: este endpoint e publico e cada chamada cria
@@ -470,14 +498,38 @@ public class PublicController {
                 // Mesma regra do balcao: com ficha tecnica, consome os insumos e usa o custo da ficha;
                 // sem ficha, baixa o estoque do proprio produto. O cardapio nao fazia nem um nem outro,
                 // entao estoque e CMV ficavam errados justamente no canal que mais vende.
-                BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
+                // Aqui o canal RECUSA quando falta, diferente do balcao e do marketplace.
+                //
+                // O motivo e quem esta com o produto na mao. No balcao o operador esta, e travar a
+                // venda com o cliente na frente e pior que o saldo negativo -- que pelo menos denuncia
+                // que a contagem esta errada. No marketplace o pedido ja foi aceito do outro lado.
+                // Aqui o cliente nao tem nada na mao: vender e depois cancelar e pior que dizer
+                // "acabou" agora. E era por aqui que uma unica chamada levava um produto a -4950
+                // (50 itens x 99).
+                //
+                // Quem recusa e o BANCO, nao uma conferencia antes: duas vendas ao mesmo tempo leriam
+                // o mesmo saldo e as duas passariam. Medido num Postgres 16 com duas sessoes -- o
+                // estoque de 1 unidade com duas vendas simultaneas termina em 0, nao em -1.
+                BigDecimal custoFicha;
+                try {
+                    custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd, true);
+                } catch (br.com.bora.service.InsumoService.SemInsumo e) {
+                    // O nome do INSUMO fica no log, para o lojista. O cliente le o nome do PRODUTO:
+                    // "Polpa de Acai Organico" e vocabulario de dentro da loja.
+                    log.warn("Loja {}: pedido do cardapio recusado por falta do insumo \"{}\" na ficha "
+                            + "de \"{}\" ({} un). Reponha o insumo ou tire o produto do cardapio.",
+                            lojaId, e.insumo, prod.nome, qtd);
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, esgotou(prod.nome));
+                }
                 item.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
                 // Fica gravado no item qual dos dois caminhos rodou. Quem cancelar o pedido devolve
                 // exatamente isso, sem depender da ficha que o lojista tiver no dia do cancelamento.
                 item.setConsumiuFicha(custoFicha != null);
-                // No BANCO, nao em Java: no pico, dois pedidos do mesmo item liam o mesmo estoque
-                // antes de qualquer um gravar e uma das baixas desaparecia.
-                if (custoFicha == null) produtos.baixarEstoque(prod.id, lojaId, qtd);
+                if (custoFicha == null && produtos.baixarEstoqueSeTiver(prod.id, lojaId, qtd) == 0) {
+                    log.warn("Loja {}: pedido do cardapio recusado por falta de estoque de \"{}\" "
+                            + "({} un pedidas).", lojaId, prod.nome, qtd);
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, esgotou(prod.nome));
+                }
                 BigDecimal sub = unit.multiply(BigDecimal.valueOf(qtd));
                 item.setSubtotal(sub);
                 itens.save(item);

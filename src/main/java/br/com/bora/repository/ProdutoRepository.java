@@ -36,6 +36,39 @@ public interface ProdutoRepository extends JpaRepository<Produto, Long> {
                       @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
                       @org.springframework.data.repository.query.Param("qtd") int qtd);
 
+    /**
+     * Baixa o estoque SO SE TIVER. Para o canal em que recusar e a resposta certa.
+     *
+     * <p><b>A diferenca em relacao ao {@link #baixarEstoque}:</b> aquele baixa sempre e o saldo vai a
+     * negativo sem limite. Isso esta certo no balcao — o operador esta com o produto na mao, e travar
+     * a venda com o cliente na frente e pior que o numero negativo, que pelo menos denuncia que a
+     * contagem esta errada. E esta certo no marketplace, onde o pedido ja foi aceito do outro lado.</p>
+     *
+     * <p>No <b>cardapio publico</b> esta errado: o cliente nao tem o produto na mao. Vender e depois
+     * cancelar e pior que dizer "acabou" na hora. Uma chamada do cardapio podia levar um produto a
+     * −4950 (50 itens x 99).</p>
+     *
+     * <h2>Por que o {@code estoque is null} devolve 1 e nao 0</h2>
+     * <p>Produto sem numero de estoque e produto que o lojista escolheu NAO controlar — e o caso de
+     * todos os 123 produtos da producao hoje (medido em 20/10/2026). Para esses, a venda tem que
+     * passar. A linha casa, o {@code set} e no-op (nulo menos qualquer coisa e nulo) e o retorno e 1.
+     * Assim 1 quer dizer "pode seguir" e 0 quer dizer uma coisa so: <b>controla estoque e nao tem o
+     * suficiente</b>.</p>
+     *
+     * <p>Quem garante contra duas vendas simultaneas e esta clausula, no banco — nao uma conferencia
+     * em Java antes. Duas chamadas ao mesmo tempo leriam o mesmo saldo e as duas passariam.</p>
+     *
+     * @return 1 quando pode seguir (baixou, ou o produto nao controla estoque); 0 quando falta
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("""
+            update Produto p set p.estoque = p.estoque - :qtd
+            where p.id = :id and p.lojaId = :lojaId
+              and (p.estoque is null or p.estoque >= :qtd)""")
+    int baixarEstoqueSeTiver(@org.springframework.data.repository.query.Param("id") Long id,
+                             @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
+                             @org.springframework.data.repository.query.Param("qtd") int qtd);
+
     /** Devolve o estoque no banco, pelo mesmo motivo da baixa. Usada pelo EstornoDaVendaService. */
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.data.jpa.repository.Query("""

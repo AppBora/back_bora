@@ -225,7 +225,16 @@ public class PedidoService {
 
             // Baixa de estoque do produto (so sem ficha), no BANCO. Era ler, subtrair e gravar: duas
             // vendas do mesmo item ao mesmo tempo liam o mesmo estoque e uma das baixas desaparecia.
-            if (custoFicha == null) produtos.baixarEstoque(prod.id, lojaId, qtd);
+            //
+            // AQUI A VENDA PASSA MESMO SEM SALDO, de proposito -- diferente do cardapio publico, que
+            // recusa. O operador esta com o produto na mao: travar a venda com o cliente na frente e
+            // pior que o saldo negativo, que pelo menos denuncia que a contagem esta errada. Mas nao
+            // pode passar CALADO, que era o que acontecia: o numero ia a negativo e ninguem ficava
+            // sabendo.
+            if (custoFicha == null) {
+                avisarSeVaiFicarNegativo(lojaId, prod, qtd);
+                produtos.baixarEstoque(prod.id, lojaId, qtd);
+            }
         }
 
         // resgate de cashback como desconto (RN fidelidade)
@@ -342,7 +351,12 @@ public class PedidoService {
                 BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
                 pi.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
                 pi.setConsumiuFicha(custoFicha != null);   // o cancelamento le isto para devolver certo
-                if (custoFicha == null) produtos.baixarEstoque(prod.id, lojaId, qtd);
+                if (custoFicha == null) {
+                    // Nunca recusa: o pedido ja foi aceito no iFood e o cliente vai receber a comida.
+                    // Mas o saldo negativo fica escrito.
+                    avisarSeVaiFicarNegativo(lojaId, prod, qtd);
+                    produtos.baixarEstoque(prod.id, lojaId, qtd);
+                }
             }
             itens.add(pi);
         }
@@ -557,6 +571,29 @@ public class PedidoService {
         integracoes.notificarStatus(salvo, status.name()); // sincroniza status com o marketplace (se conectado)
         notifCliente.notificarFase(salvo, status); // Operação Assistida: avisa o cliente no WhatsApp
         return salvo;
+    }
+
+    /**
+     * Escreve no log quando a venda vai levar o estoque a negativo.
+     *
+     * <p>Nos canais em que a venda NAO pode ser recusada -- balcao, porque o operador esta com o
+     * produto na mao, e marketplace, porque o pedido ja foi aceito do outro lado -- o saldo pode ir a
+     * negativo. Isso nem sempre e defeito: quase sempre quer dizer que a contagem esta
+     * desatualizada, e e informacao util. O defeito era ir a negativo <b>calado</b>.</p>
+     *
+     * <p>O saldo lido aqui e o de antes da baixa, e e so para o aviso -- a conta de verdade e do
+     * banco. Entre esta leitura e a baixa alguem pode vender, entao o numero do aviso pode estar um
+     * ou dois fora. Nao use este valor para decidir nada.</p>
+     *
+     * <p>Produto que nao controla estoque (saldo nulo) nao gera aviso: foi o lojista que escolheu nao
+     * controlar. Hoje e o caso de todos os 123 produtos da producao.</p>
+     */
+    private void avisarSeVaiFicarNegativo(Long lojaId, Produto prod, int qtd) {
+        if (prod.estoque == null || prod.estoque >= qtd) return;
+        AUDITORIA.warn("Loja {}: venda de {} un de \"{}\" com apenas {} em estoque -- o saldo vai "
+                        + "ficar negativo. A venda PASSOU de proposito (o produto esta na mao de quem "
+                        + "vendeu); confira a contagem em Estoque.",
+                lojaId, qtd, prod.nome, prod.estoque);
     }
 
     /**

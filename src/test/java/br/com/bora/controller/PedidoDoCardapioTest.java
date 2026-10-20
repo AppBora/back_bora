@@ -85,6 +85,15 @@ class PedidoDoCardapioTest {
         acai.nome = "Açaí 500ml";
         acai.preco = new BigDecimal("20.00");
         acai.ativo = true;
+        // acai.estoque fica NULO de proposito: produto que o lojista escolheu nao controlar, que e o
+        // caso de todos os 123 produtos da producao hoje (medido em 20/10/2026).
+        //
+        // Num banco de verdade, `baixarEstoqueSeTiver` devolve 1 para esse produto -- a linha casa e o
+        // `set` e no-op, porque nulo menos qualquer coisa e nulo. Provado contra Postgres em
+        // EstoqueNaoPerdeBaixaIT.produtoSemCONTROLEdeEstoqueDEIXAPASSAR. O mock devolve 0 por padrao,
+        // o que aqui significaria "acabou" e recusaria TODO pedido do cardapio. Entao o dublê tem que
+        // dizer a verdade do banco.
+        when(produtos.baixarEstoqueSeTiver(anyLong(), anyLong(), anyInt())).thenReturn(1);
         when(produtos.findById(10L)).thenReturn(Optional.of(acai));
         when(pedidos.save(any(Pedido.class))).thenAnswer(i -> {
             Pedido p = i.getArgument(0);
@@ -211,11 +220,65 @@ class PedidoDoCardapioTest {
                 "cupom que nao existe nao pode virar desconto");
     }
 
+    // =============================================================================================
+    // A RECUSA por falta de estoque (20/10/2026).
+    //
+    // Antes, nada conferia: a baixa so tinha `where estoque is not null` e o saldo ia a negativo sem
+    // limite. Uma unica chamada daqui podia levar um produto a -4950 (50 itens x 99).
+    //
+    // Este e o unico canal que recusa. No balcao o operador esta com o produto na mao e travar a venda
+    // com o cliente na frente e pior; no marketplace o pedido ja foi aceito no iFood. Aqui o cliente
+    // nao tem nada na mao: vender e depois cancelar e pior que dizer "acabou" agora.
+    // =============================================================================================
+
+    @Test
+    void semEstoqueDoPRODUTO_oPedidoEhRECUSADOcom409() {
+        when(produtos.baixarEstoqueSeTiver(anyLong(), anyLong(), anyInt())).thenReturn(0);
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean())).thenReturn(null);
+
+        var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo(), requisicao()));
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
+        assertTrue(erro.getReason().contains("Açaí 500ml"),
+                "o cliente tem que ler QUAL item acabou; a mensagem foi: " + erro.getReason());
+        assertTrue(erro.getReason().contains("carrinho"),
+                "e tem que dizer o que fazer, nao so que deu errado");
+    }
+
+    @Test
+    void semEstoqueDoINSUMO_tambemRecusa_masNAOmostraOnomeDoInsumoAoCliente() {
+        // "Polpa de Acai Organico" e vocabulario de dentro da loja. Quem esta comprando precisa saber
+        // qual PRODUTO acabou. O nome do insumo vai para o log do lojista.
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean()))
+                .thenThrow(new br.com.bora.service.InsumoService.SemInsumo("Polpa de Acai Organico"));
+
+        var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo(), requisicao()));
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
+        assertTrue(erro.getReason().contains("Açaí 500ml"));
+        assertFalse(erro.getReason().contains("Polpa"),
+                "o nome do insumo NAO pode chegar ao cliente; a mensagem foi: " + erro.getReason());
+    }
+
+    @Test
+    void produtoQueNAOcontrolaEstoqueContinuaVendendo() {
+        // A regra que nao pode quebrar: hoje NENHUM produto da producao controla estoque. Se produto
+        // sem controle passasse a ser tratado como esgotado, o cardapio inteiro pararia de vender.
+        assertNull(acai.estoque, "a fixture tem que continuar sem controle de estoque");
+
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo(), requisicao()));
+    }
+
     @Test
     void aFichaTecnicaEhConsumidaNaVenda() {
         controller.pedirOnline(1L, corpo(), requisicao());
 
-        verify(insumos, atLeastOnce()).consumirFicha(eq(1L), eq(10L), anyInt());
+        // Com exigirEstoque = TRUE: o cardapio publico e o unico canal que recusa quando falta, porque
+        // o cliente nao tem o produto na mao. Balcao e marketplace usam a sobrecarga de 3 argumentos.
+        // Ver CadaCanalDecideSozinhoSobreEstoqueTest.
+        verify(insumos, atLeastOnce()).consumirFicha(eq(1L), eq(10L), anyInt(), eq(true));
     }
 
     @Test
@@ -332,7 +395,7 @@ class PedidoDoCardapioTest {
         // Sem esta marca a devolucao no cancelamento tem que adivinhar pela ficha de hoje, e devolve
         // a coisa errada para quem mexeu na ficha depois do pedido. A gravacao nao tinha teste
         // nenhum: inverter a condicao, ou apagar a linha, passava despercebido.
-        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt())).thenReturn(null); // produto sem ficha
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean())).thenReturn(null); // produto sem ficha
         controller.pedirOnline(1L, corpo(), requisicao());
 
         var capturado = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
@@ -342,7 +405,7 @@ class PedidoDoCardapioTest {
 
         reset(itens);
         when(itens.save(any())).thenAnswer(i -> i.getArgument(0));
-        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt()))
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean()))
                 .thenReturn(new java.math.BigDecimal("4.00")); // agora com ficha
         controller.pedirOnline(1L, corpo(), requisicao());
 

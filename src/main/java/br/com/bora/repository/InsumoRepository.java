@@ -22,4 +22,26 @@ public interface InsumoRepository extends JpaRepository<Insumo, Long> {
     int mexerNoEstoque(@org.springframework.data.repository.query.Param("id") Long id,
                        @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
                        @org.springframework.data.repository.query.Param("delta") java.math.BigDecimal delta);
+
+    /**
+     * Consome o insumo SO SE TIVER. O irmao do {@code ProdutoRepository.baixarEstoqueSeTiver}, e pelo
+     * mesmo motivo: no cardapio publico recusar e a resposta certa.
+     *
+     * <p>A {@code qtd} vem POSITIVA aqui, diferente do {@link #mexerNoEstoque} — quem devolve estoque
+     * usa o outro metodo. Separar os dois e de proposito: uma devolucao nunca pode ser recusada por
+     * falta de saldo, e com um unico metodo com sinal essa regra ficaria escondida num {@code if}.</p>
+     *
+     * <p>Insumo sem numero de estoque devolve 1, igual ao produto: nao controlar estoque nao pode
+     * impedir venda. Entao 0 quer dizer uma coisa so: controla e nao tem o suficiente.</p>
+     *
+     * @return 1 quando pode seguir; 0 quando falta
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("""
+            update Insumo i set i.estoque = i.estoque - :qtd
+            where i.id = :id and i.lojaId = :lojaId
+              and (i.estoque is null or i.estoque >= :qtd)""")
+    int consumirSeTiver(@org.springframework.data.repository.query.Param("id") Long id,
+                        @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
+                        @org.springframework.data.repository.query.Param("qtd") java.math.BigDecimal qtd);
 }
