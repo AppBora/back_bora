@@ -177,6 +177,11 @@ public class PedidoService {
                     c != null && c.telefone != null && !c.telefone.isBlank() ? c.telefone : p.clienteTelefone,
                     c == null ? null : c.endereco,
                     c == null ? null : c.bairro,
+                    // O endereco DESTE pedido (V48). A tela ja prefere ele e cai no cadastro quando
+                    // vem nulo -- ver o javadoc do PedidoCard.
+                    p.enderecoEntrega,
+                    p.bairroEntrega,
+                    p.tipoEntrega,
                     p.entregador,
                     p.pagamentoPendente(),
                     itensPorPedido.getOrDefault(p.id, List.of())));

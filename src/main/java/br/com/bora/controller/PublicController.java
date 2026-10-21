@@ -382,7 +382,7 @@ public class PublicController {
         String telefone = str(body.get("telefone"));
         String endereco = str(body.get("endereco"));
         String obs = str(body.get("observacao"));
-        String forma = "PIX".equalsIgnoreCase(str(body.get("formaPagamento"))) ? "PIX" : "Na entrega";
+        String forma = formaDePagamento(str(body.get("formaPagamento")));
         String cpf = str(body.get("cpf"));
         boolean retirada = "RETIRADA".equalsIgnoreCase(str(body.get("tipoEntrega")));
         String bairro = str(body.get("bairro"));
@@ -445,7 +445,7 @@ public class PublicController {
             Pedido p = new Pedido();
             p.lojaId = lojaId;
             p.origem = "Cardápio Digital";
-            p.formaPagamento = "PIX".equals(forma) ? "PIX (aguardando)" : "Na entrega";
+            p.formaPagamento = "PIX".equals(forma) ? "PIX (aguardando)" : forma;
             if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("[^0-9]", "");
             StringBuilder ob = new StringBuilder("Cliente: ").append(nome.trim());
             if (telefone != null && !telefone.isBlank()) ob.append(" | Tel: ").append(telefone.trim());
@@ -853,6 +853,32 @@ public class PublicController {
             }
         }
         return Map.of("received", "true");
+    }
+
+    /**
+     * O que o cliente escolheu no cardapio: PIX, ou como ele vai pagar na entrega.
+     *
+     * <h2>Item 6.7 da varredura</h2>
+     * <p>Antes era {@code "PIX".equalsIgnoreCase(x) ? "PIX" : "Na entrega"}: tudo que nao fosse PIX
+     * virava o texto {@code "Na entrega"}. O acerto do entregador procura a palavra
+     * <b>DINHEIRO</b> na forma de pagamento para saber quanto de dinheiro vivo o motoboy traz de
+     * volta — e nunca achava. <b>"Recebeu dinheiro" era R$ 0,00 para todo pedido do cardapio</b>, e o
+     * acerto fechava com o valor errado em toda loja que vende pelo link.</p>
+     *
+     * <p>Agora o cardapio pergunta, e o texto gravado diz qual e. Pedido antigo continua com
+     * {@code "Na entrega"} e segue contando como nao-dinheiro, que e a unica leitura honesta para o
+     * passado: ninguem perguntou ao cliente.</p>
+     *
+     * <p>Texto desconhecido cai em {@code "Na entrega"} em vez de ser gravado cru: a coluna alimenta
+     * relatorio e acerto, e nao e lugar para texto livre vindo de fora.</p>
+     */
+    private static String formaDePagamento(String escolhido) {
+        if (escolhido == null) return "Na entrega";
+        String e = escolhido.trim();
+        if ("PIX".equalsIgnoreCase(e)) return "PIX";
+        if (e.equalsIgnoreCase("DINHEIRO")) return "Dinheiro na entrega";
+        if (e.equalsIgnoreCase("CARTAO") || e.equalsIgnoreCase("CARTÃO")) return "Cartao na entrega";
+        return "Na entrega";
     }
 
     private Loja lojaAtiva(Long lojaId) {

@@ -599,4 +599,72 @@ class PedidoDoCardapioTest {
         assertEquals(50L, guardado.get(0).insumoId(), "sem o insumo gravado, o cancelamento adivinha");
         assertEquals(0, guardado.get(0).quantidade().compareTo(new BigDecimal("0.030")));
     }
+
+    // ---------------------------------------------------------------- dinheiro ou cartao (item 6.7)
+
+    /** A forma de pagamento que ficou gravada no pedido. */
+    private String formaGravada(Object escolhido) {
+        var corpo = corpo();
+        corpo.put("formaPagamento", escolhido);
+        controller.pedirOnline(1L, corpo, requisicao());
+        var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.Pedido.class);
+        verify(pedidos, atLeastOnce()).save(c.capture());
+        return c.getValue().formaPagamento;
+    }
+
+    /**
+     * O cardápio grava COMO o cliente vai pagar na entrega.
+     *
+     * <h2>Item 6.7 da varredura</h2>
+     * <p>Antes, tudo que não fosse PIX virava o texto {@code "Na entrega"}. O acerto do entregador
+     * procura a palavra <b>DINHEIRO</b> na forma de pagamento para saber quanto de dinheiro vivo o
+     * motoboy traz de volta — e nunca achava. <b>"Recebeu dinheiro" era R$ 0,00 para todo pedido do
+     * cardápio</b>, e o acerto fechava com o valor errado em toda loja que vende pelo link.</p>
+     */
+    @Test
+    void DINHEIROnaEntregaFICAgravadoComoDINHEIRO() {
+        String forma = formaGravada("DINHEIRO");
+
+        assertTrue(forma.toUpperCase().contains("DINHEIRO"),
+                "o acerto do entregador procura a palavra DINHEIRO. Ficou: " + forma);
+    }
+
+    @Test
+    void CARTAOnaEntregaNAOcontaComoDINHEIRO() {
+        // O outro lado: contar cartao como dinheiro faria o motoboy ser cobrado por dinheiro que ele
+        // nao tem na mao.
+        String forma = formaGravada("CARTAO");
+
+        assertFalse(forma.toUpperCase().contains("DINHEIRO"), "ficou: " + forma);
+        assertTrue(forma.toUpperCase().contains("CARTAO"), "ficou: " + forma);
+    }
+
+    @Test
+    void oPIXcontinuaSENDOreconhecidoComoPIX() {
+        // O conserto nao pode mexer no reconhecimento do PIX, que e o que mais roda. A loja deste
+        // cenario nao tem PIX configurado, entao a prova de que ele foi reconhecido e a recusa certa
+        // -- se o novo `formaDePagamento` deixasse de ver "PIX", o pedido passaria como "Na entrega" e
+        // o cliente iria embora sem pagar. O caminho do PIX configurado esta em
+        // `pixOk_oPedidoNasceEsperandoPagamento_eGuardaACobranca`.
+        var corpo = corpo();
+        corpo.put("formaPagamento", "PIX");
+
+        var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo, requisicao()));
+
+        assertTrue(erro.getReason().contains("PIX"), "foi: " + erro.getReason());
+    }
+
+    @Test
+    void SEMescolhaCAIemNAentrega_comoANTES() {
+        // Pedido de cliente antigo, ou de uma tela que ainda nao pergunta: o comportamento de antes
+        // continua, e segue contando como nao-dinheiro. E a unica leitura honesta: ninguem perguntou.
+        assertEquals("Na entrega", formaGravada(null));
+    }
+
+    @Test
+    void textoDESCONHECIDOnaoEHgravadoCRU() {
+        // A coluna alimenta relatorio e acerto; nao e lugar para texto livre vindo de fora.
+        assertEquals("Na entrega", formaGravada("pago em bitcoin"));
+    }
 }

@@ -52,6 +52,7 @@ public class ClienteService {
         c.lojaId = ctx.lojaId();
         c.nome = dados.nome;
         c.telefone = FidelidadeService.normalizar(dados.telefone);
+        recusarTelefoneRepetido(c.telefone, null);
         c.endereco = dados.endereco;
         c.bairro = dados.bairro;
         c.referencia = dados.referencia;
@@ -62,6 +63,7 @@ public class ClienteService {
 
     public Cliente atualizar(Long id, Cliente dados) {
         Cliente c = buscar(id);
+        recusarTelefoneRepetido(FidelidadeService.normalizar(dados.telefone), id);
         c.nome = dados.nome;
         // Só dígitos, igual ao que o cardápio e os marketplaces gravam. Guardar "(15) 99999-0001" aqui
         // fazia o cliente cadastrado pelo lojista NÃO ser encontrado quando ele pedisse pelo cardápio:
@@ -112,6 +114,42 @@ public class ClienteService {
                         + "{} pedido(s) dele continuam no historico, agora sem vinculo",
                 ctx.atual().userId(), c.id, c.nome, c.lojaId, desamarrados);
         repo.delete(c);
+    }
+
+    /**
+     * Recusa cadastrar (ou renomear para) um telefone que ja e de outro cliente da loja.
+     *
+     * <h2>Item 6.10 da varredura</h2>
+     * <p>O cadastro nao procurava pelo telefone. Entao o balconista cadastrava "Maria" de novo no dia
+     * seguinte, e a loja ficava com dois cadastros da mesma pessoa — <b>e o cashback racha</b>: parte
+     * do saldo preso num, parte no outro, e o cliente reclamando de um saldo que a tela nao mostra.
+     * O mesmo telefone e a chave que o cardapio e os marketplaces usam para reencontrar a pessoa
+     * ({@code findFirstByLojaIdAndTelefone}), entao dois cadastros com o mesmo numero fazem o pedido
+     * cair sempre no primeiro que o banco devolver.</p>
+     *
+     * <h2>Por que RECUSAR e nao juntar os dois</h2>
+     * <p>Juntar automaticamente sobrescreveria o nome e o endereco de alguem com o que o operador
+     * acabou de digitar — e se o telefone foi digitado errado, o estrago cai no cadastro de outra
+     * pessoa, com o saldo dela. Recusar devolve a decisao a quem esta na frente do cliente, e a
+     * mensagem diz <b>o nome de quem ja tem aquele numero</b>, que e a informacao que falta para
+     * decidir.</p>
+     *
+     * <p>Telefone em branco nao e disputado: cliente de balcao que nao quis dar o numero continua
+     * entrando, e e assim que a maioria entra.</p>
+     *
+     * @param id o cliente que esta sendo EDITADO, para ele nao brigar com o proprio telefone;
+     *           {@code null} na criacao
+     */
+    private void recusarTelefoneRepetido(String telefone, Long id) {
+        if (telefone == null || telefone.isBlank()) return;
+        repo.findFirstByLojaIdAndTelefone(ctx.lojaId(), telefone)
+                .filter(outro -> !outro.id.equals(id))
+                .ifPresent(outro -> {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "O telefone " + telefone + " ja e do cliente \"" + outro.nome
+                                    + "\". Edite o cadastro dele em vez de criar outro, senao o "
+                                    + "cashback fica dividido entre os dois.");
+                });
     }
 
     private Cliente buscar(Long id) {

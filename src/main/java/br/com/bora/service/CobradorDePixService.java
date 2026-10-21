@@ -141,6 +141,23 @@ public class CobradorDePixService {
         return n;
     }
 
+    /**
+     * O pedido ja passou do estado em que esperar PIX faz sentido?
+     *
+     * <p>{@code RECEBIDO} e {@code CONFIRMADO} sao os dois estados em que o pedido esta apenas na
+     * fila: ninguem mexeu na comida, e cancelar devolve estoque e cashback sem perda. Dali para
+     * frente a cozinha comecou, e cancelar deixaria de ser conserto para virar recado errado ao
+     * cliente.</p>
+     */
+    private static boolean jaSaiuDaEspera(StatusPedido status) {
+        return status != null && status != StatusPedido.RECEBIDO && status != StatusPedido.CONFIRMADO
+                && status != StatusPedido.CANCELADO;
+    }
+
+    /** O recado que fica na observacao do pedido, e tambem a chave que evita avisar duas vezes. */
+    static final String AVISO_SEM_PAGAMENTO =
+            "ATENCAO: o PIX deste pedido NUNCA foi pago. Confira o recebimento com o cliente.";
+
     /** Parte que mexe no banco, curta e transacional. Devolve o que foi cancelado de fato. */
     @Transactional
     public List<Pedido> cancelarVencidos(OffsetDateTime corte, Set<Long> naoCancelar) {
@@ -152,6 +169,35 @@ public class CobradorDePixService {
             if (p.pagoEm != null) continue;
             if (naoCancelar.contains(p.id)) continue;
             if (p.status == StatusPedido.CANCELADO) { p.aguardandoPagamento = false; continue; }
+
+            // O pedido JA SAIU do balcao de espera: a cozinha comecou, ou ele foi entregue.
+            //
+            // Item 6.1 da varredura: este laco olhava `pagoEm` e `CANCELADO`, e nada mais. Um pedido
+            // de PIX que o lojista preparou e entregou mesmo sem a confirmacao virava CANCELADO 30
+            // minutos depois do nascimento -- e o cliente recebia "pedido cancelado" DEPOIS de ter
+            // comido, no WhatsApp e na tela de acompanhar.
+            //
+            // Cancelar aqui e errado por dois motivos: a comida saiu (nao ha o que desfazer) e o
+            // cancelamento manda recado ao cliente. O que falta nao e cancelar, e AVISAR o lojista de
+            // que saiu comida sem pagamento -- isso e dinheiro, e some sozinho se ninguem olhar.
+            //
+            // A marca `aguardandoPagamento` fica como esta, de proposito: ela e o que mantem este
+            // pedido FORA do faturamento ("PIX que ninguem pagou nao e venda"). Limpar faria o
+            // dinheiro aparecer no caixa sem ter entrado.
+            if (jaSaiuDaEspera(p.status)) {
+                if (!p.observacao.contains(AVISO_SEM_PAGAMENTO)) {
+                    p.observacao = (p.observacao == null || p.observacao.isBlank() ? ""
+                            : p.observacao + " | ") + AVISO_SEM_PAGAMENTO;
+                    pedidos.save(p);
+                    log.warn("AUDITORIA dinheiro: pedido {} da loja {} esta em {} (preparado ou "
+                                    + "entregue) e o PIX NUNCA foi pago, {} minutos depois de criado. "
+                                    + "NAO foi cancelado, porque a comida saiu. Confira o recebimento "
+                                    + "com o cliente -- esta venda nao entra no faturamento enquanto o "
+                                    + "pagamento nao for confirmado.",
+                            p.id, p.lojaId, p.status, minutosParaExpirar);
+                }
+                continue;
+            }
             StatusPedido anterior = p.status;
             p.status = StatusPedido.CANCELADO;
             p.canceladoEm = OffsetDateTime.now();
