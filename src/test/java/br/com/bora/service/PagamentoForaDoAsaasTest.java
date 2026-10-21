@@ -262,4 +262,87 @@ class PagamentoForaDoAsaasTest {
         assertFalse(loja.getAtivo(), "loja suspensa pela plataforma continua suspensa");
         assertEquals(StatusAssinatura.ATIVA, assinatura.getStatus(), "mas a assinatura esta paga");
     }
+
+    // ------------------------------------------------- observacao longa (item 4.4 da varredura)
+
+    /**
+     * Grava e devolve a descricao que ficou no registro, com a observacao pedida.
+     *
+     * <p>O {@code findFirstByAsaasPaymentId} precisa devolver o registro que o metodo acabou de
+     * gravar: e nele que a observacao e acrescentada.</p>
+     */
+    private String descricaoGravadaCom(String observacao) {
+        PagamentoAssinatura gravado = new PagamentoAssinatura();
+        gravado.descricao = loja.getNome();
+        when(pagamentos.findFirstByAsaasPaymentId(anyString())).thenReturn(Optional.of(gravado));
+
+        service.registrarPagamentoRecebidoForaDoAsaas(
+                LOJA, new BigDecimal("199.00"), hojeNoBrasil(), observacao);
+
+        return gravado.descricao;
+    }
+
+    /**
+     * Observacao longa NAO derruba o registro do pagamento.
+     *
+     * <h2>O item 4.4, e por que a consequencia era pior do que a varredura dizia</h2>
+     * <p>A observacao vinha crua do corpo da requisicao e era concatenada ao nome da loja numa coluna
+     * varchar(200). O metodo e {@code @Transactional}: o Postgres recusando o UPDATE nao cortava o
+     * texto, <b>desfazia o registro inteiro do pagamento</b>. O dono digitaria uma observacao um pouco
+     * mais longa, veria um erro, e o dinheiro que ele acabou de receber nao entraria no faturamento da
+     * plataforma -- e esta e justamente a funcao que ele usa para dar baixa no que recebeu fora do
+     * Asaas.</p>
+     */
+    @Test
+    void observacaoLONGAnaoDERRUBAoREGISTRO() {
+        String nota = "PIX recebido na conta pessoal, comprovante no WhatsApp da gerente, "
+                + "conferido com o extrato do dia ".repeat(5);
+
+        String descricao = assertDoesNotThrow(() -> descricaoGravadaCom(nota));
+
+        assertTrue(descricao.length() <= 200,
+                "a descricao tem que caber na coluna; ficou com " + descricao.length());
+    }
+
+    @Test
+    void quemPERDEespacoEHaOBSERVACAO_naoONOMEdaLOJA() {
+        // O nome da loja e o que identifica esse dinheiro no faturamento da plataforma. A observacao e
+        // contexto extra, e fica com o espaco que sobrar.
+        String descricao = descricaoGravadaCom("x".repeat(400));
+
+        assertTrue(descricao.startsWith("Zirá Açaíteria · "),
+                "o nome da loja tem que ficar inteiro e na frente. Ficou: " + descricao);
+    }
+
+    @Test
+    void observacaoCURTAcontinuaINTEIRAnaDESCRICAO() {
+        // O conserto nao pode cortar o que cabe.
+        assertEquals("Zirá Açaíteria · PIX direto na conta",
+                descricaoGravadaCom("PIX direto na conta"));
+    }
+
+    @Test
+    void nomeDELOJAqueOCUPAaCOLUNAinteiraNAOderrubaNADA() {
+        // loja.nome e varchar(160) e a descricao e varchar(200): nome longo deixa menos de 40 para a
+        // observacao, e pode nao sobrar nada. Estourar aqui perderia o pagamento.
+        loja.setNome("L".repeat(199));
+        PagamentoAssinatura gravado = new PagamentoAssinatura();
+        gravado.descricao = loja.getNome();
+        when(pagamentos.findFirstByAsaasPaymentId(anyString())).thenReturn(Optional.of(gravado));
+
+        assertDoesNotThrow(() -> service.registrarPagamentoRecebidoForaDoAsaas(
+                LOJA, new BigDecimal("199.00"), hojeNoBrasil(), "PIX na conta"));
+
+        assertTrue(gravado.descricao.length() <= 200, "ficou com " + gravado.descricao.length());
+    }
+
+    @Test
+    void SEMobservacaoAdescricaoFICAsoComONOME() {
+        service.registrarPagamentoRecebidoForaDoAsaas(
+                LOJA, new BigDecimal("199.00"), hojeNoBrasil(), null);
+
+        ArgumentCaptor<PagamentoAssinatura> c = ArgumentCaptor.forClass(PagamentoAssinatura.class);
+        verify(pagamentos).save(c.capture());
+        assertEquals("Zirá Açaíteria", c.getValue().descricao);
+    }
 }

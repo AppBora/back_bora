@@ -16,10 +16,13 @@ public class ClienteService {
             org.slf4j.LoggerFactory.getLogger("AUDITORIA");
 
     private final ClienteRepository repo;
+    private final br.com.bora.repository.PedidoRepository pedidos;
     private final AuthContext ctx;
 
-    public ClienteService(ClienteRepository repo, AuthContext ctx) {
+    public ClienteService(ClienteRepository repo, br.com.bora.repository.PedidoRepository pedidos,
+                          AuthContext ctx) {
         this.repo = repo;
+        this.pedidos = pedidos;
         this.ctx = ctx;
     }
 
@@ -82,11 +85,32 @@ public class ClienteService {
      * historico fica apontando para o nada. Trocar por arquivamento e tarefa separada; por ora o acesso
      * a acao fica restrito.</p>
      */
+    /**
+     * Apaga o cliente e desamarra os pedidos dele, em vez de deixar ponteiro morto.
+     *
+     * <h2>Item 4.7 da varredura: o pedido ficava orfao</h2>
+     * <p>{@code pedido.cliente_id} nao tem chave estrangeira, entao o DELETE passava e os pedidos
+     * continuavam apontando para uma linha que nao existe mais.</p>
+     *
+     * <p><b>O historico fica</b>, e tem que ficar: a venda aconteceu, entrou no faturamento, e o
+     * pedido guarda telefone e endereco proprios (ver V48). O que sai e so o ponteiro.</p>
+     *
+     * <p>Medido em 21/10/2026, o ponteiro morto deixou de ser inofensivo no mesmo dia: com o saldo de
+     * cashback virando SQL (item 1.5), {@code FidelidadeService.consumir} passou a estourar 409 quando
+     * a consulta nao mexe em linha nenhuma -- e cliente apagado e exatamente esse caso. Um PIX pago
+     * DEPOIS do cancelamento, num pedido que usou cashback, de um cliente apagado, devolvia 409 ao
+     * webhook do Asaas -- que reenvia enquanto nao recebe 200, entao o pagamento nunca seria
+     * registrado. O servico tambem foi consertado para distinguir os dois casos; esta limpeza e a
+     * outra ponta, e as duas sao necessarias: o servico cobre o pedido que JA esta orfao na base.</p>
+     */
+    @org.springframework.transaction.annotation.Transactional
     public void excluir(Long id) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Cliente c = buscar(id);
-        AUDITORIA.warn("AUDITORIA cliente: usuario {} EXCLUIU o cliente {} ({}) da loja {}",
-                ctx.atual().userId(), c.id, c.nome, c.lojaId);
+        int desamarrados = pedidos.desamarrarCliente(c.id, c.lojaId);
+        AUDITORIA.warn("AUDITORIA cliente: usuario {} EXCLUIU o cliente {} ({}) da loja {}; "
+                        + "{} pedido(s) dele continuam no historico, agora sem vinculo",
+                ctx.atual().userId(), c.id, c.nome, c.lojaId, desamarrados);
         repo.delete(c);
     }
 

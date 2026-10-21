@@ -151,9 +151,84 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     long countByLojaIdAndCriadoEmAfter(Long lojaId, OffsetDateTime inicio); // RN09 — limite de pedidos/mês
     Optional<Pedido> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno); // idempotência webhook
 
-    /** Último pedido de cada loja, para o painel de clientes da plataforma. */
-    @Query("select p.lojaId, max(p.criadoEm) from Pedido p group by p.lojaId")
+    /**
+     * Último pedido de cada loja, para o painel de clientes da plataforma.
+     *
+     * <h2>Item 4.7 da varredura: era um group by da tabela INTEIRA</h2>
+     * <p>{@code select p.lojaId, max(p.criadoEm) from Pedido p group by p.lojaId}, sem filtro nenhum:
+     * para montar uma coluna da tela da plataforma, o banco lia <b>todos os pedidos de todas as
+     * lojas</b>. O Postgres não tem "loose index scan", então um índice em {@code (loja_id,
+     * criado_em)} não transforma isso em busca — ele só troca a varredura da tabela pela varredura do
+     * índice. Continua custando o tamanho da base, e essa tela é justamente a que o dono abre quando a
+     * base cresceu.</p>
+     *
+     * <p>Agora é uma subconsulta por loja. São poucas lojas (unidades, não milhares) e cada
+     * {@code max} vira uma busca no índice {@code idx_pedido_loja}, que é
+     * {@code (loja_id, criado_em DESC)} e já existia — ou seja, o que faltava era a consulta, não o
+     * índice. <b>Eu ia criar um índice novo aqui</b> e medir os índices da produção mostrou que ele
+     * seria duplicado.</p>
+     *
+     * <p>Sai de {@code Loja}, não de {@code Pedido}, de propósito: assim a tela recebe uma linha por
+     * loja, inclusive a que nunca vendeu (com {@code null}). O {@code group by} antigo simplesmente
+     * não devolvia essas lojas — e o chamador já tratava a ausência como "sem pedido", então o
+     * resultado visível é o mesmo.</p>
+     */
+    @Query("select l.id, (select max(p.criadoEm) from Pedido p where p.lojaId = l.id) "
+         + "from br.com.bora.entity.Loja l")
     java.util.List<Object[]> ultimoPedidoPorLoja();
+
+    /**
+     * O balancete da rede inteira numa consulta: receita, pedidos válidos e cancelados por loja.
+     *
+     * <h2>Item 4.7 da varredura: eram 3 consultas POR LOJA</h2>
+     * <p>O {@code RedeService.balancete} chamava {@code somaReceita}, {@code contaPedidosValidos} e
+     * {@code contaPedidosCancelados} dentro de um laço pelas lojas. Numa rede de 30 lojas são 90
+     * consultas para desenhar uma tabela, cada uma varrendo a janela de datas da sua loja.</p>
+     *
+     * <p><b>As regras são as MESMAS das três, linha por linha</b>, e isso importa mais que a
+     * performance: válido é {@code status <> CANCELADO} e PIX não pendente ({@code aguardandoPagamento}
+     * nulo ou falso — "PIX que ninguém pagou não é venda"); cancelado é só o status. Se esta consulta
+     * divergisse delas, os números do painel do dono mudariam — e número que muda sozinho é pior que
+     * consulta lenta. O {@code BalanceteEmUmaConsultaTest} compara as duas formas sobre o mesmo
+     * cenário.</p>
+     *
+     * <p>Loja sem pedido na janela não aparece no resultado. O chamador trata como zero, igual a
+     * antes.</p>
+     */
+    @Query("select p.lojaId, "
+         + "coalesce(sum(case when p.status <> br.com.bora.entity.StatusPedido.CANCELADO "
+         + "                   and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) "
+         + "                  then p.valorTotal else 0 end), 0), "
+         + "coalesce(sum(case when p.status <> br.com.bora.entity.StatusPedido.CANCELADO "
+         + "                   and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) "
+         + "                  then 1 else 0 end), 0), "
+         + "coalesce(sum(case when p.status = br.com.bora.entity.StatusPedido.CANCELADO "
+         + "                  then 1 else 0 end), 0) "
+         + "from Pedido p where p.lojaId in :lojas "
+         + "and p.criadoEm >= :inicio and p.criadoEm < :fim "
+         + "group by p.lojaId")
+    java.util.List<Object[]> balancetePorLoja(@Param("lojas") java.util.Collection<Long> lojas,
+                                              @Param("inicio") OffsetDateTime inicio,
+                                              @Param("fim") OffsetDateTime fim);
+
+    /**
+     * Desamarra os pedidos de um cliente que está sendo apagado.
+     *
+     * <h2>Item 4.7 da varredura: o pedido órfão</h2>
+     * <p>{@code pedido.cliente_id} não tem chave estrangeira, então apagar o cliente deixava os
+     * pedidos dele apontando para uma linha que não existe. O histórico tem que ficar (a venda
+     * aconteceu, e o pedido guarda telefone e endereço próprios), mas o ponteiro morto não.</p>
+     *
+     * <p>Medido em 21/10/2026, o ponteiro morto não era inofensivo: com o saldo de cashback virando
+     * SQL no item 1.5, {@code consumir} passou a estourar 409 quando a consulta não mexe em linha
+     * nenhuma — e cliente apagado é exatamente isso. Um PIX pago depois do cancelamento, num pedido
+     * que usou cashback, de um cliente apagado, devolvia 409 ao webhook do Asaas, que reenvia para
+     * sempre. Isso foi consertado no serviço <b>e</b> aqui: as duas pontas.</p>
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Pedido p set p.clienteId = null "
+         + "where p.clienteId = :clienteId and p.lojaId = :lojaId")
+    int desamarrarCliente(@Param("clienteId") Long clienteId, @Param("lojaId") Long lojaId);
 
     /** Grava que o marketplace aceitou o aceite automatico. So a coluna da marca, nada mais. */
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)

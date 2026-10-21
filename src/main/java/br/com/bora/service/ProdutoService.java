@@ -13,10 +13,20 @@ import java.util.List;
 public class ProdutoService {
 
     private final ProdutoRepository repo;
+    private final br.com.bora.repository.ProdutoInsumoRepository fichas;
+    private final br.com.bora.repository.ComplementoGrupoRepository grupos;
+    private final br.com.bora.repository.ComplementoItemRepository opcoes;
     private final AuthContext ctx;
 
-    public ProdutoService(ProdutoRepository repo, AuthContext ctx) {
+    public ProdutoService(ProdutoRepository repo,
+                          br.com.bora.repository.ProdutoInsumoRepository fichas,
+                          br.com.bora.repository.ComplementoGrupoRepository grupos,
+                          br.com.bora.repository.ComplementoItemRepository opcoes,
+                          AuthContext ctx) {
         this.repo = repo;
+        this.fichas = fichas;
+        this.grupos = grupos;
+        this.opcoes = opcoes;
         this.ctx = ctx;
     }
 
@@ -156,9 +166,48 @@ public class ProdutoService {
         return buscar(id);
     }
 
+    /**
+     * Apaga o produto e o que pertence a ele: a ficha tecnica e os complementos.
+     *
+     * <h2>O defeito que isto fecha (item 4.3, medido em 21/10/2026)</h2>
+     * <p>Era {@code repo.delete(...)} seco. A {@code complemento_grupo} tem chave estrangeira para
+     * {@code produto} <b>sem ON DELETE</b> (conferido na producao: e a unica FK que aponta para
+     * produto, com {@code confdeltype = 'a'}), entao o banco recusava o DELETE e o lojista levava um
+     * <b>erro 500</b> — justamente nos produtos que tem adicional cadastrado, que numa acaiteria sao
+     * os que mais vendem.</p>
+     *
+     * <p>E a {@code produto_insumo} e o contrario: <b>nao tem</b> chave estrangeira. O DELETE passava
+     * e deixava as linhas da ficha apontando para um produto que nao existe mais — a mesma ficha
+     * fantasma do item 2.5, pelo outro lado. Ninguem le essas linhas depois (o id vem de uma
+     * sequencia e nao se repete), mas elas ficam na base para sempre e aparecem em qualquer contagem.</p>
+     *
+     * <h2>Por que apagar junto, e nao recusar</h2>
+     * <p>Ficha e complemento <b>pertencem</b> ao produto: nao fazem sentido sem ele, e a tela de
+     * complementos ja apaga e recria o conjunto inteiro a cada gravacao. Recusar obrigaria o lojista a
+     * limpar as duas coisas a mao antes de conseguir apagar, sem ganhar nada.</p>
+     *
+     * <p><b>O historico nao e tocado, e isso foi medido:</b> {@code pedido_item} nao tem chave
+     * estrangeira para produto, e o relatorio por produto agrupa pela {@code descricao} gravada no
+     * item, nao pelo nome do cadastro ({@code RelatorioService}). Pedido antigo de um produto apagado
+     * continua aparecendo no relatorio com o nome que tinha no dia da venda.</p>
+     */
+    @org.springframework.transaction.annotation.Transactional
     public void excluir(Long id) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
-        repo.delete(buscar(id));
+        Produto alvo = buscar(id);
+        Long loja = ctx.lojaId();
+
+        // Os complementos primeiro, e as opcoes antes dos grupos: a FK da opcao para o grupo e
+        // ON DELETE CASCADE, mas apagar por aqui mantem a ordem explicita em vez de depender dela.
+        List<Long> gruposDoProduto = grupos.findByLojaIdAndProdutoIdOrderById(loja, id)
+                .stream().map(g -> g.id).toList();
+        if (!gruposDoProduto.isEmpty()) opcoes.deleteByLojaIdAndGrupoIdIn(loja, gruposDoProduto);
+        grupos.deleteByLojaIdAndProdutoId(loja, id);
+
+        // A ficha tecnica, que nao tem FK e por isso ficava orfa em silencio.
+        fichas.deleteByLojaIdAndProdutoId(loja, id);
+
+        repo.delete(alvo);
     }
 
     private void validarNome(String nome) {

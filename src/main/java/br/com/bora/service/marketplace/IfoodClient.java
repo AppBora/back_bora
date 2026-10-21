@@ -274,7 +274,13 @@ public class IfoodClient implements MarketplaceClient {
                     .body(form).retrieve().body(Map.class);
         } catch (Exception e) {
             i.status = "ERRO";
-            i.ultimoErro = "Falha ao renovar o token: " + e.getMessage();
+            // O unico lugar que gravava a mensagem CRUA (item 4.5). E grava dentro do catch: se o
+            // UPDATE estourasse por tamanho, a falha nunca seria registrada e a tela mostraria a
+            // integracao como se nada tivesse acontecido.
+            i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(
+                    "Falha ao renovar o token: " + e.getMessage(),
+                    br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                    "integracao_canal.ultimo_erro da loja " + i.lojaId);
             repo.save(i);
             throw falha("Não foi possível renovar o acesso ao iFood", e, i);
         }
@@ -311,7 +317,9 @@ public class IfoodClient implements MarketplaceClient {
             return eventos == null ? List.of() : eventos;
         } catch (Exception e) {
             i.ultimoPollingEm = OffsetDateTime.now();
-            i.ultimoErro = resumo(e);
+            i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(resumo(e),
+                    br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                    "integracao_canal.ultimo_erro da loja " + i.lojaId);
             repo.save(i);
             log.warn("iFood: polling falhou para a loja {}: {}", i.lojaId, e.getMessage());
             return List.of();
@@ -483,7 +491,12 @@ public class IfoodClient implements MarketplaceClient {
     private ResponseStatusException falha(String msg, Exception causa, IntegracaoCanal i) {
         if (i != null) {
             i.status = "ERRO";
-            i.ultimoErro = msg + (causa == null ? "" : ": " + resumo(causa));
+            // Hoje isto cabe por sorte: `resumo` corta em 400 e as mensagens sao curtas. Passa pelo
+            // cortador para parar de depender disso.
+            i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(
+                    msg + (causa == null ? "" : ": " + resumo(causa)),
+                    br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                    "integracao_canal.ultimo_erro da loja " + i.lojaId);
             repo.save(i);
         }
         return new ResponseStatusException(HttpStatus.BAD_GATEWAY, msg);

@@ -28,7 +28,33 @@ package br.com.bora.entity;
  */
 public final class LarguraDeColuna {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LarguraDeColuna.class);
+
     private LarguraDeColuna() {
+    }
+
+    /**
+     * Corta o texto para caber na coluna, avisando no log quando corta.
+     *
+     * <p>Mesma regra do {@code pedido.endereco_entrega}, pelo mesmo motivo: o Postgres <b>recusa</b> o
+     * INSERT quando o texto nao cabe, e nessa hora quem se perde e a gravacao INTEIRA, nao o campo.
+     * Perder o fim de um texto e ruim; perder o registro de um pagamento ou o registro de uma falha e
+     * pior.</p>
+     *
+     * <p>E avisa sempre: corte silencioso e informacao que desaparece sem deixar rastro. O
+     * {@code onde} identifica o lugar para quem ler o log — a coluna e, quando faz diferenca, a loja
+     * ou o id.</p>
+     *
+     * @return o texto cortado, ou o proprio texto quando cabe; {@code null} para nulo e vazio
+     */
+    public static String encurtar(String valor, int max, String onde) {
+        if (valor == null) return null;
+        String limpo = valor.trim();
+        if (limpo.isEmpty()) return null;
+        if (limpo.length() <= max) return limpo;
+        log.warn("{}: o texto tinha {} caracteres e foi CORTADO em {}. A gravacao aconteceu. "
+                + "Texto completo: {}", onde, limpo.length(), max, limpo);
+        return limpo.substring(0, max);
     }
 
     // ---- pedido
@@ -56,4 +82,30 @@ public final class LarguraDeColuna {
     public static final int CLIENTE_TELEFONE = 40;
     /** {@code cliente.id_externo}. */
     public static final int CLIENTE_ID_EXTERNO = 160;
+
+    // ---- cobranca da plataforma
+    /**
+     * {@code pagamento_assinatura.descricao} — nasce com o nome da loja e recebe a observacao do
+     * registro manual concatenada.
+     *
+     * <p>Item 4.4 da varredura: a observacao vinha crua do corpo da requisicao, e o nome da loja
+     * sozinho pode ocupar 160 dos 200 ({@code loja.nome} e varchar(160)). O metodo e
+     * {@code @Transactional}: a observacao longa nao cortava o texto, <b>derrubava o registro inteiro
+     * do pagamento</b> — e e a funcao que o dono usa para dar baixa em dinheiro recebido fora do
+     * Asaas.</p>
+     */
+    public static final int PAGAMENTO_DESCRICAO = 200;
+
+    // ---- marketplaces
+    /**
+     * {@code integracao_canal.ultimo_erro} — a mensagem de falha que a tela de Integracoes mostra.
+     *
+     * <p>Item 4.5 da varredura. Medido em 21/10/2026, dos cinco lugares que gravam esta coluna so
+     * <b>um</b> estava de fato sem limite ({@code IfoodClient}, na renovacao do token, com o
+     * {@code e.getMessage()} cru); os outros passavam por um corte em 400 ou por texto fixo. Mas
+     * "seguro por sorte" nao e seguro: a gravacao acontece <b>dentro do tratamento de erro</b>, entao
+     * se ela estoura a falha nunca e registrada e a tela mostra a integracao como se nada tivesse
+     * acontecido — o pior lugar possivel para um estouro.</p>
+     */
+    public static final int INTEGRACAO_ULTIMO_ERRO = 500;
 }

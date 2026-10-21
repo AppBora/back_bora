@@ -234,7 +234,9 @@ public class OpenDeliveryClient implements MarketplaceClient {
 
     private ResponseStatusException falha(IntegracaoCanal i, String mensagem) {
         i.status = "ERRO";
-        i.ultimoErro = mensagem;
+        i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(mensagem,
+                br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                "integracao_canal.ultimo_erro da loja " + i.lojaId);
         repo.save(i);
         return new ResponseStatusException(HttpStatus.BAD_GATEWAY, mensagem);
     }
@@ -260,7 +262,11 @@ public class OpenDeliveryClient implements MarketplaceClient {
             return eventos == null ? List.of() : eventos;
         } catch (Exception e) {
             i.ultimoPollingEm = OffsetDateTime.now();
-            if (!(e instanceof ResponseStatusException)) i.ultimoErro = resumo(e);
+            if (!(e instanceof ResponseStatusException)) {
+                i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(resumo(e),
+                        br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                        "integracao_canal.ultimo_erro da loja " + i.lojaId);
+            }
             repo.save(i);
             log.warn("Open Delivery: polling falhou para a loja {}: {}", i.lojaId, e.getMessage());
             return List.of();

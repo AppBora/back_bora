@@ -127,10 +127,22 @@ public class RedeService {
         BigDecimal fatTotal = BigDecimal.ZERO;
         long pedTotal = 0, cancTotal = 0;
 
-        for (Loja l : lojasDoBalancete()) {
-            BigDecimal fat = pedidos.somaReceita(l.getId(), ini, fimExc);
-            long ped = pedidos.contaPedidosValidos(l.getId(), ini, fimExc);
-            long canc = pedidos.contaPedidosCancelados(l.getId(), ini, fimExc);
+        // UMA consulta para a rede inteira, nao tres POR LOJA (item 4.7 da varredura). Numa rede de
+        // 30 lojas eram 90 consultas para desenhar uma tabela.
+        List<Loja> doBalancete = lojasDoBalancete();
+        Map<Long, Object[]> numeros = new java.util.HashMap<>();
+        if (!doBalancete.isEmpty()) {
+            pedidos.balancetePorLoja(doBalancete.stream().map(Loja::getId).toList(), ini, fimExc)
+                    .forEach(r -> numeros.put((Long) r[0], r));
+        }
+
+        for (Loja l : doBalancete) {
+            // Loja sem pedido na janela nao volta da consulta, e isso e zero -- igual a antes, quando
+            // as tres consultas dela devolviam zero.
+            Object[] r = numeros.get(l.getId());
+            BigDecimal fat = r == null ? BigDecimal.ZERO : (BigDecimal) r[1];
+            long ped = r == null ? 0L : ((Number) r[2]).longValue();
+            long canc = r == null ? 0L : ((Number) r[3]).longValue();
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("lojaId", l.getId());
             m.put("loja", l.getNome());

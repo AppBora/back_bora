@@ -473,7 +473,7 @@ public class AssinaturaService {
                 valor, dia.atStartOfDay(ZONE).toOffsetDateTime());
         if (observacao != null && !observacao.isBlank()) {
             pagamentos.findFirstByAsaasPaymentId(idDoRegistro).ifPresent(p -> {
-                p.descricao = (p.descricao == null ? "" : p.descricao + " · ") + observacao.trim();
+                p.descricao = descricaoComObservacao(p.descricao, observacao, lojaId);
                 pagamentos.save(p);
             });
         }
@@ -540,6 +540,39 @@ public class AssinaturaService {
         p.pagoEm = pagoEm != null ? pagoEm : OffsetDateTime.now();
         p.descricao = lojas.findById(a.getLojaId()).map(Loja::getNome).orElse(null);
         pagamentos.save(p);
+    }
+
+    /**
+     * O nome da loja mais a observação, dentro do que a coluna aceita.
+     *
+     * <h2>Item 4.4 da varredura, e a consequência era pior do que ela dizia</h2>
+     * <p>A observação vinha crua do corpo da requisição e era concatenada sem olhar tamanho, numa
+     * coluna de {@value br.com.bora.entity.LarguraDeColuna#PAGAMENTO_DESCRICAO}. Como o método é
+     * {@code @Transactional}, o Postgres recusando o UPDATE não cortava o texto: <b>desfazia o
+     * registro inteiro do pagamento</b>. O dono digitaria uma observação um pouco mais longa, veria
+     * um erro, e o pagamento que ele acabou de receber não entraria no faturamento da plataforma.</p>
+     *
+     * <h2>Quem perde espaço é a observação, não o nome</h2>
+     * <p>O nome da loja é o que identifica esse dinheiro no faturamento — e {@code loja.nome} é
+     * varchar(160), então sozinho ele já pode ocupar 160 dos 200. A observação é contexto extra, e
+     * fica com o espaço que sobrar. Sem espaço nenhum, o nome fica sozinho e o log guarda a
+     * observação inteira: melhor um registro certo com nota perdida no log que nota completa e
+     * pagamento nenhum.</p>
+     */
+    private String descricaoComObservacao(String base, String observacao, Long lojaId) {
+        String nome = base == null ? "" : base;
+        String nota = observacao.trim();
+        String separador = nome.isEmpty() ? "" : " · ";
+        int sobra = br.com.bora.entity.LarguraDeColuna.PAGAMENTO_DESCRICAO - nome.length() - separador.length();
+        if (sobra <= 0) {
+            AUDITORIA.warn("AUDITORIA cobranca: a loja {} tem nome longo demais ({} caracteres) e a "
+                            + "observacao do pagamento manual nao cabe na descricao. O pagamento foi "
+                            + "registrado SEM a observacao. Ela era: {}",
+                    lojaId, nome.length(), nota);
+            return nome;
+        }
+        return nome + separador
+                + br.com.bora.entity.LarguraDeColuna.encurtar(nota, sobra, "pagamento_assinatura.descricao da loja " + lojaId);
     }
 
     /**

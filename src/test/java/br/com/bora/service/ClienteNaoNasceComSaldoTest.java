@@ -43,7 +43,7 @@ class ClienteNaoNasceComSaldoTest {
         when(ctx.lojaId()).thenReturn(18L);
         when(ctx.atual()).thenReturn(new BoraPrincipal(7L, 18L, "OPERADOR", "balcao@zira.com"));
         when(repo.save(any(Cliente.class))).thenAnswer(i -> i.getArgument(0));
-        service = new ClienteService(repo, ctx);
+        service = new ClienteService(repo, mock(br.com.bora.repository.PedidoRepository.class), ctx);
     }
 
     /** O corpo que um operador mal-intencionado mandaria. */

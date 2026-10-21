@@ -183,13 +183,42 @@ public class FidelidadeService {
             clientes.creditar(clienteId, lojaId, v);
             return;
         }
-        if (clientes.debitarSeTiver(clienteId, lojaId, v) == 0) {
+        if (clientes.debitarSeTiver(clienteId, lojaId, v) == 0 && clienteAindaExiste(lojaId, clienteId)) {
             log.warn("Loja {}: o cliente {} nao tinha os R$ {} de cashback que este pedido ja havia "
                     + "descontado. Confira o saldo dele.", lojaId, clienteId, v);
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "O seu saldo de cashback mudou enquanto você fechava o pedido. "
                             + "Confira o valor e tente de novo.");
         }
+    }
+
+    /**
+     * O cliente ainda existe nesta loja?
+     *
+     * <h2>Por que esta pergunta existe (medido em 21/10/2026)</h2>
+     * <p>As consultas de saldo devolvem "zero linha mexida" por DUAS razoes diferentes, e tratar as
+     * duas igual foi um defeito que eu mesmo criei no item 1.5, mais cedo no mesmo dia:</p>
+     * <ul>
+     *   <li><b>O saldo nao cobre</b> — disputa de verdade. Outro pedido gastou primeiro, e o pedido
+     *       tem que ser recusado: o desconto ja saiu do total.</li>
+     *   <li><b>O cliente nao existe mais</b> — nao ha o que debitar. Apagar cliente nao apaga os
+     *       pedidos dele ({@code pedido.cliente_id} nao tem chave estrangeira), entao sobra pedido
+     *       apontando para cliente que foi embora.</li>
+     * </ul>
+     *
+     * <p>Antes do item 1.5 isto era um {@code findByIdAndLojaId(...).ifPresent(...)}: cliente que nao
+     * existe era silencio. Depois, passou a estourar 409 — e o caminho que isso quebra e de dinheiro:
+     * PIX pago DEPOIS do cancelamento, num pedido que usou cashback, de um cliente que o lojista
+     * apagou no meio. O webhook do Asaas recebia 409, e o Asaas reenvia enquanto nao recebe 200: o
+     * pagamento nunca seria registrado. Uma consulta a mais, so quando a primeira falha, e barata
+     * demais para pagar esse risco.</p>
+     */
+    private boolean clienteAindaExiste(Long lojaId, Long clienteId) {
+        if (clientes.existsByIdAndLojaId(clienteId, lojaId)) return true;
+        log.warn("Loja {}: o cliente {} nao existe mais, e um pedido ainda aponta para ele. Nao ha "
+                        + "saldo de cashback para mexer -- seguindo sem recusar o pedido.",
+                lojaId, clienteId);
+        return false;
     }
 
     /**
@@ -276,7 +305,7 @@ public class FidelidadeService {
 
         // UMA instrucao no banco, nao quatro leituras e uma gravacao.
         int mexeu = clientes.registrarVenda(clienteId, lojaId, pago, usado, credito, OffsetDateTime.now());
-        if (mexeu == 0 && usado.signum() > 0) {
+        if (mexeu == 0 && usado.signum() > 0 && clienteAindaExiste(lojaId, clienteId)) {
             log.warn("Loja {}: o cliente {} nao tinha mais R$ {} de cashback na hora de fechar o pedido "
                             + "-- outro pedido gastou o saldo primeiro. O pedido foi recusado.",
                     lojaId, clienteId, usado);

@@ -54,15 +54,24 @@ class SaldoQueMudouRecusaOpedidoTest {
         fidelidade = new FidelidadeService(clientes, configs);
     }
 
-    /** O banco recusou: ninguém mexeu em linha nenhuma. */
+    /** O cliente EXISTE e o saldo não cobre: a disputa de verdade, que recusa o pedido. */
     private void bancoRecusa() {
         when(clientes.registrarVenda(eq(CLIENTE), eq(LOJA), any(), any(), any(), any())).thenReturn(0);
         when(clientes.debitarSeTiver(eq(CLIENTE), eq(LOJA), any())).thenReturn(0);
+        when(clientes.existsByIdAndLojaId(CLIENTE, LOJA)).thenReturn(true);
+    }
+
+    /** O cliente foi APAGADO: zero linha mexida porque não há cliente, não porque falta saldo. */
+    private void clienteApagado() {
+        when(clientes.registrarVenda(eq(CLIENTE), eq(LOJA), any(), any(), any(), any())).thenReturn(0);
+        when(clientes.debitarSeTiver(eq(CLIENTE), eq(LOJA), any())).thenReturn(0);
+        when(clientes.existsByIdAndLojaId(CLIENTE, LOJA)).thenReturn(false);
     }
 
     private void bancoAceita() {
         when(clientes.registrarVenda(eq(CLIENTE), eq(LOJA), any(), any(), any(), any())).thenReturn(1);
         when(clientes.debitarSeTiver(eq(CLIENTE), eq(LOJA), any())).thenReturn(1);
+        when(clientes.existsByIdAndLojaId(CLIENTE, LOJA)).thenReturn(true);
     }
 
     // =============================================================== a recusa
@@ -228,5 +237,57 @@ class SaldoQueMudouRecusaOpedidoTest {
         int n = 0;
         for (int i = texto.indexOf(pedaco); i >= 0; i = texto.indexOf(pedaco, i + 1)) n++;
         return n;
+    }
+
+    // =============================== cliente apagado nao e disputa de saldo (achado em 21/10, item 4.7)
+
+    /**
+     * Cliente que não existe mais NÃO recusa o pedido — e este é um defeito que eu mesmo criei.
+     *
+     * <p>Antes do item 1.5, mexer no saldo era {@code findByIdAndLojaId(...).ifPresent(...)}: cliente
+     * que não existe era silêncio. Depois que tudo virou SQL, "zero linha mexida" passou a estourar
+     * 409 — e passou a cobrir duas coisas muito diferentes: <b>saldo que não cobre</b> (disputa, tem
+     * que recusar) e <b>cliente apagado</b> (não há o que debitar).</p>
+     *
+     * <p>O caminho que isso quebra é de dinheiro: apagar cliente não apaga os pedidos dele
+     * ({@code pedido.cliente_id} não tem chave estrangeira). Um PIX pago DEPOIS do cancelamento, num
+     * pedido que usou cashback, de um cliente que o lojista apagou no meio, fazia o webhook do Asaas
+     * receber 409 — e o Asaas reenvia enquanto não recebe 200. <b>O pagamento nunca seria
+     * registrado.</b></p>
+     */
+    @Test
+    void clienteAPAGADOnaoRECUSAoPedido() {
+        clienteApagado();
+
+        assertDoesNotThrow(() -> fidelidade.registrar(
+                LOJA, CLIENTE, new BigDecimal("40.00"), new BigDecimal("5.00")));
+    }
+
+    @Test
+    void consumirDEclienteAPAGADOtambemNAOrecusa() {
+        // E o caminho exato do PIX pago depois do cancelamento (item 2.7).
+        clienteApagado();
+
+        assertDoesNotThrow(() -> fidelidade.consumir(LOJA, CLIENTE, new BigDecimal("5.00")));
+    }
+
+    @Test
+    void aPERGUNTAextraSOacontecePRAquemFALHOU() {
+        // Uma consulta por pedido a mais seria desperdicio: o caminho normal nao pode pagar por isso.
+        bancoAceita();
+
+        fidelidade.registrar(LOJA, CLIENTE, new BigDecimal("40.00"), new BigDecimal("5.00"));
+
+        verify(clientes, never()).existsByIdAndLojaId(anyLong(), anyLong());
+    }
+
+    @Test
+    void clienteQUEexisteCONTINUArecusandoQUANDOoSALDOnaoCOBRE() {
+        // O conserto nao pode virar "nunca recusa": a protecao do item 1.5 e o que impede o desconto
+        // que ninguem pagou.
+        bancoRecusa();
+
+        assertThrows(ResponseStatusException.class, () -> fidelidade.registrar(
+                LOJA, CLIENTE, new BigDecimal("40.00"), new BigDecimal("5.00")));
     }
 }

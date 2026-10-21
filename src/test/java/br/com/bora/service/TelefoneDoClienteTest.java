@@ -31,7 +31,7 @@ class TelefoneDoClienteTest {
         repo = mock(ClienteRepository.class);
         AuthContext ctx = mock(AuthContext.class);
         when(ctx.lojaId()).thenReturn(1L);
-        servico = new ClienteService(repo, ctx);
+        servico = new ClienteService(repo, mock(br.com.bora.repository.PedidoRepository.class), ctx);
         when(repo.save(any(Cliente.class))).thenAnswer(i -> i.getArgument(0));
     }
 

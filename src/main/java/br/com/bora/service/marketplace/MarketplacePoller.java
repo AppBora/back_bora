@@ -258,8 +258,12 @@ public class MarketplacePoller {
         } else {
             // Fica sem a marca de proposito: o proximo evento do mesmo pedido tenta de novo. E o erro
             // vai para `ultimo_erro` da integracao, que a tela de Integracoes mostra.
-            i.ultimoErro = "Aceite do pedido " + orderId + " recusado pelo " + IntegracaoService.label(i.canal)
-                    + "; sera reenviado";
+            // O `orderId` vem do marketplace, entao e texto de fora e nao tem tamanho garantido.
+            i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(
+                    "Aceite do pedido " + orderId + " recusado pelo " + IntegracaoService.label(i.canal)
+                            + "; sera reenviado",
+                    br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                    "integracao_canal.ultimo_erro da loja " + i.lojaId);
             repo.save(i);
         }
     }

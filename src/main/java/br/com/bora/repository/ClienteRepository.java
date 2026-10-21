@@ -18,6 +18,15 @@ public interface ClienteRepository extends JpaRepository<Cliente, Long> {
      */
     List<Cliente> findByLojaIdAndIdIn(Long lojaId, java.util.Collection<Long> ids);
     Optional<Cliente> findByIdAndLojaId(Long id, Long lojaId);
+
+    /**
+     * Este cliente existe nesta loja?
+     *
+     * <p>Serve para distinguir as DUAS causas de "zero linha mexida" nas consultas de saldo: saldo que
+     * nao cobre (disputa de verdade, que recusa o pedido) e cliente que nao existe mais (nao ha o que
+     * debitar). Ver {@code FidelidadeService}.</p>
+     */
+    boolean existsByIdAndLojaId(Long id, Long lojaId);
     Optional<Cliente> findFirstByLojaIdAndTelefone(Long lojaId, String telefone);
     Optional<Cliente> findFirstByLojaIdAndCanalExternoAndIdExterno(Long lojaId, String canalExterno, String idExterno);
 

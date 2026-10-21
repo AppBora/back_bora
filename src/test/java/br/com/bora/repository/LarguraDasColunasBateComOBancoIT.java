@@ -68,6 +68,11 @@ class LarguraDasColunasBateComOBancoIT {
         m.put("cliente.nome", LarguraDeColuna.CLIENTE_NOME);
         m.put("cliente.telefone", LarguraDeColuna.CLIENTE_TELEFONE);
         m.put("cliente.id_externo", LarguraDeColuna.CLIENTE_ID_EXTERNO);
+        // Itens 4.4 e 4.5 da varredura (21/10/2026): as duas colunas em que o estouro nao cortava
+        // texto, desfazia a gravacao -- uma o registro de um pagamento, a outra o registro de uma
+        // falha, escrito de dentro do tratamento de erro.
+        m.put("pagamento_assinatura.descricao", LarguraDeColuna.PAGAMENTO_DESCRICAO);
+        m.put("integracao_canal.ultimo_erro", LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO);
         return m;
     }
 
@@ -139,7 +144,7 @@ class LarguraDasColunasBateComOBancoIT {
         // falharia por outro motivo -- ou, pior, uma mudanca no mapa faria ele medir nada.
         assertEquals(500, larguraNoBanco("cliente", "endereco"), "a V37 largou esta coluna para 500");
         assertNull(larguraNoBanco("pedido", "valor_total"), "coluna numerica nao tem limite de texto");
-        assertTrue(oQueOcodigoAcredita().size() >= 11,
+        assertTrue(oQueOcodigoAcredita().size() >= 13,
                 "o mapa encolheu: alguem tirou coluna da conferencia");
     }
 }

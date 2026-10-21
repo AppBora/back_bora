@@ -45,7 +45,7 @@ class CodigoDoMarketplaceNaoRepeteTest {
         repo = mock(ProdutoRepository.class);
         AuthContext ctx = mock(AuthContext.class);
         when(ctx.lojaId()).thenReturn(1L);
-        service = new ProdutoService(repo, ctx);
+        service = new ProdutoService(repo, mock(br.com.bora.repository.ProdutoInsumoRepository.class), mock(br.com.bora.repository.ComplementoGrupoRepository.class), mock(br.com.bora.repository.ComplementoItemRepository.class), ctx);
         when(repo.save(any(Produto.class))).thenAnswer(inv -> inv.getArgument(0));
         when(repo.findFirstByLojaIdAndCodigoExterno(anyLong(), anyString())).thenReturn(Optional.empty());
     }

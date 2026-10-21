@@ -40,6 +40,9 @@ final class SaldoEmMemoria {
         Long loja = cliente.lojaId;
         when(mock.findByIdAndLojaId(id, loja)).thenReturn(Optional.of(cliente));
         when(mock.save(any(Cliente.class))).thenAnswer(i -> i.getArgument(0));
+        // O cliente deste duble EXISTE. A pergunta separa "saldo nao cobre" de "cliente foi apagado",
+        // e aqui o caso e sempre o primeiro.
+        when(mock.existsByIdAndLojaId(id, loja)).thenReturn(true);
 
         // update cliente set cashback = cashback - :usado + :credito, total_gasto = ... + :pago,
         //                    qtd_pedidos = ... + 1, ultimo_pedido = :agora
