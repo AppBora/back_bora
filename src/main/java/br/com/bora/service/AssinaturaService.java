@@ -307,12 +307,10 @@ public class AssinaturaService {
     public void processarWebhook(String event, String subscriptionId, String paymentId,
                                  BigDecimal valor, OffsetDateTime pagoEm) {
         if (event == null) return;
-        // O estorno e tratado ANTES, e so pela cobranca: o aviso de devolucao nem sempre carrega o
-        // numero da assinatura, e sem isto ele caia fora na linha seguinte. Dinheiro que voltou nao e
-        // faturamento e nao pede nota fiscal.
-        if ("PAYMENT_REFUNDED".equals(event) || "PAYMENT_CHARGEBACK_REQUESTED".equals(event)
-                || "PAYMENT_CHARGEBACK_DISPUTE".equals(event)) {
-            marcarEstorno(paymentId, event);
+        // O estorno e tratado ANTES, e pela COBRANCA: o aviso de devolucao nem sempre carrega o numero
+        // da assinatura, e sem isto ele caia fora na linha seguinte. A cobranca sabe de qual loja e.
+        if (EVENTOS_DE_DEVOLUCAO.contains(event)) {
+            tratarDevolucao(event, paymentId, subscriptionId);
             return;
         }
         if (subscriptionId == null) return;
@@ -474,6 +472,154 @@ public class AssinaturaService {
     }
 
     /** Marca a mensalidade como devolvida, para ela sair do faturamento e da fila de notas. */
+    /**
+     * Os oito eventos de estorno e contestacao do Asaas.
+     *
+     * <p>Transcritos da documentacao oficial (docs.asaas.com/docs/payment-events, conferida em
+     * 21/10/2026). O codigo antes tratava TRES deles, e tratava os tres igual. Nao sao a mesma coisa:
+     * um diz que o dinheiro foi embora, outro que foi embora em parte, outro que a disputa foi GANHA e
+     * o dinheiro esta voltando. Responder igual aos tres e errar em dois.</p>
+     *
+     * <p>Nao inventar nomes aqui: evento que o Asaas nao manda e codigo morto que parece tratado.</p>
+     */
+    private static final java.util.Set<String> EVENTOS_DE_DEVOLUCAO = java.util.Set.of(
+            "PAYMENT_REFUNDED",                      // estornada integralmente
+            "PAYMENT_PARTIALLY_REFUNDED",            // estornada em parte
+            "PAYMENT_REFUND_IN_PROGRESS",            // estorno agendado, ainda nao executado
+            "PAYMENT_REFUND_DENIED",                 // estorno negado (so boleto): o dinheiro fica
+            "PAYMENT_RECEIVED_IN_CASH_UNDONE",       // desfizeram um recebimento em dinheiro
+            "PAYMENT_CHARGEBACK_REQUESTED",          // chargeback recebido
+            "PAYMENT_CHARGEBACK_DISPUTE",            // em disputa, documentos enviados
+            "PAYMENT_AWAITING_CHARGEBACK_REVERSAL"   // disputa VENCIDA, dinheiro voltando
+    );
+
+    /** Os que querem dizer "o dinheiro desta mensalidade nao esta mais com a gente". */
+    private static final java.util.Set<String> O_DINHEIRO_FOI_EMBORA = java.util.Set.of(
+            "PAYMENT_REFUNDED",
+            "PAYMENT_CHARGEBACK_REQUESTED",
+            "PAYMENT_RECEIVED_IN_CASH_UNDONE"
+    );
+
+    /**
+     * Devolucao, estorno e contestacao: o que cada um faz com o faturamento e com o ACESSO.
+     *
+     * <h2>O defeito que isto fecha (medido em 20/10/2026)</h2>
+     * <p>Os eventos de estorno eram tratados antes de tudo e saiam da funcao. A assinatura continuava
+     * ATIVA e {@code loja.acessoAte} continuava NULO -- e o bloqueio so olha essa data. Pagar, usar,
+     * pedir estorno, receber o dinheiro de volta e <b>ficar com acesso sem prazo para sempre</b>. E
+     * dava para repetir todo mes.</p>
+     *
+     * <h2>Por que cada evento tem uma resposta diferente</h2>
+     * <ul>
+     *   <li><b>O dinheiro foi embora</b> (estorno integral, chargeback recebido, recebimento em
+     *       dinheiro desfeito): e o mesmo que nao ter pago. INADIMPLENTE e o prazo da carencia --
+     *       nao corte imediato, porque pode ser engano e o lojista merece o mesmo prazo de quem
+     *       atrasou.</li>
+     *   <li><b>Estorno PARCIAL</b>: o lojista pagou a maior parte. Cortar o acesso por causa de uma
+     *       devolucao de cortesia seria punir quem pagou.</li>
+     *   <li><b>Estorno em andamento</b>: ainda nao aconteceu, e o {@code PAYMENT_REFUNDED} vem depois.
+     *       Cortar agora seria cortar por uma intencao -- e o {@code PAYMENT_REFUND_DENIED} existe
+     *       justamente porque o estorno pode nao sair.</li>
+     *   <li><b>Estorno negado</b>: o dinheiro fica. Nada a fazer.</li>
+     *   <li><b>Em disputa</b>: nenhuma informacao nova sobre o dinheiro -- o chargeback ja foi
+     *       recebido e ja cortou. Reprocessar aqui REINICIARIA a carencia, que e o mesmo defeito ja
+     *       corrigido no {@code PAYMENT_OVERDUE}: cada aviso regravava "agora + 10 dias".</li>
+     *   <li><b>Disputa VENCIDA</b>: ganhamos, o dinheiro esta voltando. <b>Devolve o acesso</b> e o
+     *       faturamento. Sem isto, o lojista que tinha razao ficaria cortado para sempre.</li>
+     * </ul>
+     */
+    private void tratarDevolucao(String evento, String paymentId, String subscriptionId) {
+        PagamentoAssinatura pg = paymentId == null || paymentId.isBlank() ? null
+                : pagamentos.findByAsaasPaymentId(paymentId).orElse(null);
+
+        // A loja vem da cobranca; se ela nao esta no nosso faturamento, tenta pela assinatura. Sem
+        // nenhum dos dois nao da para agir -- so avisar.
+        Long lojaId = pg != null ? pg.lojaId
+                : (subscriptionId == null ? null
+                   : repo.findByAsaasSubscriptionId(subscriptionId).map(Assinatura::getLojaId).orElse(null));
+
+        if ("PAYMENT_AWAITING_CHARGEBACK_REVERSAL".equals(evento)) {
+            if (pg != null && pg.estornado()) {
+                pg.estornadoEm = null;                 // volta para o faturamento
+                pagamentos.save(pg);
+            }
+            if (lojaId != null) devolverAcesso(lojaId, evento);
+            else log.warn("{} chegou para a cobranca {} e nao achei a loja; o acesso NAO foi devolvido",
+                    evento, paymentId);
+            return;
+        }
+
+        if ("PAYMENT_PARTIALLY_REFUNDED".equals(evento)) {
+            // NAO marca como estornada: isso tiraria a mensalidade INTEIRA do faturamento por causa de
+            // uma devolucao parcial. Guardar quanto voltou pede uma coluna propria -- e o item 3.6 da
+            // varredura, que continua aberto. Ate la, a mensalidade conta cheia e o aviso fica aqui.
+            log.warn("ESTORNO PARCIAL na cobranca {} (loja {}): o acesso NAO foi cortado e a mensalidade "
+                            + "continua CHEIA no faturamento. Confira o valor devolvido no Asaas e ajuste "
+                            + "a mao. Ver varredura 3.6.", paymentId, lojaId);
+            return;
+        }
+
+        if ("PAYMENT_REFUND_IN_PROGRESS".equals(evento) || "PAYMENT_REFUND_DENIED".equals(evento)) {
+            // Nao mexe em nada. O IN_PROGRESS sera seguido de REFUNDED (que corta) ou de REFUND_DENIED
+            // (que nao muda nada). Agir aqui seria agir por uma intencao.
+            log.info("Asaas: {} na cobranca {} (loja {}). Nada alterado; o evento definitivo vem depois.",
+                    evento, paymentId, lojaId);
+            return;
+        }
+
+        if ("PAYMENT_CHARGEBACK_DISPUTE".equals(evento)) {
+            // Ja cortou no CHARGEBACK_REQUESTED. Reprocessar reiniciaria a carencia.
+            log.info("Asaas: chargeback da cobranca {} (loja {}) entrou em disputa. O corte e a carencia "
+                    + "sao os do aviso anterior; nada foi reiniciado.", paymentId, lojaId);
+            return;
+        }
+
+        // Aqui so sobra o que tirou o dinheiro de verdade.
+        marcarEstorno(paymentId, evento);
+        if (!O_DINHEIRO_FOI_EMBORA.contains(evento)) return;
+        if (lojaId == null) {
+            log.warn("{} chegou para a cobranca {} e nao achei a loja; o ACESSO NAO FOI CORTADO",
+                    evento, paymentId);
+            return;
+        }
+        cortarAcessoPorDevolucao(lojaId, evento, paymentId);
+    }
+
+    /**
+     * O dinheiro voltou para o cliente: a loja passa a INADIMPLENTE e ganha a carencia.
+     *
+     * <p>Mesma carencia de quem atrasou, e definida <b>uma vez so</b>: um estorno seguido de disputa
+     * nao pode empurrar o prazo de novo. E o mesmo cuidado que o {@code PAYMENT_OVERDUE} ja tinha.</p>
+     */
+    private void cortarAcessoPorDevolucao(Long lojaId, String evento, String paymentId) {
+        repo.findByLojaId(lojaId).ifPresent(a -> {
+            a.setStatus(StatusAssinatura.INADIMPLENTE);
+            a.setAtualizadoEm(OffsetDateTime.now());
+            repo.save(a);
+        });
+        boolean semPrazo = lojas.findById(lojaId).map(l -> l.acessoAte == null).orElse(false);
+        if (semPrazo) {
+            prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias));
+        }
+        AUDITORIA.warn("ACESSO COM PRAZO na loja {}: a cobranca {} foi devolvida ao cliente ({}). "
+                        + "Assinatura INADIMPLENTE e acesso ate {} dias. Antes disto, estorno nao mexia "
+                        + "no acesso e a loja seguia usando de graca.",
+                lojaId, paymentId, evento, carenciaDias);
+    }
+
+    /** Ganhamos a disputa: o dinheiro esta voltando para nos, e o acesso volta para a loja. */
+    private void devolverAcesso(Long lojaId, String evento) {
+        repo.findByLojaId(lojaId).ifPresent(a -> {
+            a.setStatus(StatusAssinatura.ATIVA);
+            a.setAtualizadoEm(OffsetDateTime.now());
+            repo.save(a);
+        });
+        ativarLoja(lojaId, true);
+        prazoDeAcesso(lojaId, null);   // pagando, o acesso nao tem data de fim
+        AUDITORIA.warn("ACESSO DEVOLVIDO a loja {}: a disputa foi vencida ({}). A mensalidade volta ao "
+                + "faturamento e o acesso volta a nao ter prazo.", lojaId, evento);
+    }
+
     private void marcarEstorno(String paymentId, String evento) {
         if (paymentId == null || paymentId.isBlank()) return;
         pagamentos.findByAsaasPaymentId(paymentId).ifPresentOrElse(pg -> {
