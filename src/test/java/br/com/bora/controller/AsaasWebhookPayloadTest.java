@@ -42,8 +42,10 @@ class AsaasWebhookPayloadTest {
         ArgumentCaptor<String> id = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<BigDecimal> valor = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<OffsetDateTime> quando = ArgumentCaptor.forClass(OffsetDateTime.class);
+        // A versao COMPLETA (6 argumentos): o controller tem que usar ela, senao o estorno parcial
+        // volta a chegar sem valor no servico (item 3.6 da varredura).
         verify(service).processarWebhook(eq("PAYMENT_CONFIRMED"), eq("sub_0001"),
-                id.capture(), valor.capture(), quando.capture());
+                id.capture(), any(), valor.capture(), quando.capture());
         return new Object[]{id.getValue(), valor.getValue(), quando.getValue()};
     }
 

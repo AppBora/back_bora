@@ -765,10 +765,26 @@ public class PlataformaController {
         }
         loja.splitPercentual = novo;
         lojas.save(loja);
+
+        // ITEM 3.9 DA VARREDURA: o `efetivo` dizia "2%" sem olhar se o split TEM como acontecer. Ele
+        // so sai quando o recebimento e pela SUBCONTA da loja (`PixService`: exige `viaSubconta` e a
+        // carteira da plataforma). Loja que recebe pela chave PIX legada dela nunca paga nada -- e a
+        // tela respondia que estava cobrando. Quem olha essa tela decide preco em cima disso.
+        boolean temSubconta = loja.asaasApiKey != null && !loja.asaasApiKey.isBlank();
+        String percentual = (novo == null ? splitPadrao : novo.toPlainString()) + "%";
         Map<String, Object> out = new java.util.LinkedHashMap<>();
         out.put("lojaId", lojaId);
         out.put("splitPercentual", novo);
-        out.put("efetivo", (novo == null ? splitPadrao : novo.toPlainString()) + "%");
+        out.put("percentualConfigurado", percentual);
+        out.put("recebePelaSubconta", temSubconta);
+        // O que de fato e retido hoje. Sem subconta nao ha onde retar: o dinheiro cai direto na conta
+        // do lojista e a plataforma nao entra no caminho.
+        out.put("efetivo", temSubconta ? percentual : "0% (nao incide)");
+        out.put("porQue", temSubconta
+                ? "O recebimento e pela subconta da loja, entao a taxa e retida em cada PIX."
+                : "Esta loja NAO recebe pela subconta (ela usa a chave PIX propria), entao o split "
+                        + "nao incide em nada. Para cobrar a taxa, ative o recebimento pela "
+                        + "plataforma em Integracoes.");
         out.put("padraoDaPlataforma", splitPadrao + "%");
         return out;
     }
@@ -927,11 +943,18 @@ public class PlataformaController {
             java.math.BigDecimal v = p.valor == null ? java.math.BigDecimal.ZERO : p.valor;
             // Dinheiro devolvido ao cliente nao e faturamento e nao pede nota. Continua na lista, em
             // separado, porque sumir com ele esconderia um estorno de quem precisa conferir o mes.
+            //
+            // Item 3.6 da varredura: o estorno PARCIAL agora desconta o que voltou em vez de deixar a
+            // mensalidade contar cheia. Antes o valor devolvido nao era gravado em lugar nenhum, e o
+            // unico rastro era uma linha de log -- que ninguem le ao fechar o mes.
+            java.math.BigDecimal ficou = p.valorQueFicou();
+            java.math.BigDecimal voltou = v.subtract(ficou);
             if (p.estornado()) {
                 estornado = estornado.add(v);
             } else {
-                total = total.add(v);
-                if (!p.temNota()) semNota = semNota.add(v);
+                total = total.add(ficou);
+                if (voltou.signum() > 0) estornado = estornado.add(voltou);
+                if (!p.temNota()) semNota = semNota.add(ficou);
             }
             Map<String, Object> item = new java.util.LinkedHashMap<>();
             item.put("id", p.id);
@@ -945,6 +968,10 @@ public class PlataformaController {
             item.put("notaUrl", p.notaUrl);
             item.put("notaEmitidaEm", p.notaEmitidaEm);
             item.put("estornadoEm", p.estornadoEm);
+            // Quanto voltou e quanto sobrou: quem fecha o mes precisa dos dois numeros na linha, nao
+            // so da marca de que houve estorno.
+            item.put("estornadoValor", p.estornadoValor);
+            item.put("valorQueFicou", p.valorQueFicou());
             itens.add(item);
         }
         Map<String, Object> r = new java.util.LinkedHashMap<>();

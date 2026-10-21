@@ -7,7 +7,13 @@ spring:
     scheduling:
       pool:
         # O poller de marketplace nao pode disputar a unica thread padrao do agendador.
-        size: 4
+        #
+        # ITEM 9.1 DA VARREDURA: eram 5 rotinas agendadas em 4 threads, e a quinta ficava na fila. A
+        # que podia ficar e a pior de ficar: o MarketplacePoller, sem o qual o restaurante some do
+        # iFood. Agora sao 6 rotinas (entrou a reconciliacao do valor da mensalidade, item 3.8) e 8
+        # threads -- as duas de sobra sao para a proxima, porque thread parada nao custa nada e
+        # rotina na fila custa a loja fora do aplicativo.
+        size: 8
   servlet:
     multipart:
       max-file-size: 8MB

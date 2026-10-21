@@ -190,11 +190,26 @@ class IndicesQueServemIT {
 
         assertEquals(2, previa.size(), "dois entregadores, nao quatro variantes de texto");
         long total = previa.stream().mapToLong(r -> ((Number) r[1]).longValue()).sum();
+        // O `and aguardando_pagamento` entrou aqui junto com o item 6.3: PIX gerado e nunca pago,
+        // marcado como entregue, SAIU do acerto -- ele entrava como venda normal e o valor dele ia
+        // para "outras formas", como se o dinheiro tivesse entrado por cartao. Esta linha e o que
+        // prova a regra contra o banco: a carga tem pedidos com aguardando_pagamento = true de
+        // proposito, e sem o filtro na consulta os numeros divergem.
         long esperado = ((Number) em.createNativeQuery(
                         "select count(*) from pedido where loja_id = ?1 and status = 'ENTREGUE' "
-                                + "and acerto_id is null and entregador is not null")
+                                + "and acerto_id is null and entregador is not null "
+                                + "and (aguardando_pagamento is null or aguardando_pagamento = false)")
                 .setParameter(1, loja).getSingleResult()).longValue();
-        assertEquals(esperado, total, "a soma dos grupos tem que ser o total de entregas nao acertadas");
+        assertEquals(esperado, total, "a soma dos grupos tem que ser o total de entregas nao acertadas "
+                + "COM pagamento resolvido (item 6.3)");
+
+        long pendentes = ((Number) em.createNativeQuery(
+                        "select count(*) from pedido where loja_id = ?1 and status = 'ENTREGUE' "
+                                + "and acerto_id is null and entregador is not null "
+                                + "and aguardando_pagamento = true")
+                .setParameter(1, loja).getSingleResult()).longValue();
+        assertTrue(pendentes > 0, "o cenario precisa ter PIX pendente entregue, senao o filtro do "
+                + "item 6.3 nao esta sendo medido");
     }
 
     // =============================================================== 4.7(b) o ultimo pedido por loja

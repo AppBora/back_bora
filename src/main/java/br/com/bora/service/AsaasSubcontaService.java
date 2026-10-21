@@ -407,10 +407,46 @@ public class AsaasSubcontaService {
      */
     private boolean aprovada(Map<String, Object> s) {
         Object geral = s.get("general");
-        if (geral != null) return "APPROVED".equalsIgnoreCase(valor(geral));
+        if (geral != null) {
+            boolean ok = "APPROVED".equalsIgnoreCase(valor(geral));
+            if (ok) avisarSeAcontaBancariaEstaPENDENTE(s);
+            return ok;
+        }
         return "APPROVED".equalsIgnoreCase(valor(s.get("commercialInfo")))
                 && "APPROVED".equalsIgnoreCase(valor(s.get("documentation")))
                 && "APPROVED".equalsIgnoreCase(valor(s.get("bankAccountInfo")));
+    }
+
+    /**
+     * Avisa quando o {@code general} diz APROVADO e a conta bancaria NAO esta aprovada.
+     *
+     * <h2>Item 3.7 da varredura, e o que a documentacao mudou no conserto</h2>
+     * <p>A varredura dizia que decidir pelo {@code general} e um defeito, porque deixaria "o cliente
+     * pagando para uma conta que nao pode sacar". <b>Medindo na documentacao do Asaas, isso nao se
+     * confirma</b>: eles dizem que a conta esta 100% aprovada quando o {@code general} volta APPROVED,
+     * e a regra do {@code general} cita dados comerciais e documentacao -- nao a conta bancaria. Em
+     * lugar nenhum eles dizem que {@code bankAccountInfo} pendente trava o recebimento. Bloquear o PIX
+     * por isso seria agir por um receio, e travaria loja legitimamente aprovada.</p>
+     *
+     * <p><b>O que a documentacao confirma, e que vale conserto:</b> o {@code general} pode permanecer
+     * APPROVED com pendencia (e o caso da revalidacao anual dos dados comerciais), existe webhook
+     * proprio para a conta bancaria voltar a pendente
+     * ({@code ACCOUNT_STATUS_BANK_ACCOUNT_INFO_PENDING}), e eles instruem a <b>tratar a pendencia
+     * mesmo que o {@code general} esteja APPROVED</b>. Era exatamente isso que o codigo nao fazia:
+     * lia o resumo e jogava o resto fora, sem nem registrar.</p>
+     *
+     * <p>Entao: nao bloqueia, mas <b>nao ignora</b>. Fica no log de auditoria, com o status que veio,
+     * para quem for dizer ao lojista "seu PIX esta no ar" saber o que conferir antes.</p>
+     */
+    private void avisarSeAcontaBancariaEstaPENDENTE(Map<String, Object> s) {
+        String banco = valor(s.get("bankAccountInfo"));
+        if (banco == null || banco.isBlank() || "APPROVED".equalsIgnoreCase(banco)) return;
+        log.warn("AUDITORIA cobranca: o Asaas aprovou a conta no geral (general = APPROVED) mas a CONTA "
+                        + "BANCARIA esta \"{}\". A conta foi ativada, porque o general e o sinal "
+                        + "oficial de aprovacao -- mas CONFIRA a conta bancaria antes de dizer ao "
+                        + "lojista que o PIX esta no ar: a documentacao do Asaas nao garante saque com "
+                        + "ela pendente, e o general pode ficar APPROVED com pendencia.",
+                banco);
     }
 
     @SuppressWarnings("unchecked")

@@ -258,6 +258,57 @@ public class AssinaturaService {
     }
 
     /**
+     * Acerta a mensalidade de quem ficou com o valor errado na cobrança.
+     *
+     * <h2>Item 3.8 da varredura</h2>
+     * <p>Ligar o Módulo IA grava {@code loja.moduloIa = true} e <b>depois</b> tenta levar o valor
+     * novo ao Asaas. Se essa sincronização falhar — Asaas fora do ar, token expirado, qualquer coisa
+     * —, o recurso fica liberado e a mensalidade continua no valor antigo. <b>R$ 99 por mês de graça</b>,
+     * e a tela diz a verdade no momento do clique (ela devolve {@code situacaoCobranca}), mas ninguém
+     * volta para conferir depois. Não havia retry, nem fila, nem rotina que comparasse.</p>
+     *
+     * <p>Vale para os dois lados: desligar o módulo e falhar a sincronização deixa o cliente
+     * <b>pagando</b> por algo que já foi desligado.</p>
+     *
+     * <h2>Por que é seguro rodar sozinho</h2>
+     * <p>Ela chama o mesmo {@code sincronizarValorComMotivo} que o clique chamaria — não inventa
+     * valor, não cria cobrança: leva ao Asaas o preço que a loja já tem cadastrado. É exatamente o
+     * que o clique pretendia fazer. E só age quando há diferença, então em dia nenhuma loja é tocada.</p>
+     */
+    @org.springframework.scheduling.annotation.Scheduled(
+            initialDelay = 300_000L, fixedDelay = 3_600_000L)
+    public void reconciliarValorDaMensalidade() {
+        int acertadas = 0, falharam = 0;
+        for (Loja loja : lojas.findAll()) {
+            if (Boolean.TRUE.equals(loja.excluidaEm != null)) continue;
+            Assinatura a = repo.findByLojaId(loja.getId()).orElse(null);
+            if (a == null || a.getValor() == null) continue;
+            java.math.BigDecimal deveria = loja.precoComModulos();
+            if (deveria == null || deveria.compareTo(a.getValor()) == 0) continue;
+
+            String motivo = sincronizarValorComMotivo(loja.getId());
+            if ("ATUALIZADA".equals(motivo)) {
+                acertadas++;
+                AUDITORIA.warn("AUDITORIA cobranca: a mensalidade da loja {} estava em R$ {} e o preco "
+                                + "com os modulos dela e R$ {}. A cobranca foi acertada agora, pela "
+                                + "rotina -- o clique que ligou ou desligou o modulo nao conseguiu "
+                                + "sincronizar na hora.",
+                        loja.getId(), a.getValor(), deveria);
+            } else {
+                falharam++;
+                AUDITORIA.warn("AUDITORIA cobranca: a mensalidade da loja {} esta em R$ {} e deveria ser "
+                                + "R$ {}, e eu NAO consegui acertar ({}). Enquanto isso ela paga o valor "
+                                + "errado -- confira no Asaas.",
+                        loja.getId(), a.getValor(), deveria, motivo);
+            }
+        }
+        if (acertadas > 0 || falharam > 0) {
+            log.info("Reconciliacao de mensalidade: {} acertada(s), {} ainda errada(s).",
+                    acertadas, falharam);
+        }
+    }
+
+    /**
      * O mesmo, mas dizendo POR QUE a cobrança não mudou.
      *
      * <p>Um "não atualizou" tem causas muito diferentes — a loja nem assinou ainda, ou assinou e a
@@ -293,7 +344,7 @@ public class AssinaturaService {
     /** Reage aos eventos de pagamento do Asaas (webhook): ativa/suspende a loja conforme o pagamento. */
     @Transactional
     public void processarWebhook(String event, String subscriptionId) {
-        processarWebhook(event, subscriptionId, null, null, null);
+        processarWebhook(event, subscriptionId, null, null, null, null);
     }
 
     /**
@@ -304,13 +355,27 @@ public class AssinaturaService {
      * nota fiscal de cada mensalidade.</p>
      */
     @Transactional
+    /**
+     * Mesma coisa, para quem nao tem valor de estorno para informar.
+     *
+     * <p>Quase todo evento do Asaas nao devolve dinheiro nenhum, e os testes de outros caminhos nao
+     * precisam saber deste parametro. <b>O webhook de verdade NAO usa esta sobrecarga</b>: ele le o
+     * {@code refunds} do payload e chama a versao completa, senao o estorno parcial volta a nao ter
+     * valor (item 3.6).</p>
+     */
     public void processarWebhook(String event, String subscriptionId, String paymentId,
+                                 java.math.BigDecimal valor, java.time.OffsetDateTime pagoEm) {
+        processarWebhook(event, subscriptionId, paymentId, null, valor, pagoEm);
+    }
+
+    public void processarWebhook(String event, String subscriptionId, String paymentId,
+                                 java.math.BigDecimal valorEstornado,
                                  BigDecimal valor, OffsetDateTime pagoEm) {
         if (event == null) return;
         // O estorno e tratado ANTES, e pela COBRANCA: o aviso de devolucao nem sempre carrega o numero
         // da assinatura, e sem isto ele caia fora na linha seguinte. A cobranca sabe de qual loja e.
         if (EVENTOS_DE_DEVOLUCAO.contains(event)) {
-            tratarDevolucao(event, paymentId, subscriptionId);
+            tratarDevolucao(event, paymentId, subscriptionId, valorEstornado);
             return;
         }
         if (subscriptionId == null) return;
@@ -319,6 +384,8 @@ public class AssinaturaService {
                     .ifPresent(a -> registrarPagamento(a, paymentId, valor, pagoEm));
         }
         repo.findByAsaasSubscriptionId(subscriptionId).ifPresent(a -> {
+            // O status de ANTES do aviso. A carencia do PAYMENT_OVERDUE depende dele: ver o item 3.5.
+            final StatusAssinatura st = a.getStatus();
             switch (event) {
                 case "PAYMENT_CONFIRMED", "PAYMENT_RECEIVED" -> {
                     a.setStatus(StatusAssinatura.ATIVA);
@@ -326,15 +393,31 @@ public class AssinaturaService {
                     prazoDeAcesso(a.getLojaId(), null); // pagando, o acesso nao tem data de fim
                 }
                 case "PAYMENT_OVERDUE" -> {
+                    // A carencia comeca UMA vez, no primeiro atraso -- e a chave disso e o status de
+                    // ANTES deste aviso. O Asaas reenvia o aviso, e a fatura do mes seguinte gera
+                    // outro; sem a guarda, quem nunca pagava ganhava uns 10 dias de graca todo mes,
+                    // para sempre.
+                    //
+                    // ITEM 3.5 DA VARREDURA: a guarda anterior era "acesso_ate esta NULO". Isso vale
+                    // para quem JA pagou (quem paga tem acesso sem prazo), mas loja NOVA nasce com os
+                    // 7 dias de cortesia gravados em acesso_ate (SignupController:163 e
+                    // PlataformaController:662) -- entao ela nunca entrava no `if` e o primeiro atraso
+                    // dela nao dava carencia NENHUMA. O cliente novo, que e exatamente quem ainda esta
+                    // decidindo se fica, era o unico cortado sem prazo.
+                    //
+                    // Agora a guarda e o status: INADIMPLENTE ja era o estado antes do aviso significa
+                    // "este atraso ja foi contado". Quem pagou no meio volta para ATIVA e ganha a
+                    // carencia de novo no atraso seguinte, que e o certo -- ele pagou.
+                    boolean primeiroAtraso = st != StatusAssinatura.INADIMPLENTE;
                     a.setStatus(StatusAssinatura.INADIMPLENTE);
-                    // A carencia comeca UMA vez, no primeiro atraso. Antes, cada aviso regravava
-                    // "agora + 10 dias" -- e o Asaas reenvia o aviso, e a fatura do mes seguinte gera
-                    // outro. Na pratica quem nunca pagava ganhava uns 10 dias de graca todo mes, para
-                    // sempre. So define quando ainda nao ha prazo nenhum.
-                    boolean semPrazo = lojas.findById(a.getLojaId())
-                            .map(l -> l.acessoAte == null).orElse(false);
-                    if (semPrazo) {
-                        prazoDeAcesso(a.getLojaId(), OffsetDateTime.now().plusDays(carenciaDias));
+                    if (primeiroAtraso) {
+                        // Nunca ENCURTA o prazo: loja com cortesia maior que a carencia nao pode
+                        // perder dias por causa de um atraso. Vale o que estiver mais longe.
+                        OffsetDateTime comCarencia = OffsetDateTime.now().plusDays(carenciaDias);
+                        OffsetDateTime atual = lojas.findById(a.getLojaId())
+                                .map(l -> l.acessoAte).orElse(null);
+                        prazoDeAcesso(a.getLojaId(),
+                                atual != null && atual.isAfter(comCarencia) ? atual : comCarencia);
                     }
                 }
                 case "SUBSCRIPTION_DELETED" -> {
@@ -649,7 +732,8 @@ public class AssinaturaService {
      *       faturamento. Sem isto, o lojista que tinha razao ficaria cortado para sempre.</li>
      * </ul>
      */
-    private void tratarDevolucao(String evento, String paymentId, String subscriptionId) {
+    private void tratarDevolucao(String evento, String paymentId, String subscriptionId,
+                                 java.math.BigDecimal valorEstornado) {
         PagamentoAssinatura pg = paymentId == null || paymentId.isBlank() ? null
                 : pagamentos.findByAsaasPaymentId(paymentId).orElse(null);
 
@@ -671,12 +755,11 @@ public class AssinaturaService {
         }
 
         if ("PAYMENT_PARTIALLY_REFUNDED".equals(evento)) {
-            // NAO marca como estornada: isso tiraria a mensalidade INTEIRA do faturamento por causa de
-            // uma devolucao parcial. Guardar quanto voltou pede uma coluna propria -- e o item 3.6 da
-            // varredura, que continua aberto. Ate la, a mensalidade conta cheia e o aviso fica aqui.
-            log.warn("ESTORNO PARCIAL na cobranca {} (loja {}): o acesso NAO foi cortado e a mensalidade "
-                            + "continua CHEIA no faturamento. Confira o valor devolvido no Asaas e ajuste "
-                            + "a mao. Ver varredura 3.6.", paymentId, lojaId);
+            // Item 3.6 FECHADO. Continua NAO marcando como estornada -- isso tiraria a mensalidade
+            // inteira do faturamento por causa de uma devolucao parcial, e o acesso segue de pe,
+            // porque o cliente pagou. O que faltava era o VALOR: sem ele o mes contava cheio e o
+            // unico rastro era esta linha de log, que ninguem le ao fechar o mes.
+            marcarEstornoParcial(paymentId, valorEstornado);
             return;
         }
 
@@ -739,6 +822,51 @@ public class AssinaturaService {
         prazoDeAcesso(lojaId, null);   // pagando, o acesso nao tem data de fim
         AUDITORIA.warn("ACESSO DEVOLVIDO a loja {}: a disputa foi vencida ({}). A mensalidade volta ao "
                 + "faturamento e o acesso volta a nao ter prazo.", lojaId, evento);
+    }
+
+    /**
+     * Guarda quanto voltou ao cliente numa devolucao PARCIAL.
+     *
+     * <h2>Por que isto nao e o mesmo que o estorno integral</h2>
+     * <p>O integral tira a cobranca do faturamento e corta o acesso: o cliente nao pagou nada. O
+     * parcial e outra coisa -- ele pagou, uma parte voltou, e o acesso continua de pe. O
+     * faturamento desconta o que voltou em vez de perder a cobranca inteira.</p>
+     *
+     * <h2>Quando o valor nao vem</h2>
+     * <p>A pagina de webhooks do Asaas mostra o campo {@code refunds} no payload mas nao descreve a
+     * estrutura dele. Entao o valor e lido quando vem e, quando nao vem, a cobranca e marcada com
+     * {@code estornado_valor} nulo e um aviso alto: melhor o mes contar cheio com um aviso visivel
+     * que inventar um numero. Nao se chuta valor em faturamento.</p>
+     */
+    private void marcarEstornoParcial(String paymentId, java.math.BigDecimal valorEstornado) {
+        if (paymentId == null || paymentId.isBlank()) return;
+        pagamentos.findByAsaasPaymentId(paymentId).ifPresentOrElse(pg -> {
+            if (valorEstornado == null || valorEstornado.signum() <= 0) {
+                log.warn("ESTORNO PARCIAL na cobranca {} (loja {}): o aviso do Asaas nao trouxe o valor "
+                                + "devolvido. O acesso NAO foi cortado e a mensalidade continua CHEIA "
+                                + "no faturamento. Confira no Asaas e ajuste a mao.", paymentId, pg.lojaId);
+                return;
+            }
+            // Devolucoes somam: podem vir duas no mesmo pagamento.
+            java.math.BigDecimal antes = pg.estornadoValor == null
+                    ? java.math.BigDecimal.ZERO : pg.estornadoValor;
+            pg.estornadoValor = antes.add(valorEstornado);
+            java.math.BigDecimal cheio = pg.valor == null ? java.math.BigDecimal.ZERO : pg.valor;
+            if (pg.estornadoValor.compareTo(cheio) >= 0) {
+                // Voltou tudo, em partes. Ai e estorno integral: sai do faturamento.
+                pg.estornadoEm = OffsetDateTime.now();
+                log.warn("A soma dos estornos parciais da cobranca {} (loja {}) alcancou o valor cheio "
+                        + "(R$ {}). Tratando como estorno INTEGRAL: sai do faturamento.",
+                        paymentId, pg.lojaId, cheio);
+            }
+            pagamentos.save(pg);
+            log.warn("ESTORNO PARCIAL na cobranca {} (loja {}): R$ {} voltaram ao cliente (total "
+                            + "devolvido R$ {} de R$ {}). O acesso NAO foi cortado e o faturamento "
+                            + "desconta esse valor. Se a nota fiscal ja foi emitida, ela precisa ser "
+                            + "corrigida.",
+                    paymentId, pg.lojaId, valorEstornado, pg.estornadoValor, cheio);
+        }, () -> log.warn("Estorno parcial chegou para a cobranca {}, que nao esta no nosso faturamento",
+                paymentId));
     }
 
     private void marcarEstorno(String paymentId, String evento) {
