@@ -4,6 +4,7 @@ import br.com.bora.dto.ItemPedidoRequest;
 import br.com.bora.dto.NovoPedidoRequest;
 import br.com.bora.dto.PedidoCard;
 import br.com.bora.entity.Cliente;
+import br.com.bora.entity.LarguraDeColuna;
 import br.com.bora.entity.LogStatus;
 import br.com.bora.entity.Pedido;
 import br.com.bora.entity.PedidoItem;
@@ -304,13 +305,18 @@ public class PedidoService {
         p.clienteTelefone = in.clienteTelefone();
         // O id do Open Delivery e um UUID: inutil para o atendente. Usa o numero que o cliente ve.
         p.codigo = cortar(in.numeroExibicao() != null && !in.numeroExibicao().isBlank() ? in.numeroExibicao()
-                : in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000), 40);
+                : in.externalId() != null ? in.externalId() : ("#" + System.currentTimeMillis() % 1000000),
+                LarguraDeColuna.PEDIDO_CODIGO);
         // Texto do marketplace pode crescer (varias formas de pagamento): corta em vez de recusar o pedido.
-        p.formaPagamento = cortar(in.pagamento(), 255);
-        p.clienteTelefone = cortar(p.clienteTelefone, 60);
+        p.formaPagamento = cortar(in.pagamento(), LarguraDeColuna.PEDIDO_FORMA_PAGAMENTO);
+        p.clienteTelefone = cortar(p.clienteTelefone, LarguraDeColuna.PEDIDO_TELEFONE);
         p.origem = origemLabel;
         p.canalExterno = canalCodigo;
-        p.idExterno = in.externalId();
+        // O id do marketplace e a chave que acha este pedido depois (aceite, cancelamento, avanco de
+        // status). Nenhum canal manda id longo -- os do iFood sao UUID de 36 --, mas gravar sem corte
+        // numa coluna com limite perderia o pedido pelo mesmo caminho do endereco.
+        p.idExterno = encurtarAvisando(in.externalId(), LarguraDeColuna.PEDIDO_ID_EXTERNO,
+                "id do pedido no canal", in.externalId(), canalCodigo, lojaId);
         p.observacao = in.observacao();
         if (in.taxaEntrega() != null) p.taxaEntrega = in.taxaEntrega();
         p.status = StatusPedido.RECEBIDO;
@@ -371,8 +377,15 @@ public class PedidoService {
         p.valorTotal = in.total() != null && in.total().signum() > 0 ? in.total() : soma;
         // O marketplace manda endereco e bairro no payload; eles iam so para o texto da observacao.
         // Em coluna, a tela de Entregas agrupa por bairro e quem entrega le o endereco deste pedido.
-        p.enderecoEntrega = in.endereco() == null || in.endereco().isBlank() ? null : in.endereco().trim();
-        p.bairroEntrega = in.bairro() == null || in.bairro().isBlank() ? null : in.bairro().trim();
+        // CORTA. O mesmo endereco ia cortado em 500 para cliente.endereco (varchar(500) desde a V37,
+        // largada justamente por causa de endereco de marketplace) e SEM corte para uma coluna de
+        // 255: o Postgres recusava o INSERT e o PEDIDO INTEIRO se perdia, com o entregador a caminho.
+        // A V53 igualou as larguras, e o corte aqui e a garantia de que nem um endereco absurdo
+        // derruba a venda. Ver LarguraDeColuna.
+        p.enderecoEntrega = encurtarAvisando(in.endereco(), LarguraDeColuna.PEDIDO_ENDERECO,
+                "endereco de entrega", in.externalId(), canalCodigo, lojaId);
+        p.bairroEntrega = encurtarAvisando(in.bairro(), LarguraDeColuna.PEDIDO_BAIRRO,
+                "bairro", in.externalId(), canalCodigo, lojaId);
         // Retirada vinha so como o texto "RETIRADA NO BALCAO" que o normalizador escreve na observacao.
         p.tipoEntrega = p.ehRetirada() ? "RETIRADA" : "ENTREGA";
         Pedido salvo = repo.save(p);
@@ -496,17 +509,43 @@ public class PedidoService {
         Cliente c = new Cliente();
         c.lojaId = lojaId;
         // Texto do marketplace não pode recusar o pedido por tamanho: corta no limite de cada coluna.
-        c.nome = cortar(in.clienteNome() == null || in.clienteNome().isBlank() ? "Cliente marketplace" : in.clienteNome(), 160);
-        c.telefone = cortar(telReal, 40);
-        c.endereco = cortar(in.endereco(), 500);
-        c.bairro = cortar(in.bairro(), 100);
+        c.nome = cortar(in.clienteNome() == null || in.clienteNome().isBlank() ? "Cliente marketplace" : in.clienteNome(),
+                LarguraDeColuna.CLIENTE_NOME);
+        c.telefone = cortar(telReal, LarguraDeColuna.CLIENTE_TELEFONE);
+        c.endereco = cortar(in.endereco(), LarguraDeColuna.CLIENTE_ENDERECO);
+        c.bairro = cortar(in.bairro(), LarguraDeColuna.CLIENTE_BAIRRO);
         c.canalExterno = ext == null ? null : canalCodigo;
-        c.idExterno = ext;
+        c.idExterno = cortar(ext, LarguraDeColuna.CLIENTE_ID_EXTERNO);
         return clientes.save(c).id;
     }
 
     private static String cortar(String v, int max) {
         return v == null || v.length() <= max ? v : v.substring(0, max);
+    }
+
+    /**
+     * Corta o que vem de fora para caber na coluna, e AVISA quando cortou.
+     *
+     * <p>Vazio vira nulo (campo em branco do marketplace nao e endereco em branco: e ausencia).</p>
+     *
+     * <p><b>Por que cortar e nao recusar:</b> o Postgres recusa o INSERT quando o texto nao cabe, e
+     * nessa hora o pedido INTEIRO se perde -- nao o campo. A venda ja aconteceu do outro lado e o
+     * entregador esta a caminho. Endereco cortado em 500 caracteres ainda da para entregar; pedido
+     * que nao existe no painel, nao.</p>
+     *
+     * <p>E por que AVISAR: cortar perde informacao. Se o fim de um endereco for cortado algum dia,
+     * tem que haver uma linha no log dizendo qual pedido, em vez de o entregador descobrir na rua.</p>
+     */
+    private String encurtarAvisando(String valor, int max, String campo, String idExterno,
+                                    String canal, Long lojaId) {
+        if (valor == null || valor.isBlank()) return null;
+        String limpo = valor.trim();
+        if (limpo.length() <= max) return limpo;
+        AUDITORIA.warn("Pedido {} de {} na loja {}: o {} tinha {} caracteres e foi CORTADO em {}. "
+                        + "O pedido entrou; confira o endereco com o cliente antes de despachar. "
+                        + "Texto completo: {}",
+                idExterno, canal, lojaId, campo, limpo.length(), max, limpo);
+        return limpo.substring(0, max);
     }
 
     /** Telefone de pessoa, ou null para vazio e para central (0800/0300/0500/0900 ou curto demais). */
