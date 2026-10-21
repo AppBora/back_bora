@@ -233,4 +233,62 @@ class PedidoServiceContaDoBalcaoTest {
         br.com.bora.entity.PedidoItem item = (br.com.bora.entity.PedidoItem) salvos.getValue().get(0);
         assertEquals(List.of(), br.com.bora.service.ComplementosDoItem.ler(item.getComplementos()));
     }
+
+    // ---------------------------------------------------------------- adicional baixa estoque (2.6)
+
+    /**
+     * O balcao tambem baixa o insumo do adicional, e NUNCA recusa.
+     *
+     * <p>O operador esta com o copo na mao: travar a venda com o cliente na frente e pior que o saldo
+     * negativo, que pelo menos denuncia que a contagem esta errada. E a mesma regra do produto.</p>
+     */
+    @Test
+    void oBALCAObaixaOinsumoDOadicional_SEMrecusar() {
+        when(complementos.aplicar(anyLong(), any(), any())).thenReturn(
+                new ComplementoService.Escolha(new BigDecimal("3.00"),
+                        List.of(new ComplementoService.Escolhido(12L, "Granola", new BigDecimal("3.00"),
+                                50L, new BigDecimal("0.030")))));
+
+        produto(10L, "Acai 500ml", "20.00");
+
+        service.criar(new NovoPedidoRequest(null, "1", "Dinheiro", "Balcao", null, false,
+                List.of(new ItemPedidoRequest(10L, 3, List.of(12L))), null, null, null, null));
+
+        ArgumentCaptor<List<ComplementoService.Escolhido>> lista = ArgumentCaptor.forClass(List.class);
+        verify(insumos).consumirAdicionais(eq(1L), lista.capture(), eq(3), eq(false));
+        assertEquals("Granola", lista.getValue().get(0).nome());
+        assertEquals(50L, lista.getValue().get(0).insumoId(), "o insumo tem que chegar junto");
+    }
+
+    // ---------------------------------------------------------------- o custo do adicional (V55)
+
+    /**
+     * Custo nulo quer dizer "nao cadastrado", e nao "de graca" — e isso nao pode mudar.
+     *
+     * <p>O relatorio de desempenho soma {@code custoUnitario} tratando nulo como zero. Gravar 0,00 no
+     * lugar de nulo nao muda a soma de hoje, mas apaga a diferenca entre "produto sem custo
+     * cadastrado" e "produto que nao custa nada" -- e e nesse campo que o dono vai olhar quando a
+     * margem nao fechar. Entao: sem custo de adicional, o custo do item fica exatamente como estava.</p>
+     */
+    @Test
+    void SEMcustoDEadicional_oCUSTOdoITEMficaCOMOestava() {
+        assertNull(PedidoService.somarCustoDoAdicional(null, BigDecimal.ZERO),
+                "custo nao cadastrado continua nao cadastrado");
+        assertNull(PedidoService.somarCustoDoAdicional(null, null));
+        assertEquals(0, PedidoService.somarCustoDoAdicional(new BigDecimal("4.00"), BigDecimal.ZERO)
+                .compareTo(new BigDecimal("4.00")));
+    }
+
+    @Test
+    void COMcustoDEadicional_aSOMAacontece() {
+        assertEquals(0, PedidoService.somarCustoDoAdicional(
+                new BigDecimal("4.00"), new BigDecimal("0.60")).compareTo(new BigDecimal("4.60")));
+    }
+
+    @Test
+    void comBASEdesconhecidaMASadicionalCOMcusto_oADICIONALnaoEHjogadoFORA() {
+        // Aqui ha um numero de verdade para somar. Devolver nulo esconderia um custo que existe.
+        assertEquals(0, PedidoService.somarCustoDoAdicional(null, new BigDecimal("0.60"))
+                .compareTo(new BigDecimal("0.60")));
+    }
 }

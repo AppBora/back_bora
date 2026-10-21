@@ -521,7 +521,26 @@ public class PublicController {
                             lojaId, e.insumo, prod.nome, qtd);
                     throw new ResponseStatusException(HttpStatus.CONFLICT, esgotou(prod.nome));
                 }
-                item.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+                // O adicional tambem sai do estoque desde a V55 (item 2.6), e aqui tambem RECUSA.
+                BigDecimal custoAdicional;
+                try {
+                    custoAdicional = insumos.consumirAdicionais(lojaId, escolha.escolhidos(), qtd, true);
+                } catch (br.com.bora.service.InsumoService.SemAdicional e) {
+                    // Aqui o cliente le o nome do ADICIONAL, nao do produto: o acai tem, o que acabou
+                    // foi a granola que ele marcou. Dizer "o produto esgotou" mandaria ele embora de
+                    // uma venda que ainda da para fazer sem o extra.
+                    log.warn("Loja {}: pedido do cardapio recusado por falta do insumo \"{}\" do "
+                            + "adicional \"{}\" ({} un de \"{}\"). Reponha o insumo ou tire o "
+                            + "adicional do cardapio.", lojaId, e.insumo, e.adicional, qtd, prod.nome);
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "O adicional \"" + e.adicional + "\" acabou. Tire ele do pedido ou "
+                                    + "escolha outro.");
+                }
+                // Mesma regra do balcao, e o ajudante mora la para os dois canais nao divergirem:
+                // sem custo de adicional o custo do item fica como estava, inclusive nulo (que quer
+                // dizer "custo nao cadastrado", nao "de graca").
+                item.setCustoUnitario(br.com.bora.service.PedidoService.somarCustoDoAdicional(
+                        custoFicha != null ? custoFicha : prod.custo, custoAdicional));
                 // Fica gravado no item qual dos dois caminhos rodou. Quem cancelar o pedido devolve
                 // exatamente isso, sem depender da ficha que o lojista tiver no dia do cancelamento.
                 item.setConsumiuFicha(custoFicha != null);

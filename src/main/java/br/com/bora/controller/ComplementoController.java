@@ -80,6 +80,16 @@ public class ComplementoController {
                         ci.grupoId = cg.id;
                         ci.nome = ni.trim();
                         try { ci.preco = new BigDecimal(str(m.get("preco"))); } catch (Exception e) { ci.preco = BigDecimal.ZERO; }
+                        // Insumo que o adicional consome (V55, item 2.6). Os dois campos andam
+                        // juntos: insumo sem quantidade nao baixa nada, e quantidade sem insumo nao
+                        // tem o que baixar -- nesses casos fica nulo nos dois, que e o padrao
+                        // "adicional que nao mexe no estoque".
+                        Long insumoId = longVal(m.get("insumoId"));
+                        BigDecimal quanto = decVal(m.get("quantidade"));
+                        if (insumoId != null && quanto != null && quanto.signum() > 0) {
+                            ci.insumoId = insumoId;
+                            ci.quantidade = quanto;
+                        }
                         itens.save(ci);
                     }
                 }
@@ -106,6 +116,8 @@ public class ComplementoController {
                 mi.put("id", i.id);
                 mi.put("nome", i.nome);
                 mi.put("preco", i.preco);
+                mi.put("insumoId", i.insumoId);
+                mi.put("quantidade", i.quantidade);
                 return mi;
             }).toList());
             out.add(m);
@@ -120,4 +132,17 @@ public class ComplementoController {
 
     private String str(Object o) { return o == null ? null : String.valueOf(o); }
     private int intVal(Object o, int def) { try { return Integer.parseInt(String.valueOf(o)); } catch (Exception e) { return def; } }
+
+    /** Nulo quando o campo nao veio, veio vazio ou veio ilegivel — nunca estoura a gravacao. */
+    private Long longVal(Object o) {
+        if (o == null) return null;
+        try { return Long.valueOf(String.valueOf(o).trim()); } catch (Exception e) { return null; }
+    }
+
+    /** Aceita virgula, porque o lojista digita "0,030" no campo de quantidade. */
+    private BigDecimal decVal(Object o) {
+        if (o == null) return null;
+        try { return new BigDecimal(String.valueOf(o).trim().replace(",", ".")); }
+        catch (Exception e) { return null; }
+    }
 }

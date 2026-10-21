@@ -53,7 +53,7 @@ class VendaSemEstoqueTest {
     void montar() {
         insumos = mock(InsumoRepository.class);
         fichas = mock(ProdutoInsumoRepository.class);
-        service = new InsumoService(insumos, fichas, mock(ProdutoRepository.class), mock(AuthContext.class));
+        service = new InsumoService(insumos, fichas, mock(ProdutoRepository.class), mock(br.com.bora.repository.ComplementoItemRepository.class), mock(AuthContext.class));
     }
 
     /** Uma ficha de um insumo só: cada unidade do produto consome {@code porUnidade}. */

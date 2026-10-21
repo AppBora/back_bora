@@ -513,4 +513,90 @@ class PedidoDoCardapioTest {
         assertNull(p.enderecoEntrega);
         assertTrue(p.ehRetirada());
     }
+
+    // ---------------------------------------------------------------- adicional baixa estoque (2.6)
+
+    /** Um adicional de granola que consome 0,030 do insumo 50. */
+    private static ComplementoService.Escolha comGranola() {
+        return new ComplementoService.Escolha(new BigDecimal("3.00"),
+                List.of(new ComplementoService.Escolhido(12L, "Granola", new BigDecimal("3.00"),
+                        50L, new BigDecimal("0.030"))));
+    }
+
+    /**
+     * O checkout do cardapio manda o adicional escolhido para o consumo de insumo.
+     *
+     * <p>Teste de servico nao prova fiacao de controller -- isso ja passou verde duas vezes em
+     * 21/10/2026, com mutacao apagando o conserto inteiro dentro do controller. Aqui o que se cobra e
+     * so a ligacao: o que o cliente marcou chega ao {@code consumirAdicionais}, no modo que RECUSA.</p>
+     */
+    @Test
+    void oADICIONALescolhidoCHEGAaoCONSUMOdeINSUMO() {
+        when(complementos.aplicar(anyLong(), any(), any())).thenReturn(comGranola());
+
+        controller.pedirOnline(1L, corpo("itens",
+                List.of(Map.of("produtoId", 10, "quantidade", 2, "complementos", List.of(12)))), requisicao());
+
+        var lista = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(insumos).consumirAdicionais(eq(1L), lista.capture(), eq(2), eq(true));
+        assertEquals(1, lista.getValue().size());
+        assertEquals("Granola", ((ComplementoService.Escolhido) lista.getValue().get(0)).nome());
+    }
+
+    /**
+     * Sem o insumo do adicional, o pedido e RECUSADO -- e a mensagem fala do ADICIONAL.
+     *
+     * <p>Dizer "o produto esgotou" mandaria o cliente embora de uma venda que ainda da para fazer sem
+     * o extra. O acai tem; o que acabou foi a granola que ele marcou.</p>
+     */
+    @Test
+    void semOinsumoDOadicional_oPEDIDOeRECUSADOfalandoDOadicional() {
+        when(complementos.aplicar(anyLong(), any(), any())).thenReturn(comGranola());
+        when(insumos.consumirAdicionais(anyLong(), any(), anyInt(), eq(true)))
+                .thenThrow(new InsumoService.SemAdicional("Granola", "Granola Mae Terra 1kg"));
+
+        var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("itens",
+                        List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))),
+                        requisicao()));
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
+        assertTrue(erro.getReason().contains("Granola"), "a mensagem foi: " + erro.getReason());
+        assertFalse(erro.getReason().contains("Mae Terra"),
+                "o nome do INSUMO e vocabulario de dentro da loja, nao vai para o cliente: "
+                        + erro.getReason());
+    }
+
+    /** O custo do adicional entra no custo do item, senao a margem do cardapio sai melhor do que e. */
+    @Test
+    void oCUSTOdoADICIONALsomaNOcustoDOitem() {
+        when(complementos.aplicar(anyLong(), any(), any())).thenReturn(comGranola());
+        when(insumos.consumirAdicionais(anyLong(), any(), anyInt(), anyBoolean()))
+                .thenReturn(new BigDecimal("0.60"));
+        when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean()))
+                .thenReturn(new BigDecimal("4.00"));
+
+        controller.pedirOnline(1L, corpo("itens",
+                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), requisicao());
+
+        var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
+        verify(itens).save(c.capture());
+        assertEquals(0, c.getValue().getCustoUnitario().compareTo(new BigDecimal("4.60")),
+                "R$ 4,00 da ficha + R$ 0,60 do adicional");
+    }
+
+    /** O insumo e a quantidade ficam GRAVADOS no item, senao o cancelamento nao sabe o que devolver. */
+    @Test
+    void oITEMguardaOinsumoEaQUANTIDADEdoADICIONAL() {
+        when(complementos.aplicar(anyLong(), any(), any())).thenReturn(comGranola());
+
+        controller.pedirOnline(1L, corpo("itens",
+                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), requisicao());
+
+        var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
+        verify(itens).save(c.capture());
+        var guardado = br.com.bora.service.ComplementosDoItem.ler(c.getValue().getComplementos());
+        assertEquals(50L, guardado.get(0).insumoId(), "sem o insumo gravado, o cancelamento adivinha");
+        assertEquals(0, guardado.get(0).quantidade().compareTo(new BigDecimal("0.030")));
+    }
 }

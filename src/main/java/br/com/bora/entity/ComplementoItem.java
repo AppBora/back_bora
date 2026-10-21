@@ -21,4 +21,16 @@ public class ComplementoItem {
     public Long grupoId;
     public String nome;
     public BigDecimal preco = BigDecimal.ZERO;
+
+    /**
+     * Insumo que este adicional consome, ou {@code null} quando ele nao baixa estoque.
+     *
+     * <p>Nulo e o padrao, e e o comportamento de tudo que foi cadastrado antes da V55: adicional sem
+     * insumo ligado nao sai do estoque nem entra no custo, exatamente como era antes.</p>
+     */
+    @Column(name = "insumo_id")
+    public Long insumoId;
+
+    /** Quanto do insumo sai por unidade vendida, na unidade do insumo (ex.: 0,0300 kg). */
+    public BigDecimal quantidade;
 }

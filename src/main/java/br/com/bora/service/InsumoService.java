@@ -23,12 +23,15 @@ public class InsumoService {
     private final InsumoRepository insumos;
     private final ProdutoInsumoRepository fichas;
     private final ProdutoRepository produtos;
+    private final br.com.bora.repository.ComplementoItemRepository adicionais;
     private final AuthContext ctx;
 
-    public InsumoService(InsumoRepository insumos, ProdutoInsumoRepository fichas, ProdutoRepository produtos, AuthContext ctx) {
+    public InsumoService(InsumoRepository insumos, ProdutoInsumoRepository fichas, ProdutoRepository produtos,
+                         br.com.bora.repository.ComplementoItemRepository adicionais, AuthContext ctx) {
         this.insumos = insumos;
         this.fichas = fichas;
         this.produtos = produtos;
+        this.adicionais = adicionais;
         this.ctx = ctx;
     }
 
@@ -89,6 +92,22 @@ public class InsumoService {
                             + ". Tire da ficha desses produtos antes de excluir, senao o custo deles "
                             + "fica errado e o estoque para de baixar.");
         }
+
+        // O MESMO motivo, no segundo lugar onde um insumo e usado: desde a V55 o adicional aponta
+        // para insumo. Sem esta recusa, apagar a "Granola" faria todo adicional de granola parar de
+        // baixar estoque em silencio -- exatamente a ficha fantasma do item 2.5, agora no adicional.
+        // A FK da V55 tambem recusaria, mas com erro de banco; aqui a mensagem diz o que fazer.
+        var emAdicional = adicionais.findByLojaIdAndInsumoId(loja, id);
+        if (!emAdicional.isEmpty()) {
+            String quaisAd = emAdicional.stream().map(ci -> ci.nome).distinct().limit(5)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String sobraAd = emAdicional.size() > 5 ? " e outros" : "";
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "\"" + alvo.nome + "\" e o insumo dos adicionais: " + quaisAd + sobraAd
+                            + ". Desligue o insumo desses adicionais antes de excluir, senao eles "
+                            + "param de baixar estoque e o custo da venda fica errado.");
+        }
+
         insumos.delete(alvo);
     }
 
@@ -180,6 +199,107 @@ public class InsumoService {
             super("Sem estoque do insumo: " + insumo);
             this.insumo = insumo;
         }
+    }
+
+    /**
+     * O insumo de um ADICIONAL acabou. Serve para o canal que precisa recusar a venda.
+     *
+     * <p>Carrega os dois nomes porque eles vao para leitores diferentes: o cliente do cardapio
+     * precisa saber que a <b>granola</b> acabou -- o adicional que ele marcou na tela -- e o lojista
+     * precisa saber qual <b>insumo</b> repor. Dizer "o produto acabou" seria mentira: o acai tem, o
+     * que falta e o extra.</p>
+     */
+    public static class SemAdicional extends RuntimeException {
+        public final String adicional;
+        public final String insumo;
+
+        public SemAdicional(String adicional, String insumo) {
+            super("Sem estoque do insumo \"" + insumo + "\" do adicional \"" + adicional + "\"");
+            this.adicional = adicional;
+            this.insumo = insumo;
+        }
+    }
+
+    /**
+     * Consome os insumos dos ADICIONAIS escolhidos e devolve quanto eles custam por unidade vendida.
+     *
+     * <h2>O item 2.6 da varredura</h2>
+     * <p>Adicional nao saia do estoque nem entrava no custo, porque o cadastro nao tinha onde guardar
+     * isso. Numa acaiteria metade do valor da venda esta nos adicionais: o estoque de granola e de
+     * leite em po ia embora sem nenhum registro, e a margem de cada venda saia melhor do que era.</p>
+     *
+     * <p>Quem passa aqui e a lista que vai ser <b>gravada no item do pedido</b>, nao o cadastro de
+     * hoje. E o mesmo cuidado do nome e do preco: os adicionais sao apagados e recriados a cada
+     * gravacao do produto, com ids novos, entao o cadastro de amanha nao diz o que saiu hoje.</p>
+     *
+     * @param escolhidos  o que o cliente marcou, com insumo e quantidade de quando pediu
+     * @param qtdPedido   quantas unidades do item; cada uma leva os adicionais escolhidos
+     * @param exigirEstoque {@code true} recusa quando falta (cardapio publico); {@code false} deixa
+     *                      ir a negativo e so avisa no log (balcao: o operador esta com o produto na
+     *                      mao, e travar a venda com o cliente na frente e pior que o saldo negativo)
+     * @return o custo dos adicionais por UNIDADE vendida; {@code ZERO} quando nenhum tem insumo
+     * @throws SemAdicional com {@code exigirEstoque} e sem saldo
+     */
+    @Transactional
+    public BigDecimal consumirAdicionais(Long lojaId, List<ComplementoService.Escolhido> escolhidos,
+                                         int qtdPedido, boolean exigirEstoque) {
+        if (escolhidos == null || escolhidos.isEmpty() || qtdPedido <= 0) return BigDecimal.ZERO;
+        BigDecimal custoUnit = BigDecimal.ZERO;
+        for (ComplementoService.Escolhido e : escolhidos) {
+            if (!e.consomeInsumo()) continue;
+            Insumo in = insumos.findByIdAndLojaId(e.insumoId(), lojaId).orElse(null);
+            if (in == null) {
+                // Nao pode acontecer: a V55 tem chave estrangeira e o `excluir` recusa. Se acontecer,
+                // e dado de antes da V55 ou alguem mexeu no banco na mao -- e o aviso vale mais que
+                // um erro, porque a venda esta no meio.
+                log.warn("Loja {}: o adicional \"{}\" aponta para o insumo {}, que nao existe. O "
+                                + "estoque dele nao foi baixado e o custo da venda sai menor.",
+                        lojaId, e.nome(), e.insumoId());
+                continue;
+            }
+            BigDecimal porUnidade = e.quantidade();
+            custoUnit = custoUnit.add((in.custo == null ? BigDecimal.ZERO : in.custo).multiply(porUnidade));
+            BigDecimal precisa = porUnidade.multiply(BigDecimal.valueOf(qtdPedido));
+            if (exigirEstoque) {
+                // Quem recusa e o BANCO, nao uma conferencia antes: duas vendas ao mesmo tempo leriam
+                // o mesmo saldo e as duas passariam.
+                if (insumos.consumirSeTiver(in.id, lojaId, precisa) == 0) {
+                    throw new SemAdicional(e.nome(), in.nome);
+                }
+            } else {
+                // O aviso e aproximado de proposito: o saldo lido aqui pode mudar antes da baixa. Vale
+                // como alerta de contagem errada, que e o que o lojista precisa saber -- e sem ele o
+                // numero ia a negativo calado, que foi o defeito do balcao no item 2.2.
+                if (in.estoque != null && in.estoque.compareTo(precisa) < 0) {
+                    log.warn("Loja {}: a venda levou {} de \"{}\" pelo adicional \"{}\", e o saldo "
+                                    + "era {}. O estoque vai ficar NEGATIVO -- a contagem desse insumo "
+                                    + "esta errada. A venda passou de proposito.",
+                            lojaId, precisa, in.nome, e.nome(), in.estoque);
+                }
+                insumos.mexerNoEstoque(in.id, lojaId, precisa.negate());
+            }
+        }
+        return custoUnit;
+    }
+
+    /**
+     * Desfaz o {@link #consumirAdicionais} de um item que nao vai acontecer. Espelho exato: mesma
+     * lista, mesma conta, sinal trocado. Nunca recusa -- cancelar nao pode travar.
+     *
+     * @return quantos adicionais tiveram insumo devolvido
+     */
+    @Transactional
+    public int devolverAdicionais(Long lojaId, List<ComplementoService.Escolhido> escolhidos, int qtdPedido) {
+        if (escolhidos == null || escolhidos.isEmpty() || qtdPedido <= 0) return 0;
+        int devolvidos = 0;
+        for (ComplementoService.Escolhido e : escolhidos) {
+            if (!e.consomeInsumo()) continue;
+            Insumo in = insumos.findByIdAndLojaId(e.insumoId(), lojaId).orElse(null);
+            if (in == null) continue;
+            insumos.mexerNoEstoque(in.id, lojaId, e.quantidade().multiply(BigDecimal.valueOf(qtdPedido)));
+            devolvidos++;
+        }
+        return devolvidos;
     }
 
     /**

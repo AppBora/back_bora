@@ -93,11 +93,28 @@ public class EstornoDaVendaService {
 
         List<PedidoItem> lista = itens.findByLojaIdAndPedidoIdOrderById(p.lojaId, p.id);
         int devolvidos = 0;
+        int adicionaisDevolvidos = 0;
         int naoDevolvidosPorFaltaDeMarca = 0;
         for (PedidoItem item : lista) {
             int qtd = item.getQuantidade() == null ? 1 : item.getQuantidade();
             if (qtd <= 0 || item.getProdutoId() == null) continue;
             Boolean porFicha = item.getConsumiuFicha();
+
+            // O ADICIONAL e independente do caminho do produto: um acai com ficha tecnica e um
+            // refrigerante sem ficha podem os dois levar granola. Por isso isto vem ANTES, e vale nos
+            // dois casos (V55, item 2.6).
+            //
+            // A regra de QUANDO devolver e a mesma do insumo da ficha, e pelo mesmo motivo: se a
+            // cozinha ja comecou, a granola foi para o copo. Devolver inflaria o estoque com comida
+            // que foi para o lixo.
+            //
+            // O que foi consumido vem gravado NO ITEM, nao relido do cadastro: os adicionais sao
+            // apagados e recriados a cada gravacao do produto, com ids novos, entao o cadastro de hoje
+            // nao diz o que saiu no dia do pedido -- e poderia devolver o insumo de OUTRO adicional.
+            if (podeDevolverInsumo) {
+                var marcados = ComplementosDoItem.ler(item.getComplementos());
+                if (insumos.devolverAdicionais(p.lojaId, marcados, qtd) > 0) adicionaisDevolvidos++;
+            }
 
             if (Boolean.TRUE.equals(porFicha)) {
                 if (podeDevolverInsumo && insumos.devolverFicha(p.lojaId, item.getProdutoId(), qtd)) devolvidos++;
@@ -123,6 +140,10 @@ public class EstornoDaVendaService {
         if (devolvidos > 0) {
             log.info("Pedido {} da loja {} cancelado em {}: estoque devolvido em {} item(ns)",
                     p.id, p.lojaId, statusAntes, devolvidos);
+        }
+        if (adicionaisDevolvidos > 0) {
+            log.info("Pedido {} da loja {} cancelado em {}: insumo de adicional devolvido em {} item(ns)",
+                    p.id, p.lojaId, statusAntes, adicionaisDevolvidos);
         }
         if (naoDevolvidosPorFaltaDeMarca > 0) {
             log.warn("Pedido {} da loja {} cancelado: {} item(ns) sao anteriores a V45 e nao registram "
@@ -165,6 +186,11 @@ public class EstornoDaVendaService {
             int qtd = item.getQuantidade() == null ? 1 : item.getQuantidade();
             if (qtd <= 0 || item.getProdutoId() == null) continue;
             Boolean porFicha = item.getConsumiuFicha();
+
+            // O adicional sai de novo junto, e com a lista gravada no item -- nao com o cadastro de
+            // hoje. `false` no ultimo argumento: nao recusa, a venda esta paga.
+            insumos.consumirAdicionais(p.lojaId, ComplementosDoItem.ler(item.getComplementos()), qtd, false);
+
             if (Boolean.TRUE.equals(porFicha)) {
                 // Modo que NAO recusa: a venda esta paga. Consome a ficha de HOJE -- mesma ressalva do
                 // devolver, e a melhor informacao que existe.

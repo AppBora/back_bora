@@ -59,7 +59,7 @@ class SalvarCadastroNaoApagaEstoqueTest {
         AuthContext ctx = mock(AuthContext.class);
         when(ctx.lojaId()).thenReturn(LOJA);
         produtos = new ProdutoService(repo, ctx);
-        insumos = new InsumoService(insumoRepo, mock(ProdutoInsumoRepository.class), repo, ctx);
+        insumos = new InsumoService(insumoRepo, mock(ProdutoInsumoRepository.class), repo, mock(br.com.bora.repository.ComplementoItemRepository.class), ctx);
         when(repo.save(any(Produto.class))).thenAnswer(i -> i.getArgument(0));
         when(insumoRepo.save(any(Insumo.class))).thenAnswer(i -> i.getArgument(0));
     }

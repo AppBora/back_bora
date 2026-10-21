@@ -94,6 +94,7 @@ class EstoqueVoltaNoCancelamentoTest {
         });
 
         InsumoService insumoService = new InsumoService(insumosRepo, fichas, produtos,
+                mock(br.com.bora.repository.ComplementoItemRepository.class),
                 mock(br.com.bora.security.AuthContext.class));
         // Este teste e sobre ESTOQUE. O estorno de cashback vive no FidelidadeService e tem
         // teste proprio em CancelamentoDevolveCashbackTest; aqui ele e mock para nao interferir.

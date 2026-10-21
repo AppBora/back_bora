@@ -40,10 +40,27 @@ public class ComplementoService {
      * recria os grupos e itens do produto a cada gravação, com ids novos da sequência. Guardar só o
      * id faria o histórico apontar para o nada na primeira vez que o lojista corrigisse um preço.</p>
      */
-    public record Escolhido(Long id, String nome, BigDecimal preco) {}
+    public record Escolhido(Long id, String nome, BigDecimal preco,
+                           Long insumoId, BigDecimal quantidade) {
+
+        /** Adicional que nao baixa estoque: o padrao, e tudo que foi gravado antes da V55. */
+        public Escolhido(Long id, String nome, BigDecimal preco) {
+            this(id, nome, preco, null, null);
+        }
+
+        /** Este adicional consome insumo? Precisa dos dois campos, e de quantidade positiva. */
+        public boolean consomeInsumo() {
+            return insumoId != null && quantidade != null && quantidade.signum() > 0;
+        }
+    }
 
     /** Acréscimo de preço e complementos escolhidos, já validados contra os grupos. */
     public record Escolha(BigDecimal acrescimo, List<Escolhido> escolhidos) {
+        /** Só os adicionais que têm insumo ligado — os que vão sair do estoque. */
+        public List<Escolhido> comInsumo() {
+            return escolhidos.stream().filter(Escolhido::consomeInsumo).toList();
+        }
+
         public List<String> nomes() { return escolhidos.stream().map(Escolhido::nome).toList(); }
 
         public String descricao(String nomeProduto) {
@@ -108,7 +125,11 @@ public class ComplementoService {
             for (ComplementoItem ci : sel) {
                 BigDecimal preco = ci.preco == null ? BigDecimal.ZERO : ci.preco;
                 acrescimo = acrescimo.add(preco);
-                resultado.add(new Escolhido(ci.id, ci.nome, preco));
+                // O insumo e a quantidade vao gravados NO ITEM DO PEDIDO, nao relidos do cadastro
+                // na hora de cancelar: o ComplementoController apaga e recria os adicionais a cada
+                // gravacao, com ids novos da sequencia, entao reler pelo id devolveria o insumo de
+                // OUTRO adicional. E o mesmo motivo pelo qual o nome e o preco ja ficavam aqui.
+                resultado.add(new Escolhido(ci.id, ci.nome, preco, ci.insumoId, ci.quantidade));
             }
         }
         return new Escolha(acrescimo, resultado);

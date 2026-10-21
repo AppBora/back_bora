@@ -237,7 +237,15 @@ public class PedidoService {
             it.setPrecoUnitario(preco);
             // se o produto tem ficha técnica, consome insumos e usa o custo da ficha; senão, custo do produto + baixa do próprio
             BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
-            it.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+            // O adicional tambem sai do estoque desde a V55, quando tem insumo ligado (item 2.6).
+            // Aqui NAO recusa, pelo mesmo motivo do produto: o operador esta com o copo na mao.
+            BigDecimal custoAdicional = insumos.consumirAdicionais(lojaId, escolha.escolhidos(), qtd, false);
+            // O custo do adicional soma no custo do item -- metade do valor da venda pode estar
+            // nele. Mas so quando ha custo de adicional: `custoUnitario` nulo quer dizer "custo nao
+            // cadastrado", e nao "de graca". Transformar nulo em zero aqui mudaria o significado de
+            // todo item de produto sem custo cadastrado, que nao tem nada a ver com adicional.
+            BigDecimal custoBase = custoFicha != null ? custoFicha : prod.custo;
+            it.setCustoUnitario(somarCustoDoAdicional(custoBase, custoAdicional));
             it.setConsumiuFicha(custoFicha != null); // ver PedidoItem.consumiuFicha: a devolucao le isto
             it.setSubtotal(subtotal);
             itens.add(it);
@@ -792,5 +800,19 @@ public class PedidoService {
     private Pedido buscarDaLoja(Long id) {
         return repo.findByIdAndLojaId(id, ctx.lojaId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado"));
+    }
+
+    /**
+     * Soma o custo dos adicionais ao custo do item, preservando o "nao sei".
+     *
+     * <p>{@code custoUnitario} nulo significa <b>custo nao cadastrado</b>, nao zero -- e o relatorio
+     * de desempenho trata nulo como zero na hora de somar, o que e outra coisa. Entao: sem custo de
+     * adicional, o custo do item fica exatamente como estava, inclusive nulo. Com custo de adicional,
+     * ha um numero de verdade para somar, e a base desconhecida entra como zero porque e o melhor
+     * que existe -- e o custo do adicional e informacao real que nao pode ser jogada fora.</p>
+     */
+    public static BigDecimal somarCustoDoAdicional(BigDecimal custoBase, BigDecimal custoAdicional) {
+        if (custoAdicional == null || custoAdicional.signum() == 0) return custoBase;
+        return (custoBase == null ? BigDecimal.ZERO : custoBase).add(custoAdicional);
     }
 }

@@ -69,4 +69,49 @@ class ComplementosDoItemTest {
     void listaNula_gravaVazio() {
         assertEquals(List.of(), ComplementosDoItem.ler(ComplementosDoItem.escrever(null)));
     }
+
+    // ---------------------------------------------------------------- o insumo do adicional (V55)
+
+    /**
+     * Registro gravado ANTES da V55 continua legivel, com o insumo nulo.
+     *
+     * <p>Sao os pedidos que ja estao no banco. Se a leitura estourasse, o "repetir pedido" pararia de
+     * funcionar em todo pedido antigo -- e o cancelamento deixaria de devolver estoque, porque e a
+     * mesma leitura.</p>
+     */
+    @Test
+    void registroANTESdaV55continuaLEGIVEL_comInsumoNULO() {
+        String antigo = "[{\"id\":12,\"nome\":\"Granola\",\"preco\":2.00}]";
+
+        var lido = ComplementosDoItem.ler(antigo);
+
+        assertNotNull(lido, "registro antigo nao pode virar \"nao sei o que foi escolhido\"");
+        assertEquals("Granola", lido.get(0).nome());
+        assertNull(lido.get(0).insumoId());
+        assertNull(lido.get(0).quantidade());
+        assertFalse(lido.get(0).consomeInsumo(), "sem insumo gravado, nao ha o que devolver");
+    }
+
+    /** O insumo e a quantidade sobrevivem a ida e volta — e o que o cancelamento le. */
+    @Test
+    void oINSUMOeaQUANTIDADEsobrevivemAidaEvolta() {
+        var comInsumo = new Escolhido(12L, "Granola", new BigDecimal("3.00"),
+                50L, new BigDecimal("0.030"));
+
+        var lido = ComplementosDoItem.ler(ComplementosDoItem.escrever(java.util.List.of(comInsumo)));
+
+        assertEquals(50L, lido.get(0).insumoId());
+        assertEquals(0, lido.get(0).quantidade().compareTo(new BigDecimal("0.030")));
+        assertTrue(lido.get(0).consomeInsumo());
+    }
+
+    /** Adicional sem insumo, gravado AGORA, tambem volta sem insumo — e nao estoura. */
+    @Test
+    void adicionalSEMinsumoVoltaSEMinsumo() {
+        var lido = ComplementosDoItem.ler(ComplementosDoItem.escrever(
+                java.util.List.of(new Escolhido(12L, "Borda recheada", new BigDecimal("8.00")))));
+
+        assertNull(lido.get(0).insumoId());
+        assertFalse(lido.get(0).consomeInsumo());
+    }
 }

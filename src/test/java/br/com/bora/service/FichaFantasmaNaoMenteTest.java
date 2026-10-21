@@ -41,6 +41,7 @@ class FichaFantasmaNaoMenteTest {
     private InsumoRepository insumos;
     private ProdutoInsumoRepository fichas;
     private ProdutoRepository produtos;
+    private br.com.bora.repository.ComplementoItemRepository adicionais;
     private AuthContext ctx;
     private InsumoService service;
 
@@ -52,9 +53,10 @@ class FichaFantasmaNaoMenteTest {
         insumos = mock(InsumoRepository.class);
         fichas = mock(ProdutoInsumoRepository.class);
         produtos = mock(ProdutoRepository.class);
+        adicionais = mock(br.com.bora.repository.ComplementoItemRepository.class);
         ctx = mock(AuthContext.class);
         when(ctx.lojaId()).thenReturn(LOJA);
-        service = new InsumoService(insumos, fichas, produtos, ctx);
+        service = new InsumoService(insumos, fichas, produtos, adicionais, ctx);
     }
 
     private Insumo insumo(long id, String nome) {
@@ -201,5 +203,43 @@ class FichaFantasmaNaoMenteTest {
 
         assertNull(service.consumirFicha(LOJA, PRODUTO, 1, true));
         verify(insumos, never()).consumirSeTiver(anyLong(), anyLong(), any());
+    }
+
+    // ---------------------------------------------------------------- o insumo do adicional (V55)
+
+    /**
+     * Insumo usado por um ADICIONAL tambem nao pode ser excluido.
+     *
+     * <p>Desde a V55 o adicional aponta para insumo (item 2.6), e isso criou um SEGUNDO lugar onde o
+     * problema desta classe poderia nascer: apagar a "Granola" faria todo adicional de granola parar
+     * de baixar estoque, em silencio. A chave estrangeira da V55 tambem recusaria, mas com erro de
+     * banco; a recusa aqui e a que diz ao lojista o que fazer.</p>
+     */
+    @Test
+    void excluirInsumoUSADOporADICIONALehRECUSADO() {
+        insumo(52L, "Granola");
+        when(fichas.findByLojaIdAndInsumoId(LOJA, 52L)).thenReturn(List.of());
+        br.com.bora.entity.ComplementoItem ad = new br.com.bora.entity.ComplementoItem();
+        ad.nome = "Granola crocante";
+        when(adicionais.findByLojaIdAndInsumoId(LOJA, 52L)).thenReturn(List.of(ad));
+
+        var erro = assertThrows(ResponseStatusException.class, () -> service.excluir(52L));
+
+        assertEquals(HttpStatus.CONFLICT, erro.getStatusCode());
+        assertTrue(erro.getReason().contains("Granola crocante"),
+                "a mensagem tem que dizer QUAL adicional usa o insumo. Foi: " + erro.getReason());
+        verify(insumos, never()).delete(any(Insumo.class));
+    }
+
+    /** Insumo que nao esta em ficha NEM em adicional continua sendo excluido. */
+    @Test
+    void insumoLIVREdosDOISusosContinuaSENDOexcluido() {
+        Insumo avulso = insumo(53L, "Guardanapo");
+        when(fichas.findByLojaIdAndInsumoId(LOJA, 53L)).thenReturn(List.of());
+        when(adicionais.findByLojaIdAndInsumoId(LOJA, 53L)).thenReturn(List.of());
+
+        assertDoesNotThrow(() -> service.excluir(53L));
+
+        verify(insumos).delete(avulso);
     }
 }
