@@ -175,14 +175,49 @@ class PagamentoForaDoAsaasTest {
 
     @Test
     void registrarDuasVezesNoMESMODIANaoDuplicaOPagamento() {
-        // Idempotencia: o `existsByAsaasPaymentId` do registrarPagamento e a guarda. Aqui simulamos o
-        // segundo clique, com o registro ja existindo.
+        // A INTENCAO deste teste nao mudou -- clique duplo nao pode virar dois pagamentos -- mas o
+        // MECANISMO mudou em 21/10/2026. Antes, o segundo registro era descartado em SILENCIO pelo
+        // existsByAsaasPaymentId, e a tela dizia "Pagamento registrado": isso protegia contra o
+        // clique duplo e, pelo mesmo caminho, PERDIA o segundo pagamento de verdade.
+        //
+        // Agora o servidor RECUSA com 409 e pede confirmacao. A protecao continua (nada e gravado),
+        // e quem decide se e outro pagamento e o dono. Ver DoisPagamentosNoMesmoDiaTest.
         when(asaas.cobrancaAbertaDaAssinatura(ASSINATURA)).thenReturn(null);
-        when(pagamentos.existsByAsaasPaymentId(startsWith("manual:"))).thenReturn(true);
+        PagamentoAssinatura jaRegistrado = new PagamentoAssinatura();
+        jaRegistrado.lojaId = LOJA;
+        jaRegistrado.asaasPaymentId = "manual:" + LOJA + ":" + hojeNoBrasil() + ":1";
+        jaRegistrado.valor = new BigDecimal("199.00");
+        when(pagamentos.findByLojaIdAndPagoEmGreaterThanEqualAndPagoEmLessThan(
+                eq(LOJA), any(), any())).thenReturn(java.util.List.of(jaRegistrado));
 
-        registrar("199.00");
+        var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> registrar("199.00"));
 
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
         verify(pagamentos, never()).save(any(PagamentoAssinatura.class));
+    }
+
+    @Test
+    void confirmando_oSEGUNDOpagamentoDoDiaEhGRAVADO() {
+        // O outro lado da mesma moeda: quando sao DOIS pagamentos de verdade, os dois tem que entrar.
+        // Antes isto era impossivel -- o segundo desaparecia calado.
+        when(asaas.cobrancaAbertaDaAssinatura(ASSINATURA)).thenReturn(null);
+        PagamentoAssinatura jaRegistrado = new PagamentoAssinatura();
+        jaRegistrado.lojaId = LOJA;
+        jaRegistrado.asaasPaymentId = "manual:" + LOJA + ":" + hojeNoBrasil() + ":1";
+        jaRegistrado.valor = new BigDecimal("199.00");
+        when(pagamentos.findByLojaIdAndPagoEmGreaterThanEqualAndPagoEmLessThan(
+                eq(LOJA), any(), any())).thenReturn(java.util.List.of(jaRegistrado));
+        when(pagamentos.existsByAsaasPaymentId("manual:" + LOJA + ":" + hojeNoBrasil() + ":1"))
+                .thenReturn(true);
+
+        service.registrarPagamentoRecebidoForaDoAsaas(LOJA, new BigDecimal("199.00"),
+                hojeNoBrasil(), "segunda mensalidade", true);
+
+        var cap = org.mockito.ArgumentCaptor.forClass(PagamentoAssinatura.class);
+        verify(pagamentos, atLeastOnce()).save(cap.capture());
+        assertEquals("manual:" + LOJA + ":" + hojeNoBrasil() + ":2", cap.getAllValues().get(0).asaasPaymentId,
+                "o segundo tem que ganhar chave propria, senao cai no descarte silencioso");
     }
 
     @Test

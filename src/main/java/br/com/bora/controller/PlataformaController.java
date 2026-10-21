@@ -315,8 +315,12 @@ public class PlataformaController {
             }
         }
 
+        // Quem confirma que e um SEGUNDO pagamento do mesmo dia e valor e o dono, na tela. Sem isto o
+        // sistema escolhia sozinho pelo pior caminho: jogava o segundo fora e dizia que registrou.
+        boolean confirmado = Boolean.TRUE.equals(corpo.get("confirmarSegundoPagamento"))
+                || "true".equalsIgnoreCase(String.valueOf(corpo.get("confirmarSegundoPagamento")));
         var r = assinaturas.registrarPagamentoRecebidoForaDoAsaas(
-                lojaId, valor, pagoEm, (String) corpo.get("observacao"));
+                lojaId, valor, pagoEm, (String) corpo.get("observacao"), confirmado);
 
         Map<String, Object> resp = new java.util.LinkedHashMap<>();
         resp.put("baixadoNoAsaas", r.baixadoNoAsaas());

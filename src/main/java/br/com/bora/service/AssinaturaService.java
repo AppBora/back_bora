@@ -390,6 +390,39 @@ public class AssinaturaService {
     @Transactional
     public PagamentoRegistrado registrarPagamentoRecebidoForaDoAsaas(
             Long lojaId, BigDecimal valor, java.time.LocalDate pagoEm, String observacao) {
+        return registrarPagamentoRecebidoForaDoAsaas(lojaId, valor, pagoEm, observacao, false);
+    }
+
+    /**
+     * O mesmo, podendo CONFIRMAR que e um segundo pagamento do mesmo dia e valor.
+     *
+     * <h2>O defeito que isto fecha (medido em 21/10/2026)</h2>
+     * <p>Sem cobranca aberta no Asaas, a chave do registro era
+     * {@code "manual:" + lojaId + ":" + dia} -- a mesma para todo pagamento daquela loja naquele dia.
+     * E o {@code registrarPagamento} descarta id repetido <b>em silencio</b>. Dois pagamentos
+     * registrados no mesmo dia: o segundo desaparecia do faturamento, e a tela dizia "Pagamento
+     * registrado".</p>
+     *
+     * <p><b>Conferido na producao:</b> a loja 18 tem dois registros de R$ 199 no mesmo dia
+     * (15/10/2026), somando os R$ 398 que ela pagou. <b>Nao se perdeu nada</b> -- por sorte: um dos
+     * dois achou cobranca aberta no Asaas e ficou com o id de la, entao as chaves nao colidiram. Hoje
+     * a assinatura dela esta deletada no Asaas, ou seja: nao ha cobranca aberta, e o proximo par de
+     * registros no mesmo dia COLIDIRIA.</p>
+     *
+     * <h2>Os dois erros opostos</h2>
+     * <p>Chave unica por registro resolve a perda, mas abre a porta para o clique duplo contar duas
+     * vezes -- e contar receita que nao entrou e tao ruim quanto perder a que entrou. Como distinguir
+     * um do outro e impossivel pelo dado, quem decide e o dono:</p>
+     * <ul>
+     *   <li>mesmo dia e <b>mesmo valor</b> -> ambiguo. <b>Recusa</b> e pede confirmacao explicita.</li>
+     *   <li>mesmo dia e <b>valor diferente</b> -> sao dois pagamentos distintos. Registra.</li>
+     *   <li>confirmado -> registra com chave propria, e <b>nada e descartado em silencio</b>.</li>
+     * </ul>
+     */
+    @Transactional
+    public PagamentoRegistrado registrarPagamentoRecebidoForaDoAsaas(
+            Long lojaId, BigDecimal valor, java.time.LocalDate pagoEm, String observacao,
+            boolean confirmarSegundoPagamento) {
 
         Assinatura a = repo.findByLojaId(lojaId).orElseThrow(() -> new ResponseStatusException(
                 HttpStatus.BAD_REQUEST, "Esta loja não tem assinatura; não há pagamento a registrar."));
@@ -399,6 +432,20 @@ public class AssinaturaService {
         java.time.LocalDate dia = pagoEm != null ? pagoEm : java.time.LocalDate.now(ZONE);
         if (dia.isAfter(java.time.LocalDate.now(ZONE))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A data do pagamento não pode ser no futuro.");
+        }
+
+        // Ambiguidade entre clique duplo e segundo pagamento de verdade: so o dono sabe. Antes, o
+        // sistema escolhia sozinho pelo pior caminho -- jogava o segundo fora e dizia que registrou.
+        var doDia = pagamentosDaLojaNoDia(lojaId, dia);
+        if (!confirmarSegundoPagamento) {
+            var igual = doDia.stream()
+                    .filter(pg -> pg.valor != null && pg.valor.compareTo(valor) == 0)
+                    .findFirst();
+            if (igual.isPresent()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Já há um pagamento de R$ " + valor.setScale(2) + " registrado para esta loja em "
+                                + dia + ". Se for OUTRO pagamento, confirme para registrar os dois.");
+            }
         }
 
         // 1) Baixa no Asaas, para ele parar de cobrar e de reenviar o aviso de atraso.
@@ -417,7 +464,11 @@ public class AssinaturaService {
         prazoDeAcesso(lojaId, null);
 
         // 3) O registro, para o faturamento da plataforma contar este dinheiro.
-        String idDoRegistro = baixado && cobranca != null ? cobranca : "manual:" + lojaId + ":" + dia;
+        // A chave do registro manual tem um numero no fim. Era so "manual:loja:dia", igual para todo
+        // pagamento daquela loja naquele dia, e o segundo caia no descarte silencioso.
+        String idDoRegistro = baixado && cobranca != null && !pagamentos.existsByAsaasPaymentId(cobranca)
+                ? cobranca
+                : chaveManualLivre(lojaId, dia);
         registrarPagamento(a, idDoRegistro,
                 valor, dia.atStartOfDay(ZONE).toOffsetDateTime());
         if (observacao != null && !observacao.isBlank()) {
@@ -439,6 +490,43 @@ public class AssinaturaService {
                       + " continua aberta lá. Dê a baixa no painel do Asaas, senão o aviso de atraso "
                       + "dele vai marcar a loja como inadimplente de novo.";
         return new PagamentoRegistrado(baixado, cobranca, recado);
+    }
+
+    /** O que ja foi registrado para esta loja neste dia, por intervalo (ver o repositorio). */
+    private java.util.List<PagamentoAssinatura> pagamentosDaLojaNoDia(Long lojaId, java.time.LocalDate dia) {
+        return pagamentos.findByLojaIdAndPagoEmGreaterThanEqualAndPagoEmLessThan(lojaId,
+                dia.atStartOfDay(ZONE).toOffsetDateTime(),
+                dia.plusDays(1).atStartOfDay(ZONE).toOffsetDateTime());
+    }
+
+    /**
+     * A primeira chave manual livre para esta loja neste dia: {@code manual:18:2026-10-15:1},
+     * {@code :2}, {@code :3}...
+     *
+     * <p>Por que procurar a livre em vez de usar um numero aleatorio: a chave continua LEGIVEL para
+     * quem for conferir o faturamento a mao, e continua contando quantos registros houve naquele dia.
+     * Um UUID resolveria a colisao e tornaria a conferencia impossivel.</p>
+     *
+     * <p>O limite de 50 nao e um numero bonito, e sim um teto para o laco nao virar infinito se
+     * alguma coisa der muito errado -- cinquenta registros manuais da mesma loja no mesmo dia nao
+     * acontece, e se acontecer e melhor estourar que gravar errado.</p>
+     */
+    private String chaveManualLivre(Long lojaId, java.time.LocalDate dia) {
+        String base = "manual:" + lojaId + ":" + dia;
+        // Sempre procura a primeira livre, do 1 em diante. A primeira versao disto tinha um retorno
+        // antecipado -- "se a chave antiga sem numero nao existe, devolve :1" -- que devolvia :1
+        // SEMPRE, porque a chave sem numero quase nunca existe. Isso reintroduzia exatamente o
+        // descarte silencioso que este metodo veio consertar. O teste pegou.
+        //
+        // A chave antiga ("manual:18:2026-10-15", sem numero) nao colide com nenhuma ":n", entao nao
+        // precisa de tratamento: ela so continua la, do formato anterior.
+        for (int n = 1; n <= 50; n++) {
+            String tentativa = base + ":" + n;
+            if (!pagamentos.existsByAsaasPaymentId(tentativa)) return tentativa;
+        }
+        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Ja ha 50 pagamentos registrados a mao para esta loja em " + dia
+                        + ". Confira o faturamento antes de registrar outro.");
     }
 
     private void registrarPagamento(Assinatura a, String paymentId, BigDecimal valor, OffsetDateTime pagoEm) {
