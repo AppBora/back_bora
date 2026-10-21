@@ -590,10 +590,44 @@ public class PedidoService {
         return tel;
     }
 
+    /**
+     * Escolhe ou troca o motoboy do pedido.
+     *
+     * <h2>Item 6.5 da varredura</h2>
+     * <p>Nao havia regra nenhuma: qualquer OPERADOR trocava o motoboy de qualquer pedido, inclusive
+     * de um ja entregue, com texto livre e sem deixar rastro. Isso e dinheiro de outra pessoa — o
+     * acerto paga por entregador, entao trocar o nome move a taxa de um motoboy para outro.</p>
+     *
+     * <h2>O que entra, e por que</h2>
+     * <p><b>Pedido ja ACERTADO nao muda nunca.</b> Se {@code acertoId} esta preenchido, aquela entrega
+     * ja foi paga a alguem, e o recibo esta impresso. Trocar o nome depois faria o historico do acerto
+     * mentir sobre quem recebeu — e nao existe conserto para isso depois.</p>
+     *
+     * <p><b>Pedido ja ENTREGUE exige gerente.</b> Durante a entrega, trocar o motoboy e operacao de
+     * balcao (o primeiro nao pode ir, vai o segundo). Depois de entregue, a unica razao de mexer e
+     * corrigir para quem vai receber — decisao de quem responde pelo caixa. Antes da entrega qualquer
+     * operador continua trocando, que e o uso normal.</p>
+     *
+     * <p>E fica <b>no log de auditoria</b>, sempre: era o unico campo de dinheiro que mudava sem
+     * deixar rastro.</p>
+     */
     public Pedido definirEntregador(Long id, String entregador) {
         Pedido p = buscarDaLoja(id);
+        if (p.acertoId != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Este pedido já entrou num acerto fechado, então o entregador não pode mais "
+                            + "mudar — o acerto registrou quem recebeu por esta entrega.");
+        }
+        if (p.status == StatusPedido.ENTREGUE) {
+            ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        }
+        String anterior = p.entregador;
         p.entregador = (entregador == null || entregador.isBlank()) ? null : entregador.trim();
         p.atualizadoEm = OffsetDateTime.now();
+        AUDITORIA.info("AUDITORIA entrega: usuario {} mudou o entregador do pedido {} da loja {} de "
+                        + "\"{}\" para \"{}\" (status {})",
+                ctx.atual() == null ? null : ctx.atual().userId(), p.id, p.lojaId,
+                anterior, p.entregador, p.status);
         return repo.save(p);
     }
 
@@ -606,6 +640,15 @@ public class PedidoService {
         Pedido p = buscarDaLoja(id);
         if (p.status == StatusPedido.ENTREGUE || p.status == StatusPedido.CANCELADO) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pedido " + p.status + " é um estado final e não pode mudar de status");
+        }
+        exigirQueAvance(p, status);
+        if (status == StatusPedido.SAIU_PARA_ENTREGA && p.ehRetirada()) {
+            // Item 6.9: o cliente esta no balcao esperando, e recebia "saiu para entrega! Ja ja chega
+            // ai" no WhatsApp. A KDS oferecia "Despachar" para retirada porque o card nao sabia o
+            // tipo -- agora sabe (item 6.2), e aqui o servidor tambem recusa.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Este pedido é retirada no balcão: não há o que despachar. Marque como ENTREGUE "
+                            + "quando o cliente retirar.");
         }
         if (status == StatusPedido.CANCELADO && (motivo == null || motivo.isBlank())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Motivo do cancelamento é obrigatório"); // RN05
@@ -641,6 +684,51 @@ public class PedidoService {
         integracoes.notificarStatus(salvo, status.name()); // sincroniza status com o marketplace (se conectado)
         notifCliente.notificarFase(salvo, status); // Operação Assistida: avisa o cliente no WhatsApp
         return salvo;
+    }
+
+    /**
+     * A ordem do fluxo do pedido. Posicao maior = mais adiante.
+     *
+     * <p>{@code CANCELADO} fica de fora de proposito: cancelar nao e "avancar", e pode acontecer de
+     * qualquer estado nao-final.</p>
+     */
+    private static int posicaoNoFluxo(StatusPedido s) {
+        return switch (s) {
+            case RECEBIDO -> 0;
+            case CONFIRMADO -> 1;
+            case EM_PREPARO -> 2;
+            case PRONTO -> 3;
+            case SAIU_PARA_ENTREGA -> 4;
+            case ENTREGUE -> 5;
+            case CANCELADO -> -1;
+        };
+    }
+
+    /**
+     * O status novo tem que estar ADIANTE do atual. Cancelar e a excecao.
+     *
+     * <h2>Item 6.6 da varredura</h2>
+     * <p>O {@code alterarStatus} so barrava estado final. Aceitava qualquer pulo e <b>qualquer
+     * volta</b>: de SAIU_PARA_ENTREGA para EM_PREPARO, por exemplo. Uma aba antiga do painel, aberta
+     * antes de o pedido andar, re-clicando o botao de "preparar" mandava o pedido para tras — e o
+     * cliente recebia no WhatsApp <b>"seu pedido esta sendo preparado"</b> depois de o motoboy ter
+     * saido com ele.</p>
+     *
+     * <p><b>Pulo para frente continua valendo</b>, e isso e de proposito: a propria KDS pula
+     * CONFIRMADO (vai de RECEBIDO direto para EM_PREPARO), e loja que nao usa confirmacao trabalha
+     * assim. O que nao pode e recuar nem repetir o mesmo status, que reenviaria o aviso ao cliente.</p>
+     */
+    private static void exigirQueAvance(Pedido p, StatusPedido novo) {
+        if (novo == StatusPedido.CANCELADO) return;
+        int de = posicaoNoFluxo(p.status);
+        int para = posicaoNoFluxo(novo);
+        if (para > de) return;
+        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                para == de
+                        ? "Este pedido já está em " + novo + "."
+                        : "Não dá para voltar de " + p.status + " para " + novo + ". O pedido já "
+                                + "passou dessa etapa, e o cliente já foi avisado — se precisar "
+                                + "desfazer, cancele o pedido.");
     }
 
     /**

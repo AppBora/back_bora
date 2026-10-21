@@ -64,6 +64,12 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
            "from Pedido p where p.lojaId = :lojaId " +
            "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
            "and p.entregador is not null and trim(p.entregador) <> '' " +
+           // Item 6.3: PIX gerado e nunca pago, marcado como entregue, entrava no acerto como venda
+           // normal -- o `total` dele ia para "outras formas", como se o dinheiro tivesse entrado por
+           // cartao. A conta com o motoboy fechava errada. E a MESMA regra do faturamento ("PIX que
+           // ninguem pagou nao e venda"): o pedido fica fora ate o pagamento ser resolvido, e entra
+           // no acerto seguinte quando for.
+           "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) " +
            "and p.entregueEm >= :inicio and p.entregueEm < :fim " +
            "group by lower(trim(p.entregador)) order by min(p.entregador)")
     List<Object[]> previaAcerto(@Param("lojaId") Long lojaId,
@@ -76,6 +82,9 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     @Query("select p from Pedido p where p.lojaId = :lojaId " +
            "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
            "and lower(trim(p.entregador)) = lower(trim(:entregador)) " +
+           // Mesma regra da previa (item 6.3): o que nao aparece na previa nao pode ser amarrado ao
+           // acerto, senao a previa mostra um valor e o acerto paga outro.
+           "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) " +
            "and p.entregueEm >= :inicio and p.entregueEm < :fim")
     List<Pedido> entregasParaAcerto(@Param("lojaId") Long lojaId,
                                     @Param("entregador") String entregador,
@@ -229,6 +238,28 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     @Query("update Pedido p set p.clienteId = null "
          + "where p.clienteId = :clienteId and p.lojaId = :lojaId")
     int desamarrarCliente(@Param("clienteId") Long clienteId, @Param("lojaId") Long lojaId);
+
+    /**
+     * Entregas concluidas SEM motoboy escolhido, ainda nao acertadas, na janela.
+     *
+     * <h2>Item 6.4 da varredura</h2>
+     * <p>O acerto exige {@code entregador is not null and trim(...) <> ''}. Uma entrega concluida sem
+     * ninguem escolhido no card simplesmente <b>nunca aparece em acerto nenhum</b> — nem errado, nem
+     * certo: ela desaparece. E a KDS e o quadro deixam avancar ate ENTREGUE sem pedir o motoboy.</p>
+     *
+     * <p>Devolve quantidade, soma das taxas e soma dos valores, no mesmo formato das linhas da previa,
+     * para a tela de acerto mostrar isso como uma linha a mais. Quem faz o acerto e justamente quem
+     * precisa saber que esse dinheiro esta fora da conta.</p>
+     */
+    @Query("select count(p), coalesce(sum(p.taxaEntrega), 0), coalesce(sum(p.valorTotal), 0) "
+         + "from Pedido p where p.lojaId = :lojaId "
+         + "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null "
+         + "and (p.entregador is null or trim(p.entregador) = '') "
+         + "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) "
+         + "and p.entregueEm >= :inicio and p.entregueEm < :fim")
+    java.util.List<Object[]> entregasSemMotoboy(@Param("lojaId") Long lojaId,
+                                                @Param("inicio") OffsetDateTime inicio,
+                                                @Param("fim") OffsetDateTime fim);
 
     /** Grava que o marketplace aceitou o aceite automatico. So a coluna da marca, nada mais. */
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)

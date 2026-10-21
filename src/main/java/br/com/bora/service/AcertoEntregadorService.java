@@ -35,6 +35,14 @@ public class AcertoEntregadorService {
         this.ctx = ctx;
     }
 
+    /**
+     * O nome da linha das entregas sem motoboy escolhido (item 6.4).
+     *
+     * <p>E texto, nao entregador: nenhuma entrega tem este nome, entao tentar fechar o acerto dela e
+     * recusado pelo proprio {@code fazer}, sem precisar de guarda nova.</p>
+     */
+    public static final String SEM_MOTOBOY = "(entregas sem motoboy escolhido)";
+
     /** Prévia por entregador (entregas realizadas ainda não acertadas no período). */
     public List<AcertoLinha> previa(LocalDate inicio, LocalDate fim) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
@@ -51,6 +59,20 @@ public class AcertoEntregadorService {
             BigDecimal total = big(r[4]);
             BigDecimal outras = total.subtract(dinheiro);
             linhas.add(new AcertoLinha(entregador, qtd, taxas, dinheiro, outras, total, taxas));
+        }
+
+        // Item 6.4: entrega concluida SEM motoboy escolhido nao cabe em nenhuma linha por entregador,
+        // e por isso desaparecia de todo acerto. Entra como uma linha propria, com o nome que diz o
+        // que e: quem faz o acerto e quem precisa saber que esse dinheiro esta fora da conta.
+        //
+        // Fechar essa linha e naturalmente recusado: o `fazer` procura as entregas por
+        // `lower(trim(entregador))`, e nenhuma entrega tem este texto como nome.
+        for (Object[] r : pedidos.entregasSemMotoboy(ctx.lojaId(), ini, fimEx)) {
+            long qtd = ((Number) r[0]).longValue();
+            if (qtd == 0) continue;
+            BigDecimal taxas = big(r[1]);
+            BigDecimal total = big(r[2]);
+            linhas.add(new AcertoLinha(SEM_MOTOBOY, qtd, taxas, BigDecimal.ZERO, total, total, taxas));
         }
         return linhas;
     }
