@@ -37,8 +37,11 @@ class CashbackNoPixTest {
         maria.lojaId = 1L;
         maria.nome = "Maria";
         maria.cashback = new BigDecimal("20.00");
-        when(clientes.findByIdAndLojaId(42L, 1L)).thenReturn(Optional.of(maria));
-        when(clientes.save(any(Cliente.class))).thenAnswer(i -> i.getArgument(0));
+        maria.totalGasto = new BigDecimal("0.00");
+        maria.qtdPedidos = 0;
+        // O dublê do repositorio faz a MESMA conta do SQL -- ver SaldoEmMemoria. O SQL de verdade e
+        // provado no SaldoDeCashbackEhAtomicoIT.
+        SaldoEmMemoria.instalar(clientes, maria);
     }
 
     @Test
@@ -51,10 +54,33 @@ class CashbackNoPixTest {
 
     @Test
     void oMesmoSaldoNaoPagaDoisPedidos() {
+        // A INTENCAO deste teste nao mudou; o MECANISMO mudou em 21/10/2026 (varredura 1.5).
+        //
+        // Antes, o segundo consumo era silenciosamente limitado a zero: o saldo nao ficava negativo,
+        // mas o segundo pedido LEVAVA os R$ 20 de desconto de graca -- o desconto ja tinha saido do
+        // total que o cliente ia pagar. "Saldo nunca fica negativo" protegia o numero e perdia o
+        // dinheiro.
+        //
+        // Agora o debito e condicional no banco e o segundo pedido e RECUSADO. Quem chama esta em
+        // transacao, entao o pedido inteiro volta atras e o cliente le "seu saldo mudou" -- que e a
+        // verdade.
         fidelidade.consumir(1L, 42L, new BigDecimal("20.00")); // 1º pedido PIX
-        fidelidade.consumir(1L, 42L, new BigDecimal("20.00")); // 2º, antes de pagar o primeiro
+        assertEquals(0, BigDecimal.ZERO.compareTo(maria.cashback), "o primeiro leva o saldo inteiro");
 
-        assertEquals(0, BigDecimal.ZERO.compareTo(maria.cashback), "saldo nunca fica negativo");
+        var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> fidelidade.consumir(1L, 42L, new BigDecimal("20.00")),
+                "o segundo pedido, antes de pagar o primeiro, tem que ser RECUSADO");
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
+        assertEquals(0, BigDecimal.ZERO.compareTo(maria.cashback), "e o saldo nao fica negativo");
+    }
+
+    @Test
+    void consumirPARCIALdoSaldoContinuaFuncionando() {
+        // O conserto nao pode ter virado "recusa tudo": gastar menos que o saldo e o caso normal.
+        fidelidade.consumir(1L, 42L, new BigDecimal("6.57"));
+
+        assertEquals(0, new BigDecimal("13.43").compareTo(maria.cashback));
     }
 
     @Test

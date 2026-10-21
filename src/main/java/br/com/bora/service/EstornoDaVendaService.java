@@ -133,6 +133,62 @@ public class EstornoDaVendaService {
     }
 
     /**
+     * Baixa o estoque de novo, para o pedido que VOLTOU A VALER.
+     *
+     * <h2>Quando isto acontece</h2>
+     * <p>Um unico caso: o PIX do cardapio expirou, o pedido foi cancelado (e o cancelamento devolveu
+     * o estoque), e DEPOIS o dinheiro entrou. O pedido e reaberto, porque o cliente pagou e esta
+     * esperando comida -- e aí o estoque tem que sair de novo, senao a comida sai e o estoque segue
+     * contando. Ver {@code PublicController}, no trecho do {@code pixWebhook}.</p>
+     *
+     * <p>E o espelho exato do {@link #devolver}, e mora aqui pelo mesmo motivo: a regra de "produto
+     * com ficha consome insumo, produto sem ficha baixa o proprio estoque" existe num lugar so.</p>
+     *
+     * <h2>Duas decisoes que nao sao obvias</h2>
+     * <p><b>Nao recusa por falta de estoque.</b> A venda esta paga; recusar aqui nao desfaz o
+     * pagamento, so deixaria o estoque errado E o pedido sem baixa. Saldo negativo e informacao de
+     * que a contagem esta errada -- ver {@code PedidoService.avisarSeVaiFicarNegativo}.</p>
+     *
+     * <p><b>Item sem a marca {@code consumiuFicha} (anterior a V45) nao baixa nada</b>, igual ao
+     * {@link #devolver}: se nao se sabe como saiu, nao se sabe como tirar de novo, e inventar baixa e
+     * tao ruim quanto inventar devolucao.</p>
+     *
+     * @return quantos itens tiveram estoque baixado (para o log de quem chamou)
+     */
+    @Transactional
+    public int rebaixarDeNovo(Pedido p) {
+        if (p == null || p.id == null) return 0;
+        List<PedidoItem> lista = itens.findByLojaIdAndPedidoIdOrderById(p.lojaId, p.id);
+        int baixados = 0;
+        int semMarca = 0;
+        for (PedidoItem item : lista) {
+            int qtd = item.getQuantidade() == null ? 1 : item.getQuantidade();
+            if (qtd <= 0 || item.getProdutoId() == null) continue;
+            Boolean porFicha = item.getConsumiuFicha();
+            if (Boolean.TRUE.equals(porFicha)) {
+                // Modo que NAO recusa: a venda esta paga. Consome a ficha de HOJE -- mesma ressalva do
+                // devolver, e a melhor informacao que existe.
+                insumos.consumirFicha(p.lojaId, item.getProdutoId(), qtd);
+                baixados++;
+            } else if (Boolean.FALSE.equals(porFicha)) {
+                if (produtos.baixarEstoque(item.getProdutoId(), p.lojaId, qtd) > 0) baixados++;
+            } else {
+                semMarca++;
+            }
+        }
+        if (baixados > 0) {
+            log.info("Pedido {} da loja {} reaberto: estoque baixado de novo em {} item(ns)",
+                    p.id, p.lojaId, baixados);
+        }
+        if (semMarca > 0) {
+            log.warn("Pedido {} da loja {} reaberto: {} item(ns) sao anteriores a V45 e nao registram "
+                            + "como baixaram estoque; nada foi baixado neles, confira o estoque a mao",
+                    p.id, p.lojaId, semMarca);
+        }
+        return baixados;
+    }
+
+    /**
      * Devolve o estoque do proprio produto. So mexe em produto que controla estoque
      * ({@code estoque != null}), igual a baixa — quem nao controla continua sem numero, em vez de
      * nascer com um saldo inventado no primeiro cancelamento.

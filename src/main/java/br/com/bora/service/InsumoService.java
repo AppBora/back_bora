@@ -18,6 +18,8 @@ import java.util.*;
 @Service
 public class InsumoService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(InsumoService.class);
+
     private final InsumoRepository insumos;
     private final ProdutoInsumoRepository fichas;
     private final ProdutoRepository produtos;
@@ -48,9 +50,47 @@ public class InsumoService {
         return insumos.save(alvo);
     }
 
+    /**
+     * Apaga o insumo — mas RECUSA quando ele esta em alguma ficha tecnica.
+     *
+     * <h2>O defeito que isto fecha (medido em 21/10/2026)</h2>
+     * <p>Apagava so o insumo. A tabela {@code produto_insumo} nao tem chave estrangeira, entao as
+     * linhas da ficha ficavam apontando para um insumo que nao existe mais -- ficha fantasma. Depois,
+     * no {@code consumirFicha}, a linha fantasma e pulada ({@code if (in == null) continue}) e o custo
+     * sai menor do que e. Se TODOS os insumos da ficha tiverem sido apagados, nada e consumido e o
+     * item ainda assim e gravado com {@code consumiuFicha = true} -- uma mentira que faz o
+     * cancelamento tambem nao devolver nada. O estoque vaza nos dois sentidos, calado.</p>
+     *
+     * <p><b>Conferido na producao:</b> existe uma ficha fantasma hoje -- o produto "Acai 500ml
+     * Atualizado" tem linha de ficha para o insumo 2, que nao existe (1 das 3 linhas de ficha da
+     * base).</p>
+     *
+     * <h2>Por que RECUSAR e nao limpar junto</h2>
+     * <p>Limpar a ficha junto muda o custo dos produtos sem o lojista saber: o produto continua sendo
+     * vendido, agora com a margem errada. Recusar devolve a decisao a quem conhece a receita -- e a
+     * mensagem diz EM QUAIS produtos o insumo esta, que e a informacao que falta para decidir.</p>
+     */
     public void excluir(Long id) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
-        insumos.delete(insumos.findByIdAndLojaId(id, ctx.lojaId()).orElseThrow(() -> nf("Insumo"))); }
+        Long loja = ctx.lojaId();
+        Insumo alvo = insumos.findByIdAndLojaId(id, loja).orElseThrow(() -> nf("Insumo"));
+
+        var naFicha = fichas.findByLojaIdAndInsumoId(loja, id);
+        if (!naFicha.isEmpty()) {
+            String quais = naFicha.stream()
+                    .map(pi -> produtos.findByIdAndLojaId(pi.produtoId, loja)
+                            .map(pr -> pr.nome).orElse("produto #" + pi.produtoId))
+                    .distinct()
+                    .limit(5)
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String sobra = naFicha.size() > 5 ? " e outros" : "";
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "\"" + alvo.nome + "\" esta na ficha tecnica de: " + quais + sobra
+                            + ". Tire da ficha desses produtos antes de excluir, senao o custo deles "
+                            + "fica errado e o estoque para de baixar.");
+        }
+        insumos.delete(alvo);
+    }
 
     // ---- Ficha técnica ----
     public List<Map<String, Object>> ficha(Long produtoId) {
@@ -179,9 +219,18 @@ public class InsumoService {
         List<ProdutoInsumo> ficha = fichas.findByLojaIdAndProdutoId(lojaId, produtoId);
         if (ficha.isEmpty()) return null;
         BigDecimal custoUnit = BigDecimal.ZERO;
+        int consumidos = 0;
+        int fantasmas = 0;
         for (ProdutoInsumo pi : ficha) {
             Insumo in = insumos.findByIdAndLojaId(pi.insumoId, lojaId).orElse(null);
-            if (in == null) continue;
+            if (in == null) {
+                // Ficha fantasma: o insumo foi apagado e a linha da ficha ficou (nao ha chave
+                // estrangeira em produto_insumo). O `excluir` agora recusa criar isso, mas base antiga
+                // ja tem -- conferido na producao em 21/10/2026.
+                fantasmas++;
+                continue;
+            }
+            consumidos++;
             BigDecimal qtdUnit = pi.quantidade == null ? BigDecimal.ZERO : pi.quantidade;
             custoUnit = custoUnit.add((in.custo == null ? BigDecimal.ZERO : in.custo).multiply(qtdUnit));
             BigDecimal precisa = qtdUnit.multiply(BigDecimal.valueOf(qtdPedido));
@@ -192,6 +241,29 @@ public class InsumoService {
             } else {
                 insumos.mexerNoEstoque(in.id, lojaId, precisa.negate());
             }
+        }
+
+        if (fantasmas > 0) {
+            log.warn("Produto {} da loja {}: {} linha(s) da ficha tecnica aponta(m) para insumo que nao "
+                            + "existe mais. O custo deste item sai MENOR do que e. Conserte a ficha em "
+                            + "Produtos; o insumo apagado aparece como \"?\".",
+                    produtoId, lojaId, fantasmas);
+        }
+
+        if (consumidos == 0) {
+            // NADA foi consumido: a ficha existe no papel, mas todos os insumos dela foram apagados.
+            // Devolver ZERO aqui era a mentira: quem chama faz `if (custoFicha == null) baixarEstoque`,
+            // entao o produto NAO tinha o estoque baixado -- e o item era gravado com
+            // `consumiuFicha = true`, o que fazia o cancelamento tambem nao devolver nada.
+            //
+            // Devolvendo null, o produto se comporta como produto SEM ficha: baixa o estoque dele
+            // mesmo, grava `consumiuFicha = false`, e o cancelamento devolve a unidade certa. E a
+            // melhor verdade disponivel.
+            log.warn("Produto {} da loja {}: a ficha tecnica existe mas NENHUM insumo dela existe mais. "
+                            + "Tratando como produto sem ficha -- o estoque do proprio produto sera "
+                            + "baixado. Conserte a ficha em Produtos.",
+                    produtoId, lojaId);
+            return null;
         }
         return custoUnit;
     }

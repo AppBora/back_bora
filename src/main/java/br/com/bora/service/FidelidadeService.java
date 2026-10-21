@@ -3,7 +3,9 @@ package br.com.bora.service;
 import br.com.bora.entity.Cliente;
 import br.com.bora.repository.ClienteRepository;
 import br.com.bora.repository.ConfiguracaoLojaRepository;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -21,6 +23,8 @@ import java.time.OffsetDateTime;
  */
 @Service
 public class FidelidadeService {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FidelidadeService.class);
 
     /** Usado quando a loja ainda não tem configuração — o mesmo 5% que valia antes. */
     private static final BigDecimal PADRAO = new BigDecimal("5");
@@ -165,15 +169,27 @@ public class FidelidadeService {
         mexerNoSaldo(lojaId, clienteId, valor, false);
     }
 
+    /**
+     * Mexe no saldo, no BANCO. Ver o javadoc de {@link #registrar} para o porque.
+     *
+     * <p>Tirar e CONDICIONAL (so se o saldo cobrir) e estoura quando nao cobre: quem tira esta
+     * cobrando um desconto que o cliente ja levou. Creditar nunca e condicional nem estoura: devolver
+     * cashback de venda que nao aconteceu nao pode ser recusado.</p>
+     */
     private void mexerNoSaldo(Long lojaId, Long clienteId, BigDecimal valor, boolean tirar) {
         if (clienteId == null || valor == null || valor.signum() <= 0) return;
-        clientes.findByIdAndLojaId(clienteId, lojaId).ifPresent(c -> {
-            BigDecimal saldo = c.cashback == null ? BigDecimal.ZERO : c.cashback;
-            c.cashback = (tirar ? saldo.subtract(valor) : saldo.add(valor))
-                    .max(BigDecimal.ZERO)
-                    .setScale(2, RoundingMode.HALF_UP);
-            clientes.save(c);
-        });
+        BigDecimal v = valor.setScale(2, RoundingMode.HALF_UP);
+        if (!tirar) {
+            clientes.creditar(clienteId, lojaId, v);
+            return;
+        }
+        if (clientes.debitarSeTiver(clienteId, lojaId, v) == 0) {
+            log.warn("Loja {}: o cliente {} nao tinha os R$ {} de cashback que este pedido ja havia "
+                    + "descontado. Confira o saldo dele.", lojaId, clienteId, v);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "O seu saldo de cashback mudou enquanto você fechava o pedido. "
+                            + "Confira o valor e tente de novo.");
+        }
     }
 
     /**
@@ -213,24 +229,41 @@ public class FidelidadeService {
         BigDecimal taxa = vendaJaContabilizada
                 ? percentual(lojaId).divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
-        clientes.findByIdAndLojaId(clienteId, lojaId).ifPresent(c -> {
-            BigDecimal saldo = c.cashback == null ? BigDecimal.ZERO : c.cashback;
-            c.cashback = saldo.add(usado)
-                    .subtract(pago.multiply(taxa))
-                    .max(BigDecimal.ZERO)
-                    .setScale(2, RoundingMode.HALF_UP);
-            if (vendaJaContabilizada) {
-                BigDecimal gasto = c.totalGasto == null ? BigDecimal.ZERO : c.totalGasto;
-                c.totalGasto = gasto.subtract(pago).max(BigDecimal.ZERO);
-                c.qtdPedidos = Math.max(0, (c.qtdPedidos == null ? 0 : c.qtdPedidos) - 1);
-            }
-            clientes.save(c);
-        });
+        // UMA instrucao no banco. Era ler-somar-gravar, e o `.max(ZERO)` em Java so funcionava se
+        // mais ninguem mexesse no saldo no meio -- ver o javadoc de `registrar`.
+        //
+        // NUNCA e condicional e NUNCA estoura: devolver cashback de venda que nao aconteceu nao pode
+        // ser recusado. O `greatest(0, ...)` no SQL impede saldo negativo quando o cashback que a
+        // venda gerou ja foi gasto em outro pedido.
+        BigDecimal credito = pago.multiply(taxa).setScale(2, RoundingMode.HALF_UP);
+        clientes.desfazerVenda(clienteId, lojaId,
+                vendaJaContabilizada ? pago : BigDecimal.ZERO,
+                usado, credito,
+                vendaJaContabilizada ? 1 : 0);
     }
 
     /**
      * {@code creditarCashback=false}: soma a compra no histórico do cliente sem gerar saldo. É o caso do
      * cliente de marketplace sem telefone de verdade — ele nunca conseguiria usar esse saldo aqui.
+     */
+    /**
+     * Registra a venda no historico do cliente: debita o resgate e credita o cashback novo.
+     *
+     * <h2>O defeito que isto fecha (varredura 1.5, medido em 21/10/2026)</h2>
+     * <p>Era ler-somar-gravar em Java: {@code findByIdAndLojaId}, mexe nos campos, {@code save}. Dois
+     * checkouts do mesmo cliente ao mesmo tempo liam o MESMO saldo antes de qualquer um gravar, e o
+     * mesmo cashback valia nos dois pedidos. E o defeito que o estoque ja teve, agora no dinheiro. O
+     * caso realista nao e dois aparelhos: e o cliente clicando duas vezes em "confirmar".</p>
+     *
+     * <h2>Por que ESTOURA quando o saldo nao cobre</h2>
+     * <p>O desconto ja saiu do total que o cliente vai pagar quando esta linha roda. Se o saldo nao
+     * cobre mais o resgate -- porque outro pedido gastou primeiro --, gravar o pedido daria um desconto
+     * que ninguem pagou. Os dois chamadores que debitam resgate estao em transacao
+     * ({@code PedidoService.criar} e o checkout do cardapio), entao estourar aqui desfaz o pedido
+     * inteiro e o cliente recebe "seu saldo mudou, confira e tente de novo" -- que e a verdade.</p>
+     *
+     * <p>Com {@code resgate} zero nao ha o que disputar, e o metodo nunca estoura: e o caso dos
+     * webhooks de pagamento e do pedido de marketplace.</p>
      */
     public void registrar(Long lojaId, Long clienteId, BigDecimal totalPago, BigDecimal resgate, boolean creditarCashback) {
         if (clienteId == null) return;
@@ -239,17 +272,17 @@ public class FidelidadeService {
         BigDecimal taxa = creditarCashback
                 ? percentual(lojaId).divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
-        clientes.findByIdAndLojaId(clienteId, lojaId).ifPresent(c -> {
-            BigDecimal gasto = c.totalGasto == null ? BigDecimal.ZERO : c.totalGasto;
-            BigDecimal saldo = c.cashback == null ? BigDecimal.ZERO : c.cashback;
-            c.totalGasto = gasto.add(pago);
-            c.qtdPedidos = (c.qtdPedidos == null ? 0 : c.qtdPedidos) + 1;
-            c.cashback = saldo.subtract(usado)
-                    .add(pago.multiply(taxa))
-                    .max(BigDecimal.ZERO)
-                    .setScale(2, RoundingMode.HALF_UP);
-            c.ultimoPedido = OffsetDateTime.now();
-            clientes.save(c);
-        });
+        BigDecimal credito = pago.multiply(taxa).setScale(2, RoundingMode.HALF_UP);
+
+        // UMA instrucao no banco, nao quatro leituras e uma gravacao.
+        int mexeu = clientes.registrarVenda(clienteId, lojaId, pago, usado, credito, OffsetDateTime.now());
+        if (mexeu == 0 && usado.signum() > 0) {
+            log.warn("Loja {}: o cliente {} nao tinha mais R$ {} de cashback na hora de fechar o pedido "
+                            + "-- outro pedido gastou o saldo primeiro. O pedido foi recusado.",
+                    lojaId, clienteId, usado);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "O seu saldo de cashback mudou enquanto você fechava o pedido. "
+                            + "Confira o valor e tente de novo.");
+        }
     }
 }

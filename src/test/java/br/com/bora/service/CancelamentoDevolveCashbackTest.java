@@ -32,7 +32,9 @@ import static org.mockito.Mockito.*;
  *
  * <p>Aqui a fidelidade NAO e mockada de proposito: o que precisa de prova e a conta, e um mock de
  * {@code FidelidadeService} provaria apenas que alguem chamou alguem. O {@code ClienteRepository} e o
- * unico mock, no lugar do banco.</p>
+ * unico mock, no lugar do banco -- e com a aritmetica do SQL dentro dele, via
+ * {@link SaldoEmMemoria}. A conta de verdade, a que roda no Postgres, e provada no
+ * {@code SaldoDeCashbackEhAtomicoIT}.</p>
  */
 class CancelamentoDevolveCashbackTest {
 
@@ -53,8 +55,10 @@ class CancelamentoDevolveCashbackTest {
         c.cashback = new BigDecimal(saldo);
         c.totalGasto = new BigDecimal(totalGasto);
         c.qtdPedidos = qtdPedidos;
-        when(clientes.findByIdAndLojaId(CLIENTE, LOJA)).thenReturn(Optional.of(c));
-        when(clientes.save(any(Cliente.class))).thenAnswer(i -> i.getArgument(0));
+        // O dublê do repositorio faz a MESMA conta do SQL. A mexida no saldo saiu do Java e virou SQL
+        // em 21/10/2026 (varredura 1.5), e sem isto estes testes passariam a provar apenas que alguem
+        // chamou alguem. O SQL de verdade e provado no SaldoDeCashbackEhAtomicoIT.
+        SaldoEmMemoria.instalar(clientes, c);
         ConfiguracaoLoja cfg = new ConfiguracaoLoja();
         cfg.cashbackPercentual = new BigDecimal("5");
         when(configs.findByLojaId(LOJA)).thenReturn(Optional.of(cfg));

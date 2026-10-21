@@ -67,7 +67,11 @@ class TodaConsultaQueEscreveFiltraPorLojaTest {
     void todaConsultaDeEscritaOuFiltraPorLojaOuEstaNaListaDeExcecoes() throws IOException {
         List<Escrita> semFiltro = new ArrayList<>();
         for (Escrita e : escritas()) {
-            boolean filtra = e.consulta().matches("(?s).*\\b\\w+\\.lojaId\\s*=\\s*:lojaId\\b.*");
+            // Duas formas, porque o projeto usa as duas: JPQL (`c.lojaId = :lojaId`) e SQL nativo
+            // (`loja_id = :lojaId`). A primeira versao deste teste so entendia JPQL e reprovou uma
+            // consulta nativa que ESTAVA filtrada -- o teste e que nao sabia ler.
+            boolean filtra = e.consulta().matches("(?s).*\\b\\w+\\.lojaId\\s*=\\s*:lojaId\\b.*")
+                    || e.consulta().matches("(?s).*\\bloja_id\\s*=\\s*:lojaId\\b.*");
             if (!filtra && !EXCECOES_CONHECIDAS.contains(e.metodo())) {
                 semFiltro.add(e);
             }

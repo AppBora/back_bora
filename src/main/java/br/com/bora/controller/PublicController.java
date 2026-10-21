@@ -731,7 +731,13 @@ public class PublicController {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("codigo", p.codigo == null ? String.valueOf(p.id) : p.codigo);
         m.put("status", p.status.name());
-        m.put("pago", "PIX (pago)".equals(p.formaPagamento));
+        // `pagoEm` e nao o texto do formaPagamento: medido em 21/10/2026, no Pedido essa coluna e
+        // gravada em dois lugares, e os dois sao "o PIX entrou" (este webhook e o
+        // CobradorDePixService). Comparar o texto deixava a tela do cliente -- que pergunta por este
+        // campo a cada 5 segundos -- girando para sempre quando o pagamento chegava DEPOIS do
+        // cancelamento, porque ai o texto e "PIX (pago APOS o cancelamento)". O dinheiro entrou, o
+        // pedido reabriu e foi para a cozinha, e so o cliente nao sabia.
+        m.put("pago", p.pagoEm != null);
         m.put("loja", lojas.findById(lojaId).map(l -> l.nome).orElse(""));
         m.put("criadoEm", p.criadoEm);
         m.put("motivoCancelamento", p.motivoCancelamento);
@@ -768,18 +774,49 @@ public class PublicController {
                 p.pagoEm = OffsetDateTime.now();
                 p.atualizadoEm = OffsetDateTime.now();
                 if (jaCancelado) {
-                    // O pedido expirou e a cobrança deveria ter sido fechada no Asaas. Se o dinheiro
-                    // entrou assim mesmo, não dá para seguir em silêncio: o cliente pagou e está
-                    // esperando comida, e a cozinha não tem pedido nenhum. Deixamos escrito na própria
-                    // linha do pedido, que é onde o lojista vai olhar.
-                    p.motivoCancelamento = "PIX pago DEPOIS do cancelamento — o dinheiro entrou na sua "
-                            + "conta. Combine com o cliente: preparar o pedido ou devolver.";
-                    log.warn("Loja {}: pagamento {} chegou para o pedido {}, que ja estava CANCELADO",
+                    // O PEDIDO VOLTA A VALER, e isto e uma mudanca de comportamento deliberada
+                    // (21/10/2026, varredura 2.7).
+                    //
+                    // Antes, o pedido ficava CANCELADO: a cozinha nunca via, o estoque nao saia, e a
+                    // unica pista era este texto -- que o lojista le so se abrir a aba de cancelados.
+                    // O cliente PAGOU e esta esperando comida. Deixar a venda escondida e pior que
+                    // qualquer problema de estoque.
+                    //
+                    // Por que NAO bastava "rebaixar o estoque de novo", que era o conserto obvio: o
+                    // pedido continuaria em estado final, o `alterarStatus` recusa sair de CANCELADO,
+                    // e o lojista que quisesse preparar teria que lancar OUTRO pedido -- que baixa o
+                    // estoque por conta propria. Rebaixar aqui tiraria em dobro.
+                    //
+                    // Reabrindo, tudo se resolve pelos caminhos que ja existem: o quadro mostra, a
+                    // baixa de estoque acontece aqui (espelhando o reconsumo do cashback logo abaixo),
+                    // e se o lojista nao puder atender ele CANCELA de novo -- e o cancelamento devolve
+                    // estoque e cashback certo.
+                    p.status = StatusPedido.RECEBIDO;
+                    p.canceladoEm = null;
+                    p.motivoCancelamento = null;
+                    // O historico nao se perde: fica na observacao, que e o que a cozinha e o
+                    // entregador leem no card.
+                    p.observacao = (p.observacao == null ? "" : p.observacao + " | ")
+                            + "REABERTO: o PIX foi pago depois do cancelamento e o dinheiro entrou. "
+                            + "Se nao for atender, cancele de novo e devolva ao cliente.";
+                    log.warn("Loja {}: pagamento {} chegou para o pedido {}, que estava CANCELADO. "
+                                    + "O pedido foi REABERTO como RECEBIDO e o estoque foi baixado de "
+                                    + "novo -- o cliente pagou e esta esperando. Se nao der para "
+                                    + "atender, cancele de novo: o cancelamento devolve estoque e "
+                                    + "cashback.",
                             lojaId, paymentId, p.id);
                 }
                 pedidos.save(p);
                 // O Asaas reenvia o mesmo aviso quando nao recebe 200: sem esta guarda, o cliente
                 // ganharia cashback de novo a cada reenvio.
+                if (jaCancelado) {
+                    // O cancelamento DEVOLVEU o estoque. O pedido voltou a valer, entao a baixa tem
+                    // que acontecer de novo -- senao a comida sai e o estoque segue contando. E o
+                    // espelho exato do reconsumo do cashback logo abaixo.
+                    //
+                    // `true` no ultimo argumento: a venda foi paga, entao nao e PIX pendente.
+                    devolucaoDeEstoque.rebaixarDeNovo(p);
+                }
                 if (primeiraConfirmacao && p.clienteId != null) {
                     if (jaCancelado) {
                         // O cancelamento devolveu o cashback ao cliente. Como ele acabou pagando o valor
