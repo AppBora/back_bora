@@ -104,8 +104,25 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     List<Pedido> findByLojaIdAndCriadoEmGreaterThanEqualAndCriadoEmLessThanOrderByCriadoEmDesc(
             Long lojaId, OffsetDateTime inicio, OffsetDateTime fim);
 
-    /** Pedido que virou o dia sem terminar continua no quadro — senão some da vista da cozinha. */
-    List<Pedido> findByLojaIdAndStatusNotInOrderByCriadoEmDesc(Long lojaId, java.util.Collection<StatusPedido> finais);
+    /**
+     * Pedido que virou o dia sem terminar continua no quadro — senão some da vista da cozinha.
+     *
+     * <p><b>Lista POSITIVA, não negação</b>, e isso foi medido. A versão anterior era
+     * {@code StatusNotIn(ENCERRADOS)}, e nenhum índice servia uma negação: o KDS recarrega a cada 6
+     * segundos e cada volta varria todos os pedidos da loja (9,3 ms com 26 mil pedidos). Um índice
+     * parcial {@code where status not in (...)} resolvia em 0,23 ms, mas só enquanto o Postgres pudesse
+     * olhar os valores dos parâmetros — com plano genérico ele não consegue provar que
+     * {@code status not in ($1,$2)} implica o predicado do índice, e cai para 15,9 ms. A forma positiva
+     * usa o índice comum {@code (loja_id, status)} <b>sempre</b>: 0,35 ms, conferido em 6 execuções
+     * seguidas, inclusive depois do limite em que o Postgres troca para plano genérico. Ver a V54.</p>
+     *
+     * <p><b>O risco que a troca cria, e o teste que o cobre:</b> a negação pegava status novo de
+     * graça; a lista positiva não. Um status acrescentado ao enum e esquecido aqui faria o pedido
+     * <b>desaparecer do quadro da cozinha</b> — e o enum tem SETE valores, não seis (o
+     * {@code CONFIRMADO} é fácil de esquecer). O {@code AbertosMaisEncerradosCobremTudoTest} reprova
+     * se a soma dos dois conjuntos deixar de ser o enum inteiro.</p>
+     */
+    List<Pedido> findByLojaIdAndStatusInOrderByCriadoEmDesc(Long lojaId, java.util.Collection<StatusPedido> abertos);
     List<Pedido> findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(Long lojaId, OffsetDateTime corte);
 
     /** PIX gerado e nunca pago, mais velho que o corte — o cobrador cancela estes. */

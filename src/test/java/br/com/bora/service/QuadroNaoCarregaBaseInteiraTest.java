@@ -55,7 +55,9 @@ class QuadroNaoCarregaBaseInteiraTest {
     private void comPedidos(List<Pedido> pedidos) {
         when(repo.findByLojaIdAndCriadoEmGreaterThanEqualAndCriadoEmLessThanOrderByCriadoEmDesc(
                 eq(1L), any(), any())).thenReturn(pedidos);
-        when(repo.findByLojaIdAndStatusNotInOrderByCriadoEmDesc(eq(1L), any())).thenReturn(List.of());
+        // Lista POSITIVA desde 21/10/2026 (V54): a consulta dos abertos virou `status in (ABERTOS)`
+        // porque nenhum indice serve uma negacao, e o KDS recarrega a cada 6 segundos.
+        when(repo.findByLojaIdAndStatusInOrderByCriadoEmDesc(eq(1L), any())).thenReturn(List.of());
     }
 
     @Test
@@ -84,6 +86,25 @@ class QuadroNaoCarregaBaseInteiraTest {
 
         verify(clientes, never()).findByLojaIdAndIdIn(anyLong(), any());
         verify(clientes, never()).findByLojaIdOrderByNomeAsc(anyLong());
+    }
+
+    @Test
+    void oQUADROpedeTODOSosStatusABERTOS_naoUmSubconjunto() {
+        // Achado por mutacao: estreitar a lista passada ao banco (por exemplo, so RECEBIDO) passava
+        // VERDE. E o pedido EM_PREPARO ou PRONTO simplesmente desaparece da vista da cozinha -- a
+        // comida nao sai e ninguem entende por que.
+        //
+        // A consulta virou lista POSITIVA em 21/10/2026 porque nenhum indice serve uma negacao (V54);
+        // o preco dessa troca e justamente este: a lista tem que estar completa.
+        comPedidos(List.of());
+
+        service.board(null, null);
+
+        var capturado = ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(repo).findByLojaIdAndStatusInOrderByCriadoEmDesc(eq(1L), capturado.capture());
+        assertEquals(new java.util.TreeSet<>(PedidoService.ABERTOS),
+                new java.util.TreeSet<>(capturado.getValue()),
+                "o quadro tem que pedir TODOS os status abertos");
     }
 
     @Test

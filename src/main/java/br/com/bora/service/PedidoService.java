@@ -93,8 +93,26 @@ public class PedidoService {
         return repo.findByLojaIdOrderByCriadoEmDesc(ctx.lojaId());
     }
 
-    private static final java.util.Set<StatusPedido> ENCERRADOS =
+    static final java.util.Set<StatusPedido> ENCERRADOS =
             java.util.Set.of(StatusPedido.ENTREGUE, StatusPedido.CANCELADO);
+
+    /**
+     * Os status em que o pedido ainda esta vivo — o que a cozinha precisa ver.
+     *
+     * <p>Lista POSITIVA de proposito: a consulta do quadro era {@code status not in (ENCERRADOS)}, e
+     * nenhum indice serve uma negacao. O KDS recarrega a cada 6 segundos e cada volta varria todos os
+     * pedidos da loja. Ver o javadoc de {@code PedidoRepository.findByLojaIdAndStatusIn} e a V54.</p>
+     *
+     * <p><b>Acrescentou status no enum? Classifique AQUI ou em ENCERRADOS.</b> Esquecer faz o pedido
+     * desaparecer do quadro da cozinha, calado. O {@code AbertosMaisEncerradosCobremTudoTest} reprova
+     * se os dois conjuntos deixarem de cobrir o enum inteiro.</p>
+     */
+    static final java.util.Set<StatusPedido> ABERTOS = java.util.Set.of(
+            StatusPedido.RECEBIDO,
+            StatusPedido.CONFIRMADO,
+            StatusPedido.EM_PREPARO,
+            StatusPedido.PRONTO,
+            StatusPedido.SAIU_PARA_ENTREGA);
 
     /**
      * Quadro rico (kanban): pedidos + cliente + itens resolvidos em poucas queries (sem N+1).
@@ -121,7 +139,7 @@ public class PedidoService {
                 .forEach(p -> porId.put(p.id, p));
         // só faz sentido puxar os abertos de outros dias quando o período alcança hoje
         if (ultimo.equals(hoje)) {
-            repo.findByLojaIdAndStatusNotInOrderByCriadoEmDesc(lojaId, ENCERRADOS)
+            repo.findByLojaIdAndStatusInOrderByCriadoEmDesc(lojaId, ABERTOS)
                     .forEach(p -> porId.putIfAbsent(p.id, p));
         }
         // criadoEm nulo não deveria existir (o campo nasce preenchido), mas uma linha antiga vinda de
