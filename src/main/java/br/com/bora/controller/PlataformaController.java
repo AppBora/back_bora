@@ -28,6 +28,7 @@ public class PlataformaController {
     private final AuthContext ctx;
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
     private final br.com.bora.repository.ConfigPlataformaRepository configs;
+    private final br.com.bora.service.CifragemEmRepousoService cifragem;
     private final br.com.bora.service.ProvisionamentoService provisionamento;
     private final br.com.bora.service.AssinaturaService assinaturas;
     /** Para avisar o marketplace quando a loja e suspensa. Ver avisarMarketplacesQueALojaFechou. */
@@ -47,6 +48,7 @@ public class PlataformaController {
     public PlataformaController(LojaRepository lojas, UsuarioRepository usuarios, PasswordEncoder encoder,
                                 AuthContext ctx, br.com.bora.repository.UsuarioLojaRepository vinculos,
                                 br.com.bora.repository.ConfigPlataformaRepository configs,
+                                br.com.bora.service.CifragemEmRepousoService cifragem,
                                 br.com.bora.service.ProvisionamentoService provisionamento,
                                 br.com.bora.service.AssinaturaService assinaturas,
                                 br.com.bora.service.IntegracaoService integracoes,
@@ -76,6 +78,7 @@ public class PlataformaController {
         this.ctx = ctx;
         this.vinculos = vinculos;
         this.configs = configs;
+        this.cifragem = cifragem;
         this.provisionamento = provisionamento;
     }
 
@@ -905,6 +908,31 @@ public class PlataformaController {
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Plano inválido (use UNICO)");
         }
+    }
+
+    // ================= Cifragem em repouso das credenciais (item 8.4) =================
+
+    /**
+     * Quantas credenciais ainda estao em texto puro no banco. Nao muda nada.
+     *
+     * <p>Serve para saber onde se esta antes e depois de ligar a chave. Nunca devolve valor nenhum —
+     * so quantidades.</p>
+     */
+    @GetMapping("/seguranca/cifragem")
+    public Map<String, Object> estadoDaCifragem() {
+        return cifragem.oQueFaltaCifrar();
+    }
+
+    /**
+     * Cifra as credenciais que ja estavam gravadas em texto puro.
+     *
+     * <p>Exige {@code BORA_SEGREDO_COLUNAS} ligada no servidor. Ligar a chave protege o que for
+     * gravado dali para frente e nao toca no que ja esta no banco (ver
+     * {@code CifragemEmRepousoService}) — este endpoint e o que fecha essa lacuna. E idempotente.</p>
+     */
+    @PostMapping("/seguranca/cifragem")
+    public Map<String, Object> cifrarOqueJaEstaGravado() {
+        return cifragem.cifrarOqueJaEstaGravado();
     }
 
     // ================= Faturamento do mes (base da nota fiscal da mensalidade) =================

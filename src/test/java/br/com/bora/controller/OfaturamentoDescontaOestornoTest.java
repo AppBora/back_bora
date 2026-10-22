@@ -59,6 +59,7 @@ class OfaturamentoDescontaOestornoTest {
                 mock(org.springframework.security.crypto.password.PasswordEncoder.class), ctx,
                 mock(br.com.bora.repository.UsuarioLojaRepository.class),
                 mock(br.com.bora.repository.ConfigPlataformaRepository.class),
+                mock(br.com.bora.service.CifragemEmRepousoService.class),
                 mock(br.com.bora.service.ProvisionamentoService.class), servico,
                 mock(br.com.bora.service.IntegracaoService.class),
                 mock(br.com.bora.repository.AssinaturaRepository.class),

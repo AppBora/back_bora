@@ -63,6 +63,7 @@ class OsplitDizAverdadeTest {
                 mock(org.springframework.security.crypto.password.PasswordEncoder.class), ctx,
                 mock(br.com.bora.repository.UsuarioLojaRepository.class),
                 mock(br.com.bora.repository.ConfigPlataformaRepository.class),
+                mock(br.com.bora.service.CifragemEmRepousoService.class),
                 mock(br.com.bora.service.ProvisionamentoService.class),
                 mock(br.com.bora.service.AssinaturaService.class),
                 mock(br.com.bora.service.IntegracaoService.class),
