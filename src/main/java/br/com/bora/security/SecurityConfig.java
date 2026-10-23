@@ -27,7 +27,10 @@ public class SecurityConfig {
                 .csrf(c -> c.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
-                        .requestMatchers("/auth/**", "/actuator/health", "/public/**", "/webhooks/**",
+                        // Item 9.7: `/actuator/health/viva` diz so que o processo atende -- nao revela nada que o
+                        // `/actuator/health` ja nao revelasse. O resto do actuator continua exigindo login.
+                        .requestMatchers("/auth/**", "/actuator/health", "/actuator/health/viva",
+                                "/public/**", "/webhooks/**",
                                 "/swagger-ui.html", "/swagger-ui/**",
                                 "/v3/api-docs/**", "/v3/api-docs", "/error").permitAll()
                         .anyRequest().authenticated())

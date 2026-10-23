@@ -274,4 +274,75 @@ class PedidoReabreNoWebhookDoPixTest {
         assertEquals(org.springframework.http.HttpStatus.UNAUTHORIZED, erro.getStatusCode());
         verify(devolucaoDeEstoque, never()).rebaixarDeNovo(any());
     }
+
+    // =============================================================== item 9.6: pagamento sem pedido
+
+    /** Pendura um coletor no log de AUDITORIA e devolve o que ele escrever. */
+    private java.util.List<String> coletandoAauditoria(Runnable acao) {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("AUDITORIA");
+        var coletor = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        coletor.start();
+        logger.addAppender(coletor);
+        try {
+            acao.run();
+        } finally {
+            logger.detachAppender(coletor);
+            coletor.stop();
+        }
+        return coletor.list.stream().map(e -> e.getFormattedMessage()).toList();
+    }
+
+    private Map<String, Object> avisoComValor(String evento, String valor) {
+        Map<String, Object> corpo = aviso(evento);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> pagamento = (Map<String, Object>) corpo.get("payment");
+        pagamento.put("value", valor);
+        return corpo;
+    }
+
+    @org.junit.jupiter.api.Test
+    void pagamentoSEMpedido_DEIXArastroNAauditoria() {
+        // ITEM 9.6 DA VARREDURA: isto era um `ifPresent` seco. Pagamento confirmado para um id que
+        // nao casa com pedido nenhum devolvia 200 e NAO deixava rastro em lugar nenhum -- o dinheiro
+        // entrou na conta do lojista, nao ha pedido, e ninguem tem como ligar uma coisa na outra
+        // depois. Acontece de verdade: pedido apagado, cobranca criada e o pedido perdido antes de
+        // gravar, cliente pagando um link antigo.
+        when(pedidos.findFirstByLojaIdAndCanalExternoAndIdExterno(LOJA, "PIX_ASAAS", PAGAMENTO))
+                .thenReturn(Optional.empty());
+
+        var linhas = coletandoAauditoria(
+                () -> controller.pixWebhook(LOJA, TOKEN, avisoComValor("PAYMENT_RECEIVED", "40.00")));
+
+        assertEquals(1, linhas.size(), "esperava uma linha de auditoria; foi: " + linhas);
+        String linha = linhas.get(0);
+        assertTrue(linha.contains(PAGAMENTO), "tem que dizer QUAL pagamento, para dar conciliar: " + linha);
+        assertTrue(linha.contains("40.00"), "e o valor que entrou: " + linha);
+        assertTrue(linha.contains(String.valueOf(LOJA)), "e de qual loja: " + linha);
+    }
+
+    @org.junit.jupiter.api.Test
+    void pagamentoSEMpedido_CONTINUAdevolvendo200() {
+        // De proposito: o Asaas reenvia o que nao recebe 200, e reenviar nao vai fazer o pedido
+        // aparecer. Devolver erro aqui so criaria uma fila de reentrega crescendo sozinha.
+        when(pedidos.findFirstByLojaIdAndCanalExternoAndIdExterno(LOJA, "PIX_ASAAS", PAGAMENTO))
+                .thenReturn(Optional.empty());
+
+        var r = controller.pixWebhook(LOJA, TOKEN, aviso("PAYMENT_RECEIVED"));
+
+        assertEquals("true", r.get("received"));
+        verify(pedidos, never()).save(any());
+    }
+
+    @org.junit.jupiter.api.Test
+    void pagamentoCOMpedido_naoESCREVEnaAUDITORIA() {
+        // O risco do outro lado: avisar em todo pagamento faria o log de auditoria virar ruido, e aí
+        // o caso que importa se perde no meio.
+        when(pedidos.findFirstByLojaIdAndCanalExternoAndIdExterno(LOJA, "PIX_ASAAS", PAGAMENTO))
+                .thenReturn(Optional.of(vivo()));
+
+        var linhas = coletandoAauditoria(
+                () -> controller.pixWebhook(LOJA, TOKEN, aviso("PAYMENT_RECEIVED")));
+
+        assertTrue(linhas.isEmpty(), "pagamento que casou com pedido nao e caso de auditoria: " + linhas);
+    }
 }

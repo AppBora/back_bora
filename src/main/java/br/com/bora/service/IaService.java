@@ -39,10 +39,15 @@ public class IaService {
     private final WhatsAppSender whats;
     private final String claudeKey;
 
+    /** Transacao curta e explicita: ver o item 9.5 em {@link #importarCardapio}. */
+    private final org.springframework.transaction.support.TransactionTemplate tx;
+
     public IaService(LojaRepository lojas, ClienteRepository clientes, PedidoRepository pedidos,
                      ProdutoRepository produtos, IaRecuperacaoRepository recuperacoes,
                      IntegracaoCanalRepository integracoes, WhatsAppSender whats,
+                     org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                      @Value("${bora.claude.api-key:}") String claudeKey) {
+        this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
         this.lojas = lojas;
         this.clientes = clientes;
         this.pedidos = pedidos;
@@ -70,8 +75,27 @@ public class IaService {
 
     // ---------- (1) RECUPERADOR DE CLIENTES ----------
 
-    /** Dispara a recuperação: clientes com telefone, sumidos há 21+ dias, sem contato nos últimos 30. */
-    @Transactional
+    /**
+     * Dispara a recuperação: clientes com telefone, sumidos há 21+ dias, sem contato nos últimos 30.
+     *
+     * <h2>Item 9.3 da varredura — dois defeitos no mesmo laço</h2>
+     * <p><b>Não tinha teto quando o WhatsApp não respondia.</b> O {@code break} olhava
+     * {@code enviados}, e {@code enviados} só subia no ramo de <b>sucesso</b>. Com a Meta fora do ar,
+     * nenhum envio dava certo, o contador ficava em zero, o {@code break} nunca disparava e o laço
+     * percorria a <b>base inteira</b> — cada cliente com um tempo limite de HTTP pela frente. A
+     * varredura estimou ~7 horas com 2.000 clientes.</p>
+     *
+     * <p><b>E era {@code @Transactional}</b>, então essas horas eram uma transação aberta: uma
+     * conexão do pool (de 20) presa, e o PostgreSQL impedido de limpar versões antigas de linha
+     * enquanto ela vivesse. Chamada externa dentro de transação é o mesmo defeito que já foi
+     * consertado no cobrador de PIX e que os itens 9.4 e 9.5 repetem.</p>
+     *
+     * <p>Agora: o teto conta <b>tentativas</b>, não sucessos — falha também gasta a cota, que é o
+     * que faz o laço terminar. E não há transação em volta: cada {@code recuperacoes.save} é um
+     * insert atômico por si, e é assim que tem de ser — se a 40ª mensagem falhar, as 39 que
+     * <b>saíram de verdade</b> precisam estar gravadas, senão o cliente recebe de novo no dia
+     * seguinte. A transação única fazia o contrário: ou tudo, ou nada do que já aconteceu no mundo.</p>
+     */
     public Map<String, Object> recuperarClientes(Long lojaId) {
         Loja loja = exigirModulo(lojaId);
         IntegracaoCanal zap = integracoes.findByLojaIdAndCanal(lojaId, "WHATSAPP")
@@ -80,9 +104,11 @@ public class IaService {
         OffsetDateTime inicioMes = agora.withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
         long usadasNoMes = recuperacoes.countByLojaIdAndEnviadoEmAfter(lojaId, inicioMes);
         long saldo = Math.max(0, MAX_MSGS_MES - usadasNoMes);
-        int enviados = 0, candidatos = 0;
+        int enviados = 0, candidatos = 0, tentativas = 0;
         for (Cliente c : clientes.findByLojaIdOrderByNomeAsc(lojaId)) {
-            if (enviados >= saldo) break; // teto mensal do plano do Módulo IA atingido
+            // Item 9.3: o teto conta TENTATIVA, nao sucesso. Com `enviados`, WhatsApp fora do ar
+            // deixava o contador em zero e o laco percorria a base inteira, um timeout por cliente.
+            if (tentativas >= saldo) break; // teto mensal do plano do Módulo IA atingido
             if (c.telefone == null || c.telefone.replaceAll("\\D", "").length() < 10) continue;
             OffsetDateTime ultimo = pedidos.findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(lojaId, c.id)
                     .map(p -> p.criadoEm).orElse(null);
@@ -92,7 +118,9 @@ public class IaService {
             String texto = "Oi" + (c.nome == null ? "" : " " + c.nome.split(" ")[0]) + "! 😊 Aqui é da *"
                     + loja.nome + "*. Sentimos sua falta por aqui! Que tal pedir de novo hoje? "
                     + "Peça pelo nosso cardápio: https://borahapp.com.br/cardapio.html?loja=" + lojaId;
-            if (zap != null && whats.enviar(zap, c.telefone, texto)) {
+            if (zap == null) continue;   // sem integracao nao ha o que tentar: nao gasta cota
+            tentativas++;
+            if (whats.enviar(zap, c.telefone, texto)) {
                 IaRecuperacao r = new IaRecuperacao();
                 r.setLojaId(lojaId);
                 r.setClienteId(c.id);
@@ -105,6 +133,9 @@ public class IaService {
         out.put("clientesSumidos", candidatos);
         out.put("mensagensEnviadas", enviados);
         out.put("saldoMensal", Math.max(0, saldo - enviados));
+        // Quantas tentativas falharam. Sem isto, "0 enviadas" podia ser "nao havia quem contatar" ou
+        // "o WhatsApp esta fora do ar" -- duas coisas muito diferentes para quem olha a tela.
+        if (tentativas > enviados) out.put("falharam", tentativas - enviados);
         if (zap == null) out.put("aviso", "Conecte a integração WhatsApp para o disparo automático.");
         else if (saldo - enviados <= 0) out.put("aviso", "Limite de " + MAX_MSGS_MES + " mensagens/mês do Módulo IA atingido.");
         return out;
@@ -133,8 +164,19 @@ public class IaService {
 
     // ---------- (2) MIGRAÇÃO DE CARDÁPIO POR FOTO ----------
 
-    /** Foto/print do cardápio → produtos cadastrados (IA de visão da plataforma). */
-    @Transactional
+    /**
+     * Foto/print do cardápio → produtos cadastrados (IA de visão da plataforma).
+     *
+     * <h2>Item 9.5 da varredura</h2>
+     * <p>Era {@code @Transactional} em volta de <b>tudo</b>, incluindo a chamada à Anthropic, que tem
+     * tempo limite de 64 s. Uma conexão do pool (de 20) ficava presa esse tempo inteiro por importação
+     * — e importação de cardápio é justamente o que o lojista faz no primeiro dia, às vezes várias
+     * vezes seguidas até a foto sair boa.</p>
+     *
+     * <p>Agora a conversa com a IA acontece <b>fora</b> de transação, e só a gravação dos produtos
+     * entra numa — curta, N inserts. A atomicidade que importa fica preservada: ou o cardápio entra
+     * inteiro, ou não entra nada. O que se perde é só o tempo de conexão segurada.</p>
+     */
     @SuppressWarnings("unchecked")
     public Map<String, Object> importarCardapio(Long lojaId, String imagemBase64, String mediaType) {
         exigirModulo(lojaId);
@@ -172,18 +214,24 @@ public class IaService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "Não consegui ler o cardápio da imagem — tente uma foto mais nítida");
         }
-        int criados = 0;
-        for (Map<String, Object> it : itens) {
-            String nome = String.valueOf(it.get("nome"));
-            if (nome == null || nome.isBlank() || nome.length() > 120) continue;
-            Produto p = new Produto();
-            p.lojaId = lojaId;
-            p.nome = nome.trim();
-            p.categoria = it.get("categoria") == null ? "Outros" : String.valueOf(it.get("categoria"));
-            try { p.preco = new BigDecimal(String.valueOf(it.get("preco"))); } catch (Exception e) { p.preco = BigDecimal.ZERO; }
-            produtos.save(p);
-            criados++;
-        }
+        // Item 9.5: a transacao comeca AQUI, depois da IA ter respondido. Antes ela abracava a
+        // chamada de 64 s e segurava uma conexao do pool o tempo todo.
+        final List<Map<String, Object>> lista = itens;
+        int criados = tx.execute(st -> {
+            int n = 0;
+            for (Map<String, Object> it : lista) {
+                String nome = String.valueOf(it.get("nome"));
+                if (nome == null || nome.isBlank() || nome.length() > 120) continue;
+                Produto p = new Produto();
+                p.lojaId = lojaId;
+                p.nome = nome.trim();
+                p.categoria = it.get("categoria") == null ? "Outros" : String.valueOf(it.get("categoria"));
+                try { p.preco = new BigDecimal(String.valueOf(it.get("preco"))); } catch (Exception e) { p.preco = BigDecimal.ZERO; }
+                produtos.save(p);
+                n++;
+            }
+            return n;
+        });
         return Map.of("produtosCriados", criados);
     }
 

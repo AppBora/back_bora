@@ -33,6 +33,11 @@ import java.util.Map;
 @RequestMapping("/public")
 public class PublicController {
 
+    /** O log de auditoria: o que o dono precisa achar depois, nao o ruido da requisicao. */
+    private static final org.slf4j.Logger AUDITORIA =
+            org.slf4j.LoggerFactory.getLogger("AUDITORIA");
+
+
     private final LojaRepository lojas;
     private final ProdutoRepository produtos;
     private final PedidoRepository pedidos;
@@ -797,7 +802,27 @@ public class PublicController {
         Map<String, Object> payment = (Map<String, Object>) body.get("payment");
         String paymentId = payment == null ? null : str(payment.get("id"));
         if (paymentId != null && ("PAYMENT_RECEIVED".equals(event) || "PAYMENT_CONFIRMED".equals(event))) {
-            pedidos.findFirstByLojaIdAndCanalExternoAndIdExterno(lojaId, "PIX_ASAAS", paymentId).ifPresent(p -> {
+            var doPagamento = pedidos.findFirstByLojaIdAndCanalExternoAndIdExterno(lojaId, "PIX_ASAAS", paymentId);
+            if (doPagamento.isEmpty()) {
+                // ITEM 9.6 DA VARREDURA: isto era um `ifPresent` seco. Pagamento confirmado para um
+                // id que nao casa com pedido nenhum devolvia 200 e NAO deixava rastro em lugar
+                // nenhum: o dinheiro entrou na conta do lojista, nao ha pedido, nao ha log, e
+                // ninguem tem como ligar uma coisa na outra depois.
+                //
+                // Acontece de verdade: pedido apagado, cobranca criada e o pedido perdido antes de
+                // gravar, cliente pagando um link antigo, ou a loja usando a mesma conta Asaas para
+                // outra coisa. Em todos, alguem tem que conciliar na mao -- e para isso precisa saber
+                // que aconteceu.
+                //
+                // Continua devolvendo 200 de proposito: o Asaas reenvia o que nao recebe 200, e
+                // reenviar nao vai fazer o pedido aparecer. O que muda e o aviso ficar registrado.
+                AUDITORIA.warn("AUDITORIA pix: loja {} recebeu o pagamento {} ({}) de R$ {} e NAO HA "
+                                + "PEDIDO com esse id aqui. O dinheiro entrou na conta do lojista e "
+                                + "nao ha venda correspondente -- precisa de conciliacao na mao. "
+                                + "Ver varredura 9.6.",
+                        lojaId, paymentId, event, str(payment.get("value")));
+            }
+            doPagamento.ifPresent(p -> {
                 boolean primeiraConfirmacao = p.pagoEm == null;
                 boolean jaCancelado = p.status == StatusPedido.CANCELADO;
                 p.formaPagamento = jaCancelado ? "PIX (pago APOS o cancelamento)" : "PIX (pago)";

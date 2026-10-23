@@ -83,6 +83,39 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
                     @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
                     @org.springframework.data.repository.query.Param("erro") String erro);
 
+    /**
+     * Tenta pegar a vez de renovar o token: grava a marca se ninguem a tem, ou se a de quem tem
+     * venceu. Devolve 1 quando conseguiu, 0 quando outro processo esta renovando.
+     *
+     * <h2>Item 9.11 da varredura</h2>
+     * <p>A trava de antes era {@code synchronized} num objeto da JVM, e trava de JVM nao atravessa
+     * processo. No iFood isso e grave: ele <b>invalida o refresh token anterior</b> quando emite o
+     * novo, entao duas instancias renovando ao mesmo tempo matam o token uma da outra — e a loja
+     * precisa reautorizar do zero, <b>todas as lojas de uma vez</b>, porque todas renovam no mesmo
+     * ciclo.</p>
+     *
+     * <p>E <b>arrendamento</b>, nao {@code select for update}: a renovacao fala com o iFood, e
+     * segurar lock de banco durante chamada HTTP e exatamente o defeito dos itens 9.3, 9.4 e 9.5.</p>
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
+            + "i.tokenRenovandoEm = :agora where i.id = :id and i.lojaId = :lojaId "
+            + "and (i.tokenRenovandoEm is null or i.tokenRenovandoEm < :venceuAntesDe)")
+    int tentarPegarAvezDeRenovar(
+            @org.springframework.data.repository.query.Param("id") Long id,
+            @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
+            @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora,
+            @org.springframework.data.repository.query.Param("venceuAntesDe") OffsetDateTime venceuAntesDe);
+
+    /** Devolve a vez: a renovacao terminou (deu certo ou nao). */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
+            + "i.tokenRenovandoEm = null where i.id = :id and i.lojaId = :lojaId")
+    int devolverAvezDeRenovar(@org.springframework.data.repository.query.Param("id") Long id,
+                              @org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
     /** Mais um pedido importado. A soma e do BANCO: dois pedidos no mesmo ciclo contavam um. */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.transaction.annotation.Transactional

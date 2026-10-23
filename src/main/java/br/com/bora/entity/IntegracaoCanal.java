@@ -57,6 +57,18 @@ public class IntegracaoCanal {
     @Column(name = "vinculo_expira_em")
     public OffsetDateTime vinculoExpiraEm;
 
+    /**
+     * Quando alguem comecou a renovar o token desta integracao (item 9.11).
+     *
+     * <p>Arrendamento de {@value #ARRENDAMENTO_MIN} minutos: passado esse tempo, outro processo pode
+     * assumir — quem tinha a marca provavelmente morreu no meio. Nulo = ninguem renovando.</p>
+     */
+    @Column(name = "token_renovando_em")
+    public OffsetDateTime tokenRenovandoEm;
+
+    /** Quanto tempo o arrendamento da renovacao vale. Curto: renovar leva segundos. */
+    public static final long ARRENDAMENTO_MIN = 2;
+
     @Column(name = "ultimo_polling_em")
     public OffsetDateTime ultimoPollingEm;
     @Column(name = "ultimo_erro")

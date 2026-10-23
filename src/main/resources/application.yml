@@ -107,3 +107,25 @@ marketplace:
     # A loja so fica online no iFood enquanto este ciclo roda. Nao aumentar sem motivo.
     intervalo-ms: ${BORA_MARKETPLACE_POLLING_MS:30000}
     habilitado: ${BORA_MARKETPLACE_POLLING:true}
+
+# ============================================================ ITEM 9.7 DA VARREDURA
+#
+# O `/actuator/health` do Spring AGREGA todos os indicadores, e um deles e o do banco. Quando o RDS
+# pisca, o health inteiro vira DOWN -- e dois automatismos leem esse mesmo numero para decidir coisas
+# diferentes:
+#
+#   - o VIGIA reinicia a API. Reiniciar nao conserta banco: a API nova sobe, acha o banco fora do ar
+#     e cai de novo. Enquanto isso, as requisicoes em voo morrem a cada reinicio.
+#   - o DEPLOY faz rollback. Rollback de codigo BOM, porque o que estava fora era o banco -- e aí
+#     fica parecendo que a versao nova e que estava com defeito.
+#
+# O grupo `viva` responde sobre o PROCESSO e mais nada: ele atende, a JVM esta de pe. E o que o vigia
+# precisa saber para decidir reiniciar. O `/actuator/health` cheio continua existindo e continua
+# sendo o que o DEPLOY olha -- ali agregar o banco esta certo: versao que nao fala com o banco nao
+# serve. O que o deploy ganhou foi dizer QUAL dos dois caiu, em vez de so "nao ficou sadio".
+management:
+  endpoint:
+    health:
+      group:
+        viva:
+          include: ping

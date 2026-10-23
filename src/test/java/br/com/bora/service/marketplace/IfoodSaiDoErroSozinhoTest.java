@@ -17,6 +17,7 @@ import java.time.OffsetDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
 /**
@@ -65,6 +66,9 @@ class IfoodSaiDoErroSozinhoTest {
         servidor.start();
 
         repo = mock(IntegracaoCanalRepository.class);
+        // Item 9.11: a vez de renovar passou a ser pedida ao banco. No mock ela vem concedida; o
+        // caso em que OUTRO processo esta com ela tem teste proprio (OtokenNaoEreNovadoEmDobroTest).
+        when(repo.tentarPegarAvezDeRenovar(anyLong(), anyLong(), any(), any())).thenReturn(1);
         CredenciaisMarketplace cred = mock(CredenciaisMarketplace.class);
         when(cred.clientId("IFOOD")).thenReturn("app-id");
         when(cred.clientSecret("IFOOD")).thenReturn("app-secret");

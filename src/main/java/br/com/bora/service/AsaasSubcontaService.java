@@ -81,9 +81,20 @@ public class AsaasSubcontaService {
                 .defaultHeader("access_token", apiKey).build();
     }
 
-    /** Estado do recebimento da loja logada. Restrito ao admin: a resposta traz o link de KYC
-     *  bancário da subconta, que decide para onde vai o dinheiro do PIX. */
-    @Transactional
+    /**
+     * Estado do recebimento da loja logada. Restrito ao admin: a resposta traz o link de KYC
+     * bancário da subconta, que decide para onde vai o dinheiro do PIX.
+     *
+     * <h2>Item 9.4, quarto caso — achado pelo teste, não pela varredura</h2>
+     * <p>A varredura apontou três métodos com chamada externa dentro de transação (9.3, 9.4, 9.5).
+     * O teste que eu escrevi para travar os três varre o projeto procurando o mesmo padrão, e
+     * encontrou <b>este</b>, que ninguém tinha listado: {@code atualizarStatus(loja)} fala com o
+     * Asaas, e isto era {@code @Transactional}.</p>
+     *
+     * <p>Aqui o efeito é pior que nos outros três, porque é uma tela: toda abertura de Integrações
+     * segurava uma conexão do pool (de 20) pelo tempo de resposta do Asaas, com a linha da loja
+     * travada. O {@code lojas.save(loja)} é atômico por si — não precisava da transação em volta.</p>
+     */
     public Map<String, Object> status() {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         Loja loja = lojas.findById(ctx.lojaId())
@@ -463,8 +474,19 @@ public class AsaasSubcontaService {
      * Sem isto o lojista so descobriria a aprovacao se abrisse a tela de Integracoes: o KYC e
      * aprovado no Asaas, ninguem avisa o nosso lado e o PIX segue escondido no cardapio.
      */
+    /**
+     * <h2>Item 9.4 da varredura</h2>
+     * <p>Era {@code @Transactional} em volta do laço, e {@code atualizarStatus} <b>fala com o
+     * Asaas</b> — uma chamada HTTP por loja, dentro da transação, com a gravação no meio. A linha da
+     * loja ficava travada esperando resposta de terceiro, e qualquer tela que tocasse aquela loja
+     * esperava junto. É o mesmo defeito já consertado no cobrador de PIX e repetido nos itens 9.3 e
+     * 9.5.</p>
+     *
+     * <p>Sem a transação em volta, cada {@code lojas.save(loja)} é atômico por si — e é o certo: se o
+     * Asaas parar de responder na quinta loja, as quatro primeiras que <b>já foram aprovadas</b>
+     * precisam ficar gravadas. Com a transação única, nenhuma ficava.</p>
+     */
     @Scheduled(initialDelay = 120_000L, fixedDelay = 1_800_000L)
-    @Transactional
     public void reconciliarSubcontas() {
         if (!configurado()) return;
         for (Loja loja : lojas.findAll()) {

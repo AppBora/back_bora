@@ -230,21 +230,81 @@ public class IfoodClient implements MarketplaceClient {
         log.info("iFood: Merchant ID da loja {} descoberto sozinho: {}", i.lojaId, i.merchantId);
     }
 
+    /**
+     * O token de acesso, renovando se preciso.
+     *
+     * <h2>Item 9.11 da varredura: a trava saiu da JVM</h2>
+     * <p>O {@code synchronized} continua — ele resolve, de graca, a disputa entre as 8 threads do
+     * poller e as requisicoes do painel dentro <b>deste</b> processo. O que ele nao resolve e uma
+     * <b>segunda instancia</b>, e o {@code application.yml} planeja uma.</p>
+     *
+     * <p>No iFood isso e grave: ele <b>invalida o refresh token anterior</b> quando emite o novo.
+     * Duas instancias renovando ao mesmo tempo matam o token uma da outra, e a loja precisa
+     * reautorizar do zero — <b>todas as lojas de uma vez</b>, porque todas renovam no mesmo ciclo.
+     * Na 99 o risco nao existe: la o token sai de {@code client_credentials}, que nao invalida o
+     * anterior (conferido no {@code OpenDeliveryClient}: ele nem guarda refresh token).</p>
+     *
+     * <p>Entao a vez de renovar passa a ser pedida ao <b>banco</b>, num arrendamento de
+     * {@value br.com.bora.entity.IntegracaoCanal#ARRENDAMENTO_MIN} minutos. Quem nao consegue a vez
+     * <b>nao renova</b>: espera um instante, rele a linha e usa o token que o outro gravou. Se o
+     * outro morreu no meio, o arrendamento vence e a proxima tentativa assume.</p>
+     */
     @Override
     @SuppressWarnings("unchecked")
     public String tokenValido(IntegracaoCanal i) {
         if (vigente(i)) return i.accessToken;
         synchronized (http.trava(i)) {
             // Outra thread pode ter renovado enquanto esperávamos a trava: relê antes de decidir.
-            if (i.id != null) {
-                repo.findById(i.id).ifPresent(atual -> {
-                    i.accessToken = atual.accessToken;
-                    i.refreshToken = atual.refreshToken;
-                    i.tokenExpiraEm = atual.tokenExpiraEm;
-                });
-            }
+            relerTokens(i);
             if (vigente(i)) return i.accessToken;
-            return renovar(i);
+            if (i.id == null) return renovar(i);   // integracao ainda nao gravada: nao ha linha a arrendar
+
+            if (!pegueiAvezDeRenovar(i)) {
+                // Outro processo esta renovando AGORA. Renovar em paralelo mataria o token dele.
+                log.info("iFood loja {}: outro processo esta renovando o token; vou esperar e usar o "
+                        + "que ele gravar (item 9.11).", i.lojaId);
+                esperarUmInstante();
+                relerTokens(i);
+                if (vigente(i)) return i.accessToken;
+                // Ele nao terminou no tempo que eu esperei. Insistir em paralelo e pior que falhar
+                // esta chamada: o polling tenta de novo em 30 segundos.
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "O acesso ao iFood esta sendo renovado neste momento. Tente em alguns segundos.");
+            }
+            try {
+                return renovar(i);
+            } finally {
+                repo.devolverAvezDeRenovar(i.id, i.lojaId);
+            }
+        }
+    }
+
+    /** Os tokens como estao no banco agora. Sem isto, duas threads renovariam a mesma coisa. */
+    private void relerTokens(IntegracaoCanal i) {
+        if (i.id == null) return;
+        repo.findById(i.id).ifPresent(atual -> {
+            i.accessToken = atual.accessToken;
+            i.refreshToken = atual.refreshToken;
+            i.tokenExpiraEm = atual.tokenExpiraEm;
+        });
+    }
+
+    /** Pede ao banco a vez de renovar (item 9.11). Devolve false quando outro processo esta com ela. */
+    private boolean pegueiAvezDeRenovar(IntegracaoCanal i) {
+        OffsetDateTime agora = OffsetDateTime.now();
+        return repo.tentarPegarAvezDeRenovar(i.id, i.lojaId, agora,
+                agora.minusMinutes(IntegracaoCanal.ARRENDAMENTO_MIN)) == 1;
+    }
+
+    /**
+     * Espera o outro processo terminar de renovar. Curto de proposito: renovar leva segundos, e o
+     * ciclo de polling tem teto de 25 s para todas as lojas -- dormir aqui atrasa as outras.
+     */
+    private void esperarUmInstante() {
+        try {
+            Thread.sleep(1500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
