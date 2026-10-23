@@ -903,10 +903,14 @@ public class PlataformaController {
     public Map<String, String> configuracoes() {
         ctx.requireAdminBora();
         Map<String, String> out = new java.util.LinkedHashMap<>();
-        // Credencial de marketplace NUNCA sai por aqui: esta listagem vai inteira para a tela.
+        // Credencial de marketplace nem aparece aqui. Das demais, o VALOR so sai se estiver na lista
+        // branca de ChavesDaPlataforma -- antes era lista negra, e por isso o fiscal.focus-token
+        // sairia em claro no dia em que o modulo fiscal fosse ligado. Lista branca faz chave nova
+        // nascer protegida, sem ninguem precisar se lembrar de proibir.
         configs.findAll().stream()
                 .filter(c -> !br.com.bora.service.marketplace.CredenciaisMarketplace.ehChaveDeCredencial(c.getChave()))
-                .forEach(c -> out.put(c.getChave(), c.getValor()));
+                .forEach(c -> out.put(c.getChave(),
+                        br.com.bora.service.ChavesDaPlataforma.paraMostrar(c.getChave(), c.getValor())));
         out.put("split.padrao", splitPadrao);
         return out;
     }
