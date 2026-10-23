@@ -282,11 +282,43 @@ public class IntegracaoService {
                         // O motivo so existe no cancelamento e o marketplace exige ele; mandar
                         // "CANCELADO" seco faz o iFood recusar e o pedido fica aberto la dentro.
                         // CANCELADO já foi pedido ao marketplace ANTES de salvar (cancelarNoMarketplace).
-                        if (!"CANCELADO".equals(novoStatus)) c.enviarStatus(i, p.idExterno, novoStatus);
+                        // ITEM 5.2 DA VARREDURA: o retorno era descartado. O marketplace recusava o
+                        // status e ninguem ficava sabendo -- nem o lojista, nem o log. Na 99 a ordem
+                        // dos status e OBRIGATORIA, entao um passo perdido trava todos os seguintes:
+                        // o pedido fica congelado lá dentro enquanto aqui aparece como entregue.
+                        //
+                        // Nao estoura: o status JA mudou aqui, e a cozinha nao pode ser interrompida
+                        // porque o iFood recusou um aviso. Mas fica escrito no `ultimo_erro`, que e o
+                        // que a tela de Integracoes mostra, e no log de auditoria.
+                        if (!"CANCELADO".equals(novoStatus)
+                                && !c.enviarStatus(i, p.idExterno, novoStatus)) {
+                            avisarStatusNaoPropagado(i, p, novoStatus);
+                        }
                     },
                     () -> log.debug("[{}] canal sem integração oficial; status {} não propagado",
                             p.canalExterno, novoStatus));
         });
+    }
+
+    /**
+     * O marketplace recusou o status. Registra onde o lojista ve, sem derrubar a operacao.
+     *
+     * <p>Grava no {@code ultimo_erro} da integracao (a tela de Integracoes mostra) <b>sem</b> marcar a
+     * integracao como ERRO: ela esta funcionando, foi um aviso que nao passou. Marcar ERRO jogaria a
+     * loja na fila de 10 minutos e faria um problema pequeno virar um grande — e o item 5.1 e
+     * exatamente sobre isso.</p>
+     */
+    private void avisarStatusNaoPropagado(IntegracaoCanal i, Pedido p, String novoStatus) {
+        String aviso = "O " + label(i.canal) + " nao aceitou o status " + novoStatus + " do pedido "
+                + (p.codigo == null ? p.id : p.codigo) + ". Lá dentro ele continua no status anterior.";
+        i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(aviso,
+                br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                "integracao_canal.ultimo_erro da loja " + i.lojaId);
+        repo.save(i);
+        log.warn("AUDITORIA marketplace: {} (loja {}, pedido {}). Na 99 a ordem dos status e "
+                        + "obrigatoria, entao os status seguintes deste pedido podem ser recusados "
+                        + "tambem.",
+                aviso, i.lojaId, p.id);
     }
 
     private String str(Object o) { return o == null ? null : String.valueOf(o); }

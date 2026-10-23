@@ -37,6 +37,10 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class MarketplacePoller {
 
+    /** O log de auditoria: o que o dono precisa achar depois, nao o ruido do polling. */
+    private static final org.slf4j.Logger AUDITORIA =
+            org.slf4j.LoggerFactory.getLogger("AUDITORIA");
+
     private final List<MarketplaceClient> clients;
     private final IntegracaoCanalRepository repo;
     private final MarketplaceNormalizer normalizer;
@@ -218,7 +222,18 @@ public class MarketplacePoller {
         }
 
         InboundOrder normalizado = normalizer.normalizar(i.canal, detalhe);
+        // Item 5.7: pedido de TESTE entra marcado, para nao virar venda indistinguivel.
+        boolean deTeste = ehPedidoDeTeste(detalhe);
+        if (deTeste) {
+            normalizado = comAvisoDeTeste(normalizado, i.canal);
+        }
         Pedido criado = pedidos.criarExterno(i.lojaId, i.canal, IntegracaoService.label(i.canal), normalizado);
+        if (deTeste) {
+            AUDITORIA.warn("AUDITORIA marketplace: o pedido {} do {} (loja {}) e PEDIDO DE TESTE e "
+                            + "entrou como #{}. Ele esta marcado na observacao, mas AINDA CONTA no "
+                            + "faturamento -- cancele depois de validar o fluxo. Ver varredura 5.7.",
+                    orderId, i.canal, i.lojaId, criado.id);
+        }
         i.pedidosRecebidos = (i.pedidosRecebidos == null ? 0 : i.pedidosRecebidos) + 1;
         i.ultimaSync = java.time.OffsetDateTime.now();
         repo.save(i);
@@ -228,6 +243,54 @@ public class MarketplacePoller {
         if (Boolean.TRUE.equals(i.autoAceitar)) {
             marcarAceite(client, i, orderId, criado);
         }
+    }
+
+    /**
+     * O marketplace mandou isto como pedido de TESTE?
+     *
+     * <h2>Item 5.7 da varredura</h2>
+     * <p>{@code isTest} nao aparecia em nenhum {@code .java} do projeto — conferido em 22/10/2026.
+     * Pedido de teste entrava como venda de verdade: baixava estoque, contava no faturamento, somava
+     * no CMV. E pedido de teste acontece justamente na <b>homologacao</b>, que e quando o lojista esta
+     * comecando e olhando os numeros.</p>
+     *
+     * <p>Le as duas formas: o {@code isTest} do iFood e o {@code test}/{@code isTest} que aparece em
+     * payloads de Open Delivery. Aceita booleano e texto, porque os dois aparecem.</p>
+     */
+    private static boolean ehPedidoDeTeste(Map<String, Object> detalhe) {
+        for (String campo : new String[] {"isTest", "test", "testOrder"}) {
+            Object v = detalhe.get(campo);
+            if (v == null) continue;
+            if (v instanceof Boolean b) return b;
+            if ("true".equalsIgnoreCase(String.valueOf(v))) return true;
+        }
+        return false;
+    }
+
+    /**
+     * O mesmo pedido, com o aviso de teste na frente da observacao.
+     *
+     * <h2>O que isto resolve, e o que NAO resolve</h2>
+     * <p>Resolve a parte invisivel: o pedido passa a dizer o que e, na observacao que a cozinha e o
+     * card mostram, e fica no log de auditoria. O lojista ve e cancela.</p>
+     *
+     * <p><b>Nao resolve o faturamento:</b> ele continua contando como venda, porque excluir exige uma
+     * coluna nova em {@code pedido} e o faturamento nao olha a origem ({@code somaReceita} filtra por
+     * status e por PIX pendente, nada mais). Marcar e reversivel; mexer na conta do dono sem ele saber
+     * nao e. <b>Decisao dele</b>, com proposta na varredura.</p>
+     *
+     * <p>E <b>nao recusa o pedido</b>, de proposito: a homologacao do iFood exige que a integracao
+     * aceite e faca o pedido de teste andar. Recusar passaria o defeito para outro lugar — a loja nao
+     * conseguiria homologar.</p>
+     */
+    private static InboundOrder comAvisoDeTeste(InboundOrder o, String canal) {
+        String aviso = "*** PEDIDO DE TESTE DO " + IntegracaoService.label(canal).toUpperCase()
+                + " -- NAO PREPARE, E CANCELE DEPOIS DE VALIDAR ***";
+        String obs = o.observacao() == null || o.observacao().isBlank()
+                ? aviso : aviso + " | " + o.observacao();
+        return new InboundOrder(o.externalId(), o.clienteNome(), o.clienteTelefone(), o.endereco(),
+                o.bairro(), o.pagamento(), obs, o.total(), o.itens(), o.taxaEntrega(),
+                o.numeroExibicao(), o.clienteIdExterno());
     }
 
     /**

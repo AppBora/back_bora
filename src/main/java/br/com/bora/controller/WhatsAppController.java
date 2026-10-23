@@ -65,6 +65,49 @@ public class WhatsAppController {
         }
     }
 
+    /**
+     * O aviso é do número DESTA loja?
+     *
+     * <h2>Item 5.9 da varredura, e o que medir corrigiu</h2>
+     * <p>A varredura dizia que "a assinatura prova que veio da Meta, não de qual loja" e que isso
+     * "quebra na <b>segunda</b> loja que ligar o robô". <b>Não quebra:</b> o {@code lojaId} vem da
+     * URL do webhook ({@code /whatsapp/{lojaId}}), não da assinatura, então cada loja tem o seu
+     * endereço e as duas funcionam. O App Secret é da plataforma de propósito — é um aplicativo Meta
+     * só, com os números das lojas dentro.</p>
+     *
+     * <p><b>O que falta de verdade</b> é o que esta conferência faz: a assinatura prova que o corpo
+     * veio da Meta, e mais nada. Ela não amarra o corpo à loja do endereço. Então um corpo legítimo
+     * da loja A, reenviado para o endereço da loja B, era aceito como evento da B — e o robô
+     * responderia ao cliente da A com o nome e o cardápio da B.</p>
+     *
+     * <p>A Meta manda em {@code value.metadata.phone_number_id} <b>qual número</b> recebeu a mensagem,
+     * e esse id é justamente o que a integração da loja guarda no {@code clientId}. Comparar os dois
+     * amarra o evento à loja. Evento sem metadata passa — ainda existem avisos sem ela, e recusar o
+     * que não se entende deixaria o robão mudo.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private boolean eDoNumeroDaLoja(Map<String, Object> body, IntegracaoCanal i) {
+        try {
+            List<Map<String, Object>> entry = (List<Map<String, Object>>) body.get("entry");
+            if (entry == null || entry.isEmpty()) return true;
+            List<Map<String, Object>> changes = (List<Map<String, Object>>) entry.get(0).get("changes");
+            if (changes == null || changes.isEmpty()) return true;
+            Map<String, Object> value = (Map<String, Object>) changes.get(0).get("value");
+            Map<String, Object> meta = value == null ? null : (Map<String, Object>) value.get("metadata");
+            Object numero = meta == null ? null : meta.get("phone_number_id");
+            if (numero == null) return true;   // aviso sem metadata: nao da para conferir, entao passa
+            if (String.valueOf(numero).equals(i.clientId)) return true;
+            log.warn("WhatsApp loja {}: o aviso e do numero {} e esta loja usa o {}. IGNORADO -- "
+                            + "responder aqui falaria com o cliente de outra loja.",
+                    i.lojaId, numero, i.clientId);
+            return false;
+        } catch (Exception e) {
+            // Corpo em formato inesperado nao pode derrubar o webhook: a Meta reenvia o que falha.
+            log.warn("WhatsApp loja {}: nao consegui conferir o numero do aviso: {}", i.lojaId, e.getMessage());
+            return true;
+        }
+    }
+
     /** Comparação em tempo constante: com equals, o tamanho do prefixo certo vaza pelo relógio. */
     private static boolean igual(String a, String b) {
         if (a == null || b == null) return false;
@@ -112,6 +155,7 @@ public class WhatsAppController {
                     .filter(x -> Boolean.TRUE.equals(x.ativo) && x.clientSecret != null && x.clientId != null)
                     .orElse(null);
             if (i == null) return Map.of("status", "ignored");
+            if (!eDoNumeroDaLoja(body, i)) return Map.of("status", "ignored");
 
             List<Map<String, Object>> entry = (List<Map<String, Object>>) body.get("entry");
             if (entry == null || entry.isEmpty()) return Map.of("status", "ok");

@@ -285,7 +285,24 @@ public class IfoodClient implements MarketplaceClient {
             throw falha("Não foi possível renovar o acesso ao iFood", e, i);
         }
         guardarTokens(i, resp);
-        repo.save(i);
+        try {
+            repo.save(i);
+        } catch (Exception e) {
+            // ITEM 5.4 DA VARREDURA: o iFood INVALIDA o refresh token anterior quando emite o novo.
+            // Se a gravacao falhar aqui, o token novo se perde e o antigo ja esta morto -- a loja
+            // precisa reautorizar do zero, e ninguem fica sabendo por que a integracao parou.
+            //
+            // Nao da para consertar o estado (o token antigo nao volta), mas da para dizer EXATAMENTE
+            // o que aconteceu e o que fazer. Antes isto subia como erro genérico de banco.
+            i.status = "ERRO";
+            log.error("iFood loja {}: o token foi renovado no iFood mas NAO consegui gravar aqui "
+                            + "({}). O iFood ja invalidou o token anterior, entao esta integracao "
+                            + "PAROU e a loja precisa REAUTORIZAR o iFood em Integracoes. Nao ha "
+                            + "conserto automatico para isto.",
+                    i.lojaId, e.getMessage());
+            throw falha("O iFood renovou o acesso mas nao consegui guardar. Reautorize o iFood em "
+                    + "Integracoes.", e, null);
+        }
         return i.accessToken;
     }
 
@@ -313,6 +330,21 @@ public class IfoodClient implements MarketplaceClient {
                     .retrieve().body(List.class);
             i.ultimoPollingEm = OffsetDateTime.now();
             i.ultimoErro = null;
+            // ITEM 5.1 DA VARREDURA: isto limpava a mensagem de erro e deixava o STATUS em "ERRO".
+            //
+            // Integracao em ERRO entra na fila espacada -- uma tentativa a cada 10 minutos
+            // (IntegracaoCanal.ESPERA_APOS_ERRO_MIN), em vez dos 30 segundos normais. Entao, depois de
+            // UMA falha qualquer (token expirado, iFood fora do ar por um minuto), a loja ficava
+            // presa no ciclo de 10 minutos PARA SEMPRE -- mesmo com o polling voltando a funcionar na
+            // tentativa seguinte. O pedido do iFood chega minutos atrasado e, na pratica, a loja some
+            // do aplicativo.
+            //
+            // A 99 (OpenDeliveryClient) ja fazia isto desde o inicio; o iFood ficou de fora.
+            if ("ERRO".equals(i.status)) {
+                i.status = "CONECTADO";
+                log.info("iFood: loja {} voltou sozinha: o polling funcionou de novo. Ela sai da fila "
+                        + "de 10 minutos e volta para a de 30 segundos.", i.lojaId);
+            }
             repo.save(i);
             return eventos == null ? List.of() : eventos;
         } catch (Exception e) {
