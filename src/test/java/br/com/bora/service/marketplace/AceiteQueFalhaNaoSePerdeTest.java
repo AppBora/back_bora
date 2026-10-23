@@ -122,7 +122,8 @@ class AceiteQueFalhaNaoSePerdeTest {
 
         // Sem a marca, o proximo evento do mesmo pedido tenta outra vez.
         verify(pedidos, never()).marcarAceiteEnviado(anyLong(), anyLong());
-        verify(repo).save(argThat(i -> i.ultimoErro != null && i.ultimoErro.contains(ORDEM)));
+        // Item 5.5: so a coluna do recado, nao a linha inteira.
+        verify(repo).marcarAviso(eq(7L), eq(LOJA), argThat(erro -> erro.contains(ORDEM)));
         assertNotNull(integ.ultimoErro, "a tela de Integracoes mostra `ultimo_erro`; o lojista precisa ver");
     }
 }

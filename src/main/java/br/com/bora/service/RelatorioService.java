@@ -86,6 +86,18 @@ public class RelatorioService {
                 .filter(Pedido::pagamentoPendente)
                 .count();
         BigDecimal ticket = qtdPed == 0 ? BigDecimal.ZERO : fat.divide(BigDecimal.valueOf(qtdPed), 2, RoundingMode.HALF_UP);
+        // ITEM 5.8 DA VARREDURA: quanto deste faturamento e taxa de entrega que o MARKETPLACE ficou.
+        //
+        // O `faturamento` acima e o bruto que o cliente pagou, e continua sendo -- descontar a taxa
+        // mudaria um numero que o dono olha todo dia, e isso e decisao dele. O que faltava era poder
+        // VER o tamanho: a informacao existia so como texto na observacao ("Entrega pelo iFood"), que
+        // nenhuma conta alcanca.
+        //
+        // So conta quando `entregaPeloCanal` e TRUE. Nulo e "nao informado" (pedido de balcao, ou
+        // anterior a V58) e nao pode virar taxa de ninguem.
+        BigDecimal taxaDoCanal = soma(vendas.stream()
+                .filter(p -> Boolean.TRUE.equals(p.entregaPeloCanal))
+                .map(p -> p.taxaEntrega));
 
         // por dia (faturamento) — série dos últimos `janela` dias
         Map<String, BigDecimal> porDia = new LinkedHashMap<>();
@@ -137,6 +149,8 @@ public class RelatorioService {
         out.put("lojaId", lojaId);
         out.put("loja", nomeLoja);
         out.put("faturamento", fat);
+        // Item 5.8: ao lado do faturamento, nao dentro dele.
+        out.put("taxaDoMarketplace", taxaDoCanal);
         out.put("pedidos", qtdPed);
         out.put("ticketMedio", ticket);
         out.put("cancelados", cancelados);

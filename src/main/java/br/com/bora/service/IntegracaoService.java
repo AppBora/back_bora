@@ -314,7 +314,9 @@ public class IntegracaoService {
         i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(aviso,
                 br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                 "integracao_canal.ultimo_erro da loja " + i.lojaId);
-        repo.save(i);
+        // Item 5.5: so a coluna do recado. Esta chamada acontece enquanto o operador mexe no painel;
+        // gravar a linha inteira aqui desfaria o que ele salvou na tela de Integracoes.
+        repo.marcarAviso(i.id, i.lojaId, i.ultimoErro);
         log.warn("AUDITORIA marketplace: {} (loja {}, pedido {}). Na 99 a ordem dos status e "
                         + "obrigatoria, entao os status seguintes deste pedido podem ser recusados "
                         + "tambem.",

@@ -350,6 +350,8 @@ public class PedidoService {
                 "id do pedido no canal", in.externalId(), canalCodigo, lojaId);
         p.observacao = in.observacao();
         if (in.taxaEntrega() != null) p.taxaEntrega = in.taxaEntrega();
+        // Item 5.8: quem ficou com a taxa. Nulo continua nulo -- "nao informado" nao e "a loja ficou".
+        p.entregaPeloCanal = in.entregaPeloCanal();
         p.status = StatusPedido.RECEBIDO;
         p.criadoEm = OffsetDateTime.now();
         p.atualizadoEm = OffsetDateTime.now();

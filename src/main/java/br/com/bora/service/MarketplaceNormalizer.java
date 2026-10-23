@@ -127,7 +127,11 @@ public class MarketplaceNormalizer {
                 comLocalizador(firstNonBlank(str(fone.get("number")), str(cliente.get("phone"))), str(fone.get("localizer"))),
                 endereco, retirada ? null : str(end.get("neighborhood")), pagamentoIfood(pagamentos),
                 String.join(" | ", obs), valorPedido, itens, taxa, numero)
-                .comClienteExterno(str(cliente.get("id")));
+                .comClienteExterno(str(cliente.get("id")))
+                // Item 5.8: o mesmo `entregaIfood` que escreve "Entrega pelo iFood" na observacao
+                // passa a ser GRAVADO. Texto na observacao nenhuma conta alcanca. Retirada nao tem
+                // entrega, logo nao tem taxa de ninguem: fica nulo.
+                .comEntregaDoCanal(retirada ? null : entregaIfood);
     }
 
     private static String comLocalizador(String numero, String localizador) {
@@ -293,7 +297,8 @@ public class MarketplaceNormalizer {
                 endereco, retirada ? null : str(end.get("district")),
                 pagamentoOpenDelivery(pagamentos, pelaPlataforma, aPagar),
                 String.join(" | ", obs), valorPedido, itens, taxa, numero)
-                .comClienteExterno(str(cliente.get("id")));
+                .comClienteExterno(str(cliente.get("id")))
+                .comEntregaDoCanal(retirada ? null : pelaPlataforma);   // item 5.8
     }
 
     /** Como o cliente paga, do jeito que o caixa e o entregador precisam ler. */

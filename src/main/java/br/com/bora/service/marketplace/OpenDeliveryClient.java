@@ -228,7 +228,9 @@ public class OpenDeliveryClient implements MarketplaceClient {
         i.accessToken = String.valueOf(resp.get("access_token"));
         i.tokenExpiraEm = OffsetDateTime.now().plusSeconds(segundos(resp.get("expires_in"), 3600));
         i.ultimoErro = null;
-        repo.save(i);
+        // Item 5.5: coluna cifrada vai pela entidade, mas pela linha ATUAL -- gravar a copia velha
+        // que o ciclo carregou desfaz o que o lojista salvou nesses segundos.
+        gravarTokenNaLinhaAtual(i);
         return i.accessToken;
     }
 
@@ -237,8 +239,21 @@ public class OpenDeliveryClient implements MarketplaceClient {
         i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(mensagem,
                 br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                 "integracao_canal.ultimo_erro da loja " + i.lojaId);
-        repo.save(i);
+        repo.marcarErro(i.id, i.lojaId, i.ultimoErro);   // item 5.5: so o status e o erro
         return new ResponseStatusException(HttpStatus.BAD_GATEWAY, mensagem);
+    }
+
+    /** Ver {@code IfoodClient.gravarTokensNaLinhaAtual} — mesma razao, item 5.5. */
+    private void gravarTokenNaLinhaAtual(IntegracaoCanal i) {
+        IntegracaoCanal atual = i.id == null ? null : repo.findById(i.id).orElse(null);
+        if (atual == null) {
+            repo.save(i);
+            return;
+        }
+        atual.accessToken = i.accessToken;
+        atual.tokenExpiraEm = i.tokenExpiraEm;
+        atual.ultimoErro = null;
+        repo.save(atual);
     }
 
     // ---------------------------------------------------------------- eventos
@@ -258,7 +273,7 @@ public class OpenDeliveryClient implements MarketplaceClient {
                 i.status = "CONECTADO";
                 log.info("Open Delivery: loja {} voltou sozinha: o polling funcionou de novo", i.lojaId);
             }
-            repo.save(i);
+            repo.marcarPollingOk(i.id, i.lojaId, i.ultimoPollingEm);   // item 5.5
             return eventos == null ? List.of() : eventos;
         } catch (Exception e) {
             i.ultimoPollingEm = OffsetDateTime.now();
@@ -267,7 +282,9 @@ public class OpenDeliveryClient implements MarketplaceClient {
                         br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                         "integracao_canal.ultimo_erro da loja " + i.lojaId);
             }
-            repo.save(i);
+            // Item 5.5. O `falha()` ja gravou status e erro quando a excecao veio dele; aqui so a
+            // hora da tentativa e, se houver, a mensagem.
+            repo.marcarPollingFalhou(i.id, i.lojaId, i.ultimoPollingEm, i.ultimoErro);
             log.warn("Open Delivery: polling falhou para a loja {}: {}", i.lojaId, e.getMessage());
             return List.of();
         }

@@ -42,6 +42,7 @@ class PedidoDeTesteEntraMarcadoTest {
     private static final String ORDEM = "ifood-ped-teste";
 
     private PedidoService pedidos;
+    private IntegracaoCanalRepository repoIntegracoes;
     private MarketplaceNormalizer normalizer;
     private MarketplaceClient client;
     private MarketplacePoller poller;
@@ -50,6 +51,7 @@ class PedidoDeTesteEntraMarcadoTest {
     @BeforeEach
     void montar() {
         pedidos = mock(PedidoService.class);
+        repoIntegracoes = mock(IntegracaoCanalRepository.class);
         normalizer = mock(MarketplaceNormalizer.class);
         client = mock(MarketplaceClient.class);
         when(client.canal()).thenReturn("IFOOD");
@@ -65,7 +67,7 @@ class PedidoDeTesteEntraMarcadoTest {
         integ.canal = "IFOOD";
         integ.ativo = true;
 
-        poller = new MarketplacePoller(List.of(client), mock(IntegracaoCanalRepository.class),
+        poller = new MarketplacePoller(List.of(client), repoIntegracoes,
                 normalizer, pedidos, mock(LojaRepository.class),
                 mock(br.com.bora.security.RegraDeAcesso.class), true);
     }
@@ -152,6 +154,18 @@ class PedidoDeTesteEntraMarcadoTest {
     @Test
     void comISTESTemTEXTOfalso_naoGANHAaviso() {
         assertNull(importar(detalhe("isTest", "false"), null).observacao());
+    }
+
+    // =============================================================== 5.5 (o contador)
+
+    @Test
+    void oCONTADORdePEDIDOSsobePELObanco_eNAOpelaLINHAinteira() {
+        // Item 5.5: era leitura-soma-escrita em cima de um valor carregado no comeco do ciclo, e
+        // gravava a linha INTEIRA por cima do que o lojista tinha salvo nesses segundos.
+        importar(detalhe(null, null), null);
+
+        verify(repoIntegracoes).contarPedidoRecebido(eq(7L), eq(LOJA), any());
+        verify(repoIntegracoes, never()).save(any());
     }
 
     @Test

@@ -85,7 +85,10 @@ class OstatusQueOmarketplaceRecusouApareceTest {
                 "e de qual pedido, senao a loja nao sabe onde olhar: " + integ.ultimoErro);
         assertTrue(integ.ultimoErro.contains("99Food"),
                 "e de qual marketplace: " + integ.ultimoErro);
-        verify(repo).save(integ);
+        // Item 5.5: grava SO a coluna do recado. `save(integ)` aqui regravaria a linha inteira e
+        // desfaria o que o lojista acabou de salvar na tela de Integracoes.
+        verify(repo).marcarAviso(eq(3L), eq(LOJA), contains("SAIU_PARA_ENTREGA"));
+        verify(repo, never()).save(any());
     }
 
     @Test
@@ -132,6 +135,7 @@ class OstatusQueOmarketplaceRecusouApareceTest {
         servico.notificarStatus(pedido(), "PRONTO");
 
         assertNull(integ.ultimoErro);
+        verify(repo, never()).marcarAviso(any(), any(), any());
         verify(repo, never()).save(any());
     }
 

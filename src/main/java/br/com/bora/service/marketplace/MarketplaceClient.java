@@ -119,6 +119,35 @@ public interface MarketplaceClient {
         return false;
     }
 
+    /**
+     * O marketplace andou com o pedido por conta propria: a que status interno isso corresponde?
+     *
+     * <h2>Item 5.6 da varredura</h2>
+     * <p>De tudo o que o canal avisa, o Bora so tratava <b>pedido novo</b> e <b>cancelamento</b>.
+     * Todo o resto era confirmado e jogado fora. O caso que doi e a <b>entrega do proprio
+     * marketplace</b>: quem sabe onde o motoboy esta e o iFood, ele avisa que despachou e que
+     * concluiu, e nada disso chegava aqui — o pedido ficava parado no painel no status que a loja
+     * clicou por ultimo, <b>para sempre</b>. Ninguem na loja tem como saber que chegou.</p>
+     *
+     * <p>A 99 (Open Delivery) ja tinha isto pelo webhook, para PICKED_UP e DELIVERED
+     * ({@code OpenDeliveryWebhookController}); quem ficou de fora foi o iFood, que anda por polling.</p>
+     *
+     * <p>Devolve {@code null} para o que nao e avanco. Quem chama so <b>avanca</b>, nunca recua
+     * ({@code PedidoService.avancarPorMarketplace}), entao nome de evento que eu tenha errado aqui
+     * vira no-op, e nao corrupcao — e o poller registra no log o que nao reconheceu, para a producao
+     * ensinar os nomes de verdade em vez de eu adivinhar.</p>
+     */
+    default br.com.bora.entity.StatusPedido statusQueOcanalAvancou(String tipo) {
+        if (tipo == null) return null;
+        return switch (tipo.toUpperCase()) {
+            // Forma por extenso (fullCode do iFood, eventType do Open Delivery) e abreviada (code).
+            case "DISPATCHED", "DSP", "PICKED_UP" -> br.com.bora.entity.StatusPedido.SAIU_PARA_ENTREGA;
+            case "CONCLUDED", "CON", "DELIVERED" -> br.com.bora.entity.StatusPedido.ENTREGUE;
+            case "READY_TO_PICKUP", "RTP", "READY_FOR_PICKUP" -> br.com.bora.entity.StatusPedido.PRONTO;
+            default -> null;
+        };
+    }
+
     /** Motivo que o marketplace informou no cancelamento, pronto para o painel. */
     default String motivoDoCancelamento(Map<String, Object> ev) {
         return null;

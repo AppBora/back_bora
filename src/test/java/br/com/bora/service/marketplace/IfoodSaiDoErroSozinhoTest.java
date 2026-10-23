@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
@@ -104,7 +105,9 @@ class IfoodSaiDoErroSozinhoTest {
         assertEquals("CONECTADO", i.status,
                 "o polling funcionou: a loja tem que sair do ERRO, senao fica na fila de 10 minutos");
         assertNull(i.ultimoErro, "e a mensagem de erro antiga tem que sair da tela");
-        verify(repo).save(i);
+        // Item 5.5: a gravacao e so das colunas do polling, nao da linha inteira.
+        verify(repo).marcarPollingOk(eq(7L), eq(18L), any());
+        verify(repo, never()).save(any());
     }
 
     @Test
@@ -188,6 +191,51 @@ class IfoodSaiDoErroSozinhoTest {
         assertFalse(erro.getReason().contains("conexao com o banco"),
                 "a mensagem crua do banco nao ajuda o lojista: " + erro.getReason());
         verify(repo, times(1)).save(any());
+    }
+
+    // =============================================================== 5.5 (a linha do token)
+
+    @Test
+    void oTOKENnovoNAOdesfazOqueOlojistaSALVOU() {
+        // Item 5.5. Coluna de token passa pelo cifrador, entao tem que ir pela ENTIDADE -- UPDATE em
+        // JPQL nao chama conversor e gravaria a credencial em texto puro. Mas nao pela entidade
+        // VELHA: ela carrega os valores de ate 25 segundos atras e regrava a linha inteira.
+        IntegracaoCanal velha = loja("CONECTADO");
+        velha.tokenExpiraEm = OffsetDateTime.now().minusMinutes(1);   // obriga a renovar
+
+        // o que o lojista salvou enquanto o ciclo rodava
+        IntegracaoCanal atual = loja("CONECTADO");
+        // O token da linha do banco esta vencido tambem: o `tokenValido` rele a linha antes de
+        // decidir (protecao contra duas threads renovando), e se eu deixasse um token vigente aqui
+        // ele voltaria sem renovar nada -- o teste passaria verde medindo o caminho errado.
+        atual.tokenExpiraEm = OffsetDateTime.now().minusMinutes(1);
+        atual.ativo = false;
+        atual.autoAceitar = false;
+        atual.merchantId = "merchant-corrigido";
+        when(repo.findById(7L)).thenReturn(java.util.Optional.of(atual));
+
+        cliente.tokenValido(velha);
+
+        ArgumentCaptor<IntegracaoCanal> gravada = ArgumentCaptor.forClass(IntegracaoCanal.class);
+        verify(repo).save(gravada.capture());
+        assertEquals("tok-novo", gravada.getValue().accessToken, "o token novo tem que ser gravado");
+        assertEquals(Boolean.FALSE, gravada.getValue().ativo,
+                "e a integracao tem que continuar DESLIGADA: foi o lojista que desligou");
+        assertEquals(Boolean.FALSE, gravada.getValue().autoAceitar);
+        assertEquals("merchant-corrigido", gravada.getValue().merchantId);
+    }
+
+    @Test
+    void integracaoAPAGADAnoMEIOdoCICLO_aindaGUARDAoTOKEN() {
+        // Se a linha nao existe mais, nao ha nada a preservar -- e perder o token recem-emitido e
+        // pior: o iFood ja matou o anterior, entao a loja teria que reautorizar do zero.
+        IntegracaoCanal velha = loja("CONECTADO");
+        velha.tokenExpiraEm = OffsetDateTime.now().minusMinutes(1);
+        when(repo.findById(7L)).thenReturn(java.util.Optional.empty());
+
+        assertEquals("tok-novo", cliente.tokenValido(velha));
+
+        verify(repo).save(velha);
     }
 
     @Test

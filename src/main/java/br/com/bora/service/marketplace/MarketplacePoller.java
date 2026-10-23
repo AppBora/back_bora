@@ -185,6 +185,29 @@ public class MarketplacePoller {
             // e cancelado aqui: precisa de gente olhando.
             log.warn("[{}] loja {}: o marketplace RECUSOU o cancelamento do pedido externo {} depois de aceitar o pedido; "
                     + "confira no portal do marketplace", i.canal, i.lojaId, orderId);
+        } else if (client.statusQueOcanalAvancou(tipo) != null) {
+            // ITEM 5.6 DA VARREDURA: o marketplace andou com o pedido e isso nunca chegava aqui.
+            // Quando a entrega e do canal, quem sabe onde o motoboy esta e ele -- e o pedido ficava
+            // parado no painel no status que a loja clicou por ultimo, para sempre.
+            //
+            // `avancarPorMarketplace` so avanca (nunca recua, nunca reabre encerrado) e NAO devolve o
+            // status para o canal: contar de volta a novidade que ele acabou de dar seria eco.
+            br.com.bora.entity.StatusPedido novo = client.statusQueOcanalAvancou(tipo);
+            if (pedidos.avancarPorMarketplace(i.lojaId, i.canal, orderId, novo)) {
+                log.info("[{}] loja {}: o canal avancou o pedido externo {} para {}",
+                        i.canal, i.lojaId, orderId, novo);
+            } else {
+                // Normal: aviso repetido, fora de ordem, ou pedido que a loja ja tinha fechado na mao.
+                log.debug("[{}] loja {}: aviso de {} para o pedido {} nao mudou nada",
+                        i.canal, i.lojaId, novo, orderId);
+            }
+        } else {
+            // Nao reconhecido. Fica no log de proposito: e assim que a producao vai me ensinar os
+            // nomes de evento que eu nao conheco, em vez de eu adivinhar no codigo.
+            log.info("[{}] loja {}: evento \"{}\" do pedido {} nao e tratado por aqui. Se este nome "
+                            + "aparecer com frequencia, ele pode ser um avanco de status que falta "
+                            + "mapear (ver varredura 5.6).",
+                    i.canal, i.lojaId, tipo, orderId);
         }
     }
 
@@ -234,9 +257,12 @@ public class MarketplacePoller {
                             + "faturamento -- cancele depois de validar o fluxo. Ver varredura 5.7.",
                     orderId, i.canal, i.lojaId, criado.id);
         }
+        // Item 5.5: a soma e do BANCO. Era leitura-soma-escrita em cima de um valor carregado no
+        // comeco do ciclo: dois pedidos no mesmo ciclo contavam um, e a linha inteira era regravada
+        // por cima do que o lojista tinha salvo.
         i.pedidosRecebidos = (i.pedidosRecebidos == null ? 0 : i.pedidosRecebidos) + 1;
         i.ultimaSync = java.time.OffsetDateTime.now();
-        repo.save(i);
+        repo.contarPedidoRecebido(i.id, i.lojaId, i.ultimaSync);
         log.info("[{}] loja {}: pedido externo {} importado como #{}", i.canal, i.lojaId, orderId, criado.id);
 
         // Aceite automatico: confirma no marketplace assim que o pedido entra aqui.
@@ -290,7 +316,7 @@ public class MarketplacePoller {
                 ? aviso : aviso + " | " + o.observacao();
         return new InboundOrder(o.externalId(), o.clienteNome(), o.clienteTelefone(), o.endereco(),
                 o.bairro(), o.pagamento(), obs, o.total(), o.itens(), o.taxaEntrega(),
-                o.numeroExibicao(), o.clienteIdExterno());
+                o.numeroExibicao(), o.clienteIdExterno(), o.entregaPeloCanal());
     }
 
     /**
@@ -327,7 +353,7 @@ public class MarketplacePoller {
                             + "; sera reenviado",
                     br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                     "integracao_canal.ultimo_erro da loja " + i.lojaId);
-            repo.save(i);
+            repo.marcarAviso(i.id, i.lojaId, i.ultimoErro);   // item 5.5: recado, sem marcar ERRO
         }
     }
 

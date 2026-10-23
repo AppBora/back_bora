@@ -16,14 +16,20 @@ public record InboundOrder(
         List<InboundItem> itens,
         BigDecimal taxaEntrega,
         String numeroExibicao,
-        String clienteIdExterno) {
+        String clienteIdExterno,
+        /**
+         * Item 5.8: quem entrega. {@code TRUE} = o canal (e fica com a taxa), {@code FALSE} = a
+         * loja, {@code null} = o canal nao informou. Nulo nao e false de proposito: ver
+         * {@code Pedido.entregaPeloCanal}.
+         */
+        Boolean entregaPeloCanal) {
 
     /** Sem o id do cliente no marketplace (canais que ainda nao o leem). */
     public InboundOrder(String externalId, String clienteNome, String clienteTelefone, String endereco, String bairro,
                         String pagamento, String observacao, BigDecimal total, List<InboundItem> itens,
                         BigDecimal taxaEntrega, String numeroExibicao) {
         this(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao, total, itens,
-                taxaEntrega, numeroExibicao, null);
+                taxaEntrega, numeroExibicao, null, null);
     }
 
     /**
@@ -32,7 +38,20 @@ public record InboundOrder(
      */
     public InboundOrder comClienteExterno(String id) {
         return new InboundOrder(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao,
-                total, itens, taxaEntrega, numeroExibicao, id == null || id.isBlank() ? null : id.trim());
+                total, itens, taxaEntrega, numeroExibicao, id == null || id.isBlank() ? null : id.trim(),
+                entregaPeloCanal);
+    }
+
+    /**
+     * O mesmo pedido dizendo quem entrega (item 5.8).
+     *
+     * <p>O dado ja vinha no payload e era usado so para escrever "Entrega pelo iFood" na observacao —
+     * texto, que nenhuma consulta alcanca. Com ele gravado da para somar quanto do faturamento e taxa
+     * que o canal ficou.</p>
+     */
+    public InboundOrder comEntregaDoCanal(Boolean doCanal) {
+        return new InboundOrder(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao,
+                total, itens, taxaEntrega, numeroExibicao, clienteIdExterno, doCanal);
     }
 
     /**
@@ -42,7 +61,8 @@ public record InboundOrder(
      */
     public InboundOrder(String externalId, String clienteNome, String clienteTelefone, String endereco, String bairro,
                         String pagamento, String observacao, BigDecimal total, List<InboundItem> itens) {
-        this(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao, total, itens, null, null, null);
+        this(externalId, clienteNome, clienteTelefone, endereco, bairro, pagamento, observacao, total, itens,
+                null, null, null, null);
     }
 
     /**

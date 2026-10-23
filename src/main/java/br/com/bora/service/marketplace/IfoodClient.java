@@ -281,12 +281,15 @@ public class IfoodClient implements MarketplaceClient {
                     "Falha ao renovar o token: " + e.getMessage(),
                     br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                     "integracao_canal.ultimo_erro da loja " + i.lojaId);
-            repo.save(i);
+            repo.marcarErro(i.id, i.lojaId, i.ultimoErro);   // item 5.5
             throw falha("Não foi possível renovar o acesso ao iFood", e, i);
         }
         guardarTokens(i, resp);
         try {
-            repo.save(i);
+            // Item 5.5: token passa pelo cifrador, entao tem que ir pela ENTIDADE -- UPDATE em JPQL
+            // nao chama conversor e gravaria a credencial em texto puro. Mas nao na entidade VELHA:
+            // esta releitura e o que impede o save de desfazer o que o lojista salvou no meio.
+            gravarTokensNaLinhaAtual(i);
         } catch (Exception e) {
             // ITEM 5.4 DA VARREDURA: o iFood INVALIDA o refresh token anterior quando emite o novo.
             // Se a gravacao falhar aqui, o token novo se perde e o antigo ja esta morto -- a loja
@@ -304,6 +307,39 @@ public class IfoodClient implements MarketplaceClient {
                     + "Integracoes.", e, null);
         }
         return i.accessToken;
+    }
+
+    /**
+     * Grava os tokens na linha <b>atual</b> do banco, e nao na copia velha que o ciclo carregou.
+     *
+     * <h2>Item 5.5 da varredura</h2>
+     * <p>Estas colunas passam pelo cifrador, entao nao da para gravar com UPDATE direto: conversor de
+     * JPA roda na entidade, nao em JPQL, e a credencial sairia em texto puro. Mas gravar a entidade
+     * velha escreve a linha <b>inteira</b> com valores de ate 25 segundos atras — e desfaz o que o
+     * lojista salvou nesse meio tempo.</p>
+     *
+     * <p>Entao: rele a linha, poe os tokens nela, grava ela. O que o lojista mudou fica. Se a linha
+     * nao existir mais (integracao apagada durante o ciclo), grava a que esta na mao — nao ha nada a
+     * preservar, e perder o token recem-emitido e pior: o iFood ja matou o anterior.</p>
+     *
+     * <p><b>O {@code i.id == null} nao esta coberto por teste</b>, e eu sei: a mutacao que o troca
+     * por {@code findById(i.id).orElse(i)} <b>sobreviveu</b> a rodada do item 5.5. E equivalente para
+     * toda entrada alcancavel — quem chega aqui veio do banco, e {@code renovar} exige um
+     * refreshToken que so existe depois de uma gravacao, entao id nulo nao acontece. A guarda fica
+     * por consistencia com o {@code tokenValido} logo acima, que faz a mesma checagem. Nao inventei
+     * teste para um cenario que nao existe: teste verde de cenario impossivel nao prova nada.</p>
+     */
+    private void gravarTokensNaLinhaAtual(IntegracaoCanal i) {
+        IntegracaoCanal atual = i.id == null ? null : repo.findById(i.id).orElse(null);
+        if (atual == null) {
+            repo.save(i);
+            return;
+        }
+        atual.accessToken = i.accessToken;
+        atual.refreshToken = i.refreshToken;
+        atual.tokenExpiraEm = i.tokenExpiraEm;
+        atual.ultimoErro = null;
+        repo.save(atual);
     }
 
     private void guardarTokens(IntegracaoCanal i, Map<String, Object> resp) {
@@ -345,14 +381,16 @@ public class IfoodClient implements MarketplaceClient {
                 log.info("iFood: loja {} voltou sozinha: o polling funcionou de novo. Ela sai da fila "
                         + "de 10 minutos e volta para a de 30 segundos.", i.lojaId);
             }
-            repo.save(i);
+            // Item 5.5: SO as colunas do polling. `repo.save(i)` aqui regravava a linha inteira com
+            // os valores de ate 25 segundos atras e desfazia o que o lojista acabou de salvar.
+            repo.marcarPollingOk(i.id, i.lojaId, i.ultimoPollingEm);
             return eventos == null ? List.of() : eventos;
         } catch (Exception e) {
             i.ultimoPollingEm = OffsetDateTime.now();
             i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(resumo(e),
                     br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                     "integracao_canal.ultimo_erro da loja " + i.lojaId);
-            repo.save(i);
+            repo.marcarPollingFalhou(i.id, i.lojaId, i.ultimoPollingEm, i.ultimoErro);   // item 5.5
             log.warn("iFood: polling falhou para a loja {}: {}", i.lojaId, e.getMessage());
             return List.of();
         }
@@ -529,7 +567,7 @@ public class IfoodClient implements MarketplaceClient {
                     msg + (causa == null ? "" : ": " + resumo(causa)),
                     br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                     "integracao_canal.ultimo_erro da loja " + i.lojaId);
-            repo.save(i);
+            repo.marcarErro(i.id, i.lojaId, i.ultimoErro);   // item 5.5: so o status e o erro
         }
         return new ResponseStatusException(HttpStatus.BAD_GATEWAY, msg);
     }
