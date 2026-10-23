@@ -426,7 +426,20 @@ public class AssinaturaService {
                     // Fechar so o cardapio nao bastava: o painel continuava aberto para sempre, porque
                     // quem estava pagando tem acessoAte NULL e o bloqueio so olha essa data. Cancelou,
                     // ganha o mesmo prazo da carencia e depois para -- em vez de usar de graca sem fim.
-                    prazoDeAcesso(a.getLojaId(), OffsetDateTime.now().plusDays(carenciaDias));
+                    //
+                    // MAS NUNCA ENCURTA, pela mesma razao do PAYMENT_OVERDUE logo acima -- e aqui a
+                    // falta da guarda ja cobrou o preco. Foi o que aconteceu com a Zira: ela pagou
+                    // R$ 398 em 15/10, o registro manual liberou o acesso SEM data de fim, e este
+                    // ramo passou por cima com "hoje + carencia". Quem lesse o banco veria uma loja
+                    // que pagou e vence em 26/10, sem nada explicando o porque.
+                    //
+                    // Vale tambem para a cortesia: loja com 7 dias gratis que cancela a assinatura no
+                    // primeiro dia perdia os dias restantes.
+                    OffsetDateTime comCarencia = OffsetDateTime.now().plusDays(carenciaDias);
+                    OffsetDateTime atual = lojas.findById(a.getLojaId())
+                            .map(l -> l.acessoAte).orElse(null);
+                    prazoDeAcesso(a.getLojaId(),
+                            atual != null && atual.isAfter(comCarencia) ? atual : comCarencia);
                 }
                 case "PAYMENT_DELETED" -> {
                     // Uma cobranca avulsa apagada no painel do Asaas NAO e o fim da assinatura. Isto
@@ -895,6 +908,73 @@ public class AssinaturaService {
         prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias));
         return "sem assinatura ativa: acesso liberado por " + carenciaDias + " dias";
     }
+
+    /**
+     * Libera o acesso de uma loja ate uma data, <b>sem registrar pagamento nenhum</b>.
+     *
+     * <h2>Por que isto existe</h2>
+     * <p>Ate aqui, a unica forma de devolver acesso a uma loja era
+     * {@link #registrarPagamentoRecebidoForaDoAsaas} — ou seja, <b>dizer que entrou dinheiro</b>. Para
+     * cortesia, para negociacao em andamento, ou para o caso da Zira (pagou, o Asaas cancelou a
+     * assinatura e o prazo dela foi encurtado), isso obrigava a lancar uma receita que nao existiu: o
+     * faturamento da plataforma passaria a mentir para resolver um problema de acesso.</p>
+     *
+     * <p>Entao aqui <b>nada toca dinheiro</b>: nao cria pagamento, nao mexe no Asaas, nao muda o
+     * status da assinatura. Mexe so na data que o bloqueio olha — e deixa escrito quem liberou, ate
+     * quando e por que.</p>
+     *
+     * <h2>As duas guardas</h2>
+     * <p><b>Motivo obrigatorio:</b> acesso liberado sem motivo vira mistério em tres meses, e quem
+     * procurar no log nao acha a decisao, so o efeito. <b>Teto de
+     * {@value #MAXIMO_DIAS_DE_LIBERACAO} dias:</b> "liberar para sempre" por engano e fácil de fazer e
+     * dificil de notar — a loja some da cobranca e ninguem repara. Renovar e barato; descobrir um ano
+     * depois, nao.</p>
+     */
+    @Transactional
+    public Map<String, Object> liberarAcesso(Long lojaId, java.time.LocalDate ate, String motivo) {
+        if (motivo == null || motivo.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Diga o motivo da liberacao. Acesso liberado sem motivo vira misterio depois.");
+        }
+        if (ate == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Informe ate quando o acesso vale (AAAA-MM-DD).");
+        }
+        java.time.LocalDate hoje = java.time.LocalDate.now(ZONE);
+        if (!ate.isAfter(hoje)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A data tem que ser depois de hoje. Para TIRAR o acesso, suspenda a loja.");
+        }
+        if (ate.isAfter(hoje.plusDays(MAXIMO_DIAS_DE_LIBERACAO))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "No maximo " + MAXIMO_DIAS_DE_LIBERACAO + " dias por vez. Renovar e barato; "
+                            + "liberar sem fim por engano, nao.");
+        }
+        Loja loja = lojas.findById(lojaId).orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja nao encontrada"));
+
+        OffsetDateTime antes = loja.acessoAte;
+        OffsetDateTime novo = ate.atTime(23, 59).atZone(ZONE).toOffsetDateTime();
+        prazoDeAcesso(lojaId, novo);
+
+        AUDITORIA.warn("AUDITORIA acesso: usuario {} LIBEROU o acesso da loja {} ({}) de {} para {}. "
+                        + "Motivo: {}. Nenhum pagamento foi registrado e a assinatura ({}) nao mudou.",
+                ctx.atual() == null ? null : ctx.atual().userId(), lojaId, loja.getNome(),
+                antes, novo, motivo.trim(),
+                repo.findByLojaId(lojaId).map(x -> String.valueOf(x.getStatus())).orElse("sem assinatura"));
+
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("lojaId", lojaId);
+        out.put("acessoAteAntes", antes);
+        out.put("acessoAte", novo);
+        out.put("motivo", motivo.trim());
+        out.put("aviso", "Nenhum pagamento foi registrado: isto mexe so no acesso. A cobranca no "
+                + "Asaas continua como estava.");
+        return out;
+    }
+
+    /** Teto de uma liberacao. Ver {@link #liberarAcesso}. */
+    public static final long MAXIMO_DIAS_DE_LIBERACAO = 180;
 
     /** Define (ou tira, com null) a data em que o acesso desta loja vence. */
     private void prazoDeAcesso(Long lojaId, OffsetDateTime ate) {

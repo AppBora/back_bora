@@ -240,6 +240,7 @@ public class PlataformaController {
                         (l.plano == null ? Plano.UNICO : l.plano).maxUsuarios,
                         l.criadoEm,
                         ultimoPedido.get(l.id),
+                        l.acessoAte,
                         l.empresaId,
                         l.empresaId == null ? null : nomesEmpresa.get(l.empresaId)))
                 .toList();
@@ -294,6 +295,32 @@ public class PlataformaController {
      * <p>Corpo: {@code {"valor": 199.00, "pagoEm": "2026-10-14", "observacao": "PIX na conta"}}.
      * Sem {@code pagoEm}, vale hoje no fuso de Brasilia.</p>
      */
+    /**
+     * Libera o acesso de uma loja ate uma data, SEM registrar pagamento.
+     *
+     * <p>Ate aqui a unica forma de devolver acesso era dizer que entrou dinheiro
+     * ({@code /pagamento-recebido}). Para cortesia, negociacao em andamento, ou para o caso em que o
+     * Asaas encurtou o prazo de quem ja tinha pago, isso obrigava a lancar receita que nao existiu.</p>
+     *
+     * <p>Corpo: {@code {"ate": "2026-11-30", "motivo": "pagou R$ 398 em 15/10, Asaas cancelou"}}.
+     * Motivo e obrigatorio e fica no log de auditoria com quem liberou.</p>
+     */
+    @PostMapping("/lojas/{lojaId}/liberar-acesso")
+    public Map<String, Object> liberarAcesso(@PathVariable Long lojaId,
+                                             @RequestBody(required = false) Map<String, Object> body) {
+        ctx.requireAdminBora();
+        exigirLoja(lojaId);
+        Map<String, Object> corpo = body == null ? Map.of() : body;
+        java.time.LocalDate ate;
+        try {
+            Object d = corpo.get("ate");
+            ate = d == null || String.valueOf(d).isBlank() ? null : java.time.LocalDate.parse(String.valueOf(d));
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Data invalida (use AAAA-MM-DD).");
+        }
+        return assinaturas.liberarAcesso(lojaId, ate, (String) corpo.get("motivo"));
+    }
+
     @PostMapping("/lojas/{lojaId}/pagamento-recebido")
     public Map<String, Object> registrarPagamentoRecebido(@PathVariable Long lojaId,
                                                           @RequestBody(required = false) Map<String, Object> body) {

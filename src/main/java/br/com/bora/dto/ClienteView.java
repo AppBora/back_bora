@@ -26,6 +26,13 @@ public record ClienteView(
         int maxUsuarios,
         OffsetDateTime criadoEm,
         OffsetDateTime ultimoPedidoEm,
+        /**
+         * Ate quando esta loja pode usar o sistema. Nulo = sem data de fim (quem esta pagando).
+         *
+         * <p>Faltava na tela, e e o numero que decide se a loja sai do ar. Sem ele, "liberar acesso"
+         * seria um botao as cegas: nao da para escolher uma data nova sem saber qual e a atual.</p>
+         */
+        OffsetDateTime acessoAte,
         Long empresaId,
         String empresaNome) {
 }
