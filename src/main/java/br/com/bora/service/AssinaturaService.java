@@ -2,6 +2,7 @@ package br.com.bora.service;
 
 import br.com.bora.entity.Assinatura;
 import br.com.bora.entity.Loja;
+import br.com.bora.entity.MotivoDoAcesso;
 import br.com.bora.entity.PagamentoAssinatura;
 import br.com.bora.entity.Papel;
 import br.com.bora.entity.Plano;
@@ -390,7 +391,8 @@ public class AssinaturaService {
                 case "PAYMENT_CONFIRMED", "PAYMENT_RECEIVED" -> {
                     a.setStatus(StatusAssinatura.ATIVA);
                     ativarLoja(a.getLojaId(), true);
-                    prazoDeAcesso(a.getLojaId(), null); // pagando, o acesso nao tem data de fim
+                    // pagando pelo Asaas, o acesso nao tem data de fim -- e o Asaas manda no prazo
+                    prazoDeAcesso(a.getLojaId(), null, MotivoDoAcesso.ASSINATURA);
                 }
                 case "PAYMENT_OVERDUE" -> {
                     // A carencia comeca UMA vez, no primeiro atraso -- e a chave disso e o status de
@@ -411,13 +413,10 @@ public class AssinaturaService {
                     boolean primeiroAtraso = st != StatusAssinatura.INADIMPLENTE;
                     a.setStatus(StatusAssinatura.INADIMPLENTE);
                     if (primeiroAtraso) {
-                        // Nunca ENCURTA o prazo: loja com cortesia maior que a carencia nao pode
-                        // perder dias por causa de um atraso. Vale o que estiver mais longe.
-                        OffsetDateTime comCarencia = OffsetDateTime.now().plusDays(carenciaDias);
-                        OffsetDateTime atual = lojas.findById(a.getLojaId())
-                                .map(l -> l.acessoAte).orElse(null);
-                        prazoDeAcesso(a.getLojaId(),
-                                atual != null && atual.isAfter(comCarencia) ? atual : comCarencia);
+                        // Nunca ENCURTA: cortesia maior que a carencia nao pode perder dias por
+                        // causa de um atraso, e quem pagou na mao nao pode perder nada.
+                        AUDITORIA.info("Atraso na loja {}: {}", a.getLojaId(),
+                                prazoSemEncurtar(a.getLojaId(), MotivoDoAcesso.INADIMPLENCIA));
                     }
                 }
                 case "SUBSCRIPTION_DELETED" -> {
@@ -435,11 +434,13 @@ public class AssinaturaService {
                     //
                     // Vale tambem para a cortesia: loja com 7 dias gratis que cancela a assinatura no
                     // primeiro dia perdia os dias restantes.
-                    OffsetDateTime comCarencia = OffsetDateTime.now().plusDays(carenciaDias);
-                    OffsetDateTime atual = lojas.findById(a.getLojaId())
-                            .map(l -> l.acessoAte).orElse(null);
-                    prazoDeAcesso(a.getLojaId(),
-                            atual != null && atual.isAfter(comCarencia) ? atual : comCarencia);
+                    //
+                    // A guarda posta na v139 comparava DATAS, e acesso sem data de fim -- que e
+                    // exatamente o que o pagamento deixa -- nao entra em comparacao nenhuma: caia
+                    // direto no "hoje + carencia". O acidente seguia possivel. Agora quem decide e
+                    // o MOTIVO do acesso, nao so a data.
+                    AUDITORIA.info("Assinatura cancelada na loja {}: {}", a.getLojaId(),
+                            prazoSemEncurtar(a.getLojaId(), MotivoDoAcesso.INADIMPLENCIA));
                 }
                 case "PAYMENT_DELETED" -> {
                     // Uma cobranca avulsa apagada no painel do Asaas NAO e o fim da assinatura. Isto
@@ -557,7 +558,9 @@ public class AssinaturaService {
         // 2) O mesmo efeito do PAYMENT_RECEIVED: a loja volta a ter acesso sem data de fim.
         a.setStatus(StatusAssinatura.ATIVA);
         ativarLoja(lojaId, true);
-        prazoDeAcesso(lojaId, null);
+        // PAGAMENTO_MANUAL, e nao ASSINATURA: entrou dinheiro FORA do Asaas, entao aviso dele nao
+        // pode encurtar este acesso depois. E a marca que faltava no acidente da Zira.
+        prazoDeAcesso(lojaId, null, MotivoDoAcesso.PAGAMENTO_MANUAL);
 
         // 3) O registro, para o faturamento da plataforma contar este dinheiro.
         // A chave do registro manual tem um numero no fim. Era so "manual:loja:dia", igual para todo
@@ -814,9 +817,18 @@ public class AssinaturaService {
             a.setAtualizadoEm(OffsetDateTime.now());
             repo.save(a);
         });
-        boolean semPrazo = lojas.findById(lojaId).map(l -> l.acessoAte == null).orElse(false);
-        if (semPrazo) {
-            prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias));
+        // Aqui a regra NAO e a mesma do atraso. O Asaas reenvia o aviso, e regravar "hoje + 10" a
+        // cada reenvio daria 10 dias de graca indefinidamente -- por isso so age quando NAO ha
+        // prazo nenhum, e nunca empurra um prazo existente (ver EstornoCortaOAcessoTest).
+        //
+        // O que mudou: quem esta aberto por pagamento FORA do Asaas, ou por liberacao do dono, nao
+        // ganha prazo por causa da devolucao de outra cobranca. O dinheiro dele nao voltou.
+        Loja lojaDoEstorno = lojas.findById(lojaId).orElse(null);
+        MotivoDoAcesso porque = lojaDoEstorno == null ? null : lojaDoEstorno.acessoMotivo;
+        boolean intocavel = porque == MotivoDoAcesso.PAGAMENTO_MANUAL || porque == MotivoDoAcesso.LIBERACAO;
+        boolean semPrazo = lojaDoEstorno != null && lojaDoEstorno.acessoAte == null;
+        if (semPrazo && !intocavel) {
+            prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias), MotivoDoAcesso.INADIMPLENCIA);
         }
         AUDITORIA.warn("ACESSO COM PRAZO na loja {}: a cobranca {} foi devolvida ao cliente ({}). "
                         + "Assinatura INADIMPLENTE e acesso ate {} dias. Antes disto, estorno nao mexia "
@@ -832,7 +844,7 @@ public class AssinaturaService {
             repo.save(a);
         });
         ativarLoja(lojaId, true);
-        prazoDeAcesso(lojaId, null);   // pagando, o acesso nao tem data de fim
+        prazoDeAcesso(lojaId, null, MotivoDoAcesso.ASSINATURA); // pagando, sem data de fim
         AUDITORIA.warn("ACESSO DEVOLVIDO a loja {}: a disputa foi vencida ({}). A mensalidade volta ao "
                 + "faturamento e o acesso volta a nao ter prazo.", lojaId, evento);
     }
@@ -905,7 +917,7 @@ public class AssinaturaService {
     public String prazoAoReativar(Long lojaId) {
         Assinatura a = repo.findByLojaId(lojaId).orElse(null);
         if (a != null && a.getStatus() == StatusAssinatura.ATIVA) return "assinatura ativa, sem prazo";
-        prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias));
+        prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias), MotivoDoAcesso.CORTESIA);
         return "sem assinatura ativa: acesso liberado por " + carenciaDias + " dias";
     }
 
@@ -955,7 +967,7 @@ public class AssinaturaService {
 
         OffsetDateTime antes = loja.acessoAte;
         OffsetDateTime novo = ate.atTime(23, 59).atZone(ZONE).toOffsetDateTime();
-        prazoDeAcesso(lojaId, novo);
+        prazoDeAcesso(lojaId, novo, MotivoDoAcesso.LIBERACAO);
 
         AUDITORIA.warn("AUDITORIA acesso: usuario {} LIBEROU o acesso da loja {} ({}) de {} para {}. "
                         + "Motivo: {}. Nenhum pagamento foi registrado e a assinatura ({}) nao mudou.",
@@ -977,11 +989,53 @@ public class AssinaturaService {
     public static final long MAXIMO_DIAS_DE_LIBERACAO = 180;
 
     /** Define (ou tira, com null) a data em que o acesso desta loja vence. */
-    private void prazoDeAcesso(Long lojaId, OffsetDateTime ate) {
+    /**
+     * Grava ate quando o acesso vale E por que ele esta assim.
+     *
+     * <p>O motivo e obrigatorio de proposito: foi a falta dele que deixou o acidente da Zira
+     * possivel. {@code ate} nulo significa "sem data de fim", e sozinho nao distingue quem paga
+     * pelo Asaas de quem pagou na mao -- e os dois pedem tratamentos opostos quando a assinatura e
+     * cancelada la. Ver {@link br.com.bora.entity.MotivoDoAcesso}.</p>
+     */
+    private void prazoDeAcesso(Long lojaId, OffsetDateTime ate, MotivoDoAcesso motivo) {
         lojas.findById(lojaId).ifPresent(l -> {
             l.acessoAte = ate;
+            l.acessoMotivo = motivo;
             lojas.save(l);
         });
+    }
+
+    /**
+     * O prazo que o atraso ou o cancelamento impoe -- sem NUNCA encurtar o que a loja ja tinha.
+     *
+     * <p>Tres casos, nesta ordem:</p>
+     * <ol>
+     *   <li>Acesso aberto por {@code PAGAMENTO_MANUAL} ou {@code LIBERACAO}: <b>nao mexe em nada</b>.
+     *       Entrou dinheiro, ou o dono decidiu; aviso do Asaas nao desfaz isso. Era aqui que a Zira
+     *       caia: ela pagou, o acesso ficou sem data de fim, e o cancelamento gravou por cima.</li>
+     *   <li>Prazo explicito mais longe que a carencia: fica o que estava (guarda da v139).</li>
+     *   <li>O resto -- inclusive acesso sem fim de quem pagava pelo Asaas, e linha antiga sem motivo
+     *       registrado: ganha a carencia. Sem isto, assinatura cancelada viraria uso gratis sem fim,
+     *       porque o bloqueio so olha a data.</li>
+     * </ol>
+     *
+     * @return o que foi feito, para o log contar a verdade
+     */
+    private String prazoSemEncurtar(Long lojaId, MotivoDoAcesso motivoDoPrazo) {
+        Loja loja = lojas.findById(lojaId).orElse(null);
+        if (loja == null) return "loja nao encontrada";
+
+        MotivoDoAcesso porque = loja.acessoMotivo;
+        if (porque == MotivoDoAcesso.PAGAMENTO_MANUAL || porque == MotivoDoAcesso.LIBERACAO) {
+            return "acesso mantido: esta aberto por " + porque + ", que aviso do Asaas nao desfaz";
+        }
+
+        OffsetDateTime comCarencia = OffsetDateTime.now().plusDays(carenciaDias);
+        if (loja.acessoAte != null && loja.acessoAte.isAfter(comCarencia)) {
+            return "acesso mantido ate " + loja.acessoAte + ": e mais longe que a carencia";
+        }
+        prazoDeAcesso(lojaId, comCarencia, motivoDoPrazo);
+        return "acesso passa a vencer em " + comCarencia;
     }
 
     private void ativarLoja(Long lojaId, boolean ativo) {

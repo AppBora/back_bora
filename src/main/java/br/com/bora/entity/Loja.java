@@ -48,6 +48,17 @@ public class Loja {
     @Column(name = "acesso_ate")
     public java.time.OffsetDateTime acessoAte;
 
+    /**
+     * Por que o acesso está aberto. Nulo em linha anterior à V60 — o código trata como a regra antiga.
+     *
+     * <p>Existe porque {@link #acessoAte} nulo ("sem data de fim") não distingue quem paga pelo Asaas
+     * de quem pagou na mão, e os dois pedem tratamentos opostos quando a assinatura é cancelada lá.
+     * Ver {@link MotivoDoAcesso}.</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "acesso_motivo", length = 30)
+    public MotivoDoAcesso acessoMotivo;
+
     // ---- Recebimento via subconta Asaas (PIX do cliente cai direto na conta do lojista) ----
     /** Id da subconta do lojista no Asaas (acc_...). */
     @Column(name = "asaas_subconta_id")
