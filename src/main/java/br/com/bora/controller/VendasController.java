@@ -18,8 +18,20 @@ public class VendasController {
         this.ctx = ctx;
     }
 
+    /**
+     * Termometro de vendas: faturamento das ultimas 24h e a media esperada, em reais.
+     *
+     * <h2>Item 8.3 da varredura</h2>
+     * <p>Isto nao tinha checagem de papel nenhuma, e o Dashboard — que o <b>balconista</b> abre —
+     * desenha os dois valores em destaque. Era o faturamento da loja na tela de quem atende o balcao,
+     * enquanto Relatorios, Desempenho e Rede, que mostram a mesma coisa, todos exigem papel.</p>
+     *
+     * <p>Aqui a acao inteira e numero de dono, entao bloqueia mesmo (403). A tela ja trata: o
+     * Dashboard do operador passou a nao desenhar o painel, em vez de mostrar erro.</p>
+     */
     @GetMapping("/termometro")
     public Map<String, Object> termometro() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
         return saude.termometro(ctx.lojaId());
     }
 }

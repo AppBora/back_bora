@@ -55,6 +55,33 @@ public class AuthContext {
         }
     }
 
+    /**
+     * O papel atual esta na lista? <b>Pergunta</b>, nao bloqueia.
+     *
+     * <h2>Por que isto existe (item 8.3 da varredura)</h2>
+     * <p>Numero de dono — faturamento, custo, margem — nao deve sair para o balconista. Mas as telas
+     * que ele USA precisam da mesma consulta: a Frente de Caixa pede {@code GET /api/produtos} para
+     * ter nome, preco e estoque, e esse mesmo retorno levava o <b>custo</b> de cada produto. Barrar a
+     * consulta inteira com {@code requirePapel} tiraria o PDV do balconista; o certo e <b>omitir o
+     * campo</b> que ele nao pode ver, e nao negar a tela.</p>
+     *
+     * <p>Entao: {@code requirePapel} para quando a ACAO e proibida, {@code temPapel} para quando o
+     * que muda e o CONTEUDO da resposta.</p>
+     */
+    public boolean temPapel(String... papeisPermitidos) {
+        if (isAdminBora()) return true;
+        String p = papel();
+        for (String x : papeisPermitidos) {
+            if (x.equals(p)) return true;
+        }
+        return false;
+    }
+
+    /** Quem pode ver dinheiro da loja: faturamento, custo, margem, lucro. */
+    public boolean podeVerNumeroDeDono() {
+        return temPapel("ADMINISTRADOR_LOJA", "GERENTE");
+    }
+
     /** Bloqueia (403) se o papel atual não estiver na lista. ADMINISTRADOR_BORA sempre pode. */
     public void requirePapel(String... papeisPermitidos) {
         if (isAdminBora()) return;

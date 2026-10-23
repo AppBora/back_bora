@@ -68,14 +68,26 @@ public class FidelidadeService {
         if (tel == null) return null;
         return clientes.findFirstByLojaIdAndTelefone(lojaId, tel)
                 .map(c -> {
-                    // So completamos o que esta em branco. Antes, qualquer pessoa que digitasse o
-                    // telefone de um cliente reescrevia o endereco cadastrado dele — e a proxima
-                    // entrega ia para o lugar errado.
-                    if ((c.endereco == null || c.endereco.isBlank()) && endereco != null && !endereco.isBlank()) {
-                        c.endereco = endereco;
+                    // ITEM 8.6 DA VARREDURA. Antes disto, QUALQUER pessoa que digitasse o telefone de
+                    // um cliente reescrevia o endereco cadastrado dele. Isso foi fechado em parte:
+                    // passou a so completar o que estava em branco.
+                    //
+                    // So que "em branco" tambem e uma porta: telefone de cliente nao e segredo (esta
+                    // no grupo do bairro, no comprovante, na agenda de muita gente). Um estranho
+                    // identificado so pelo telefone gravava o endereco DELE no cadastro de um cliente
+                    // que estava sem endereco -- e a proxima entrega da loja ia para la.
+                    //
+                    // Agora o cardapio NAO escreve endereco em cadastro que ja existe. E nao perde
+                    // nada: desde a V48 o endereco da entrega fica no PROPRIO pedido
+                    // (`pedido.endereco_entrega`), que e o que o motoboy le. O cadastro se corrige na
+                    // tela de Clientes, por alguem logado.
+                    if ((c.nome == null || c.nome.isBlank()) && nome != null) {
+                        c.nome = nome;
+                        return clientes.save(c).id;
                     }
-                    if ((c.nome == null || c.nome.isBlank()) && nome != null) c.nome = nome;
-                    return clientes.save(c).id;
+                    // Nada a completar: nem grava. Uma escrita a menos em cadastro de cliente a cada
+                    // pedido do cardapio.
+                    return c.id;
                 })
                 .orElseGet(() -> {
                     Cliente novo = new Cliente();

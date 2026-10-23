@@ -228,7 +228,9 @@ public class IntegracaoService {
     /** Webhook: integração da loja+canal válida para o token informado. */
     public Optional<IntegracaoCanal> autenticarWebhook(Long lojaId, String canal, String token) {
         return repo.findByLojaIdAndCanal(lojaId, canal.toUpperCase())
-                .filter(i -> token != null && token.equals(i.webhookToken));
+                // Item 8.8: comparacao em tempo constante, igual ao que o projeto ja fazia em
+                // WhatsAppController, OpenDeliveryClient e RepetirPedidoService.
+                .filter(i -> br.com.bora.security.Segredos.iguais(token, i.webhookToken));
     }
 
     public void registrarRecebido(IntegracaoCanal i) {

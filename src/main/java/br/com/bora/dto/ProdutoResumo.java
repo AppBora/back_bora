@@ -42,4 +42,21 @@ public record ProdutoResumo(
                 temImagem ? "/public/loja/" + lojaId + "/produto/" + id + "/imagem" : null,
                 codigoExterno);
     }
+
+    /**
+     * O mesmo produto <b>sem o custo</b>, para quem nao pode ver numero de dono.
+     *
+     * <h2>Item 8.3 da varredura</h2>
+     * <p>O menu do painel ja deixa Produtos, Estoque e Insumos para GERENTE para cima. Mas a
+     * <b>Frente de Caixa</b> e aberta ao balconista de proposito, e ela pede {@code GET /api/produtos}
+     * — que devolvia o {@code custo} de cada item. A tela nao desenha esse campo, so que ele chega no
+     * navegador: basta abrir as ferramentas do desenvolvedor para ler o custo de todo o cardapio, e
+     * com ele a margem da loja.</p>
+     *
+     * <p>Omitir o campo e melhor que negar a consulta: negar tiraria o PDV de quem trabalha nele.</p>
+     */
+    public ProdutoResumo semCusto() {
+        return new ProdutoResumo(id, nome, categoria, preco, null, estoque, estoqueMinimo, ativo,
+                imagemUrl, codigoExterno);
+    }
 }

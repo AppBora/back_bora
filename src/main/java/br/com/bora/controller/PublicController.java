@@ -265,11 +265,20 @@ public class PublicController {
         return "/public/loja/" + lojaId + "/" + qual;
     }
 
-    /** Logo ou banner da loja, a partir do que está gravado, com cache no navegador. */
+    /**
+     * Logo ou banner da loja, a partir do que está gravado, com cache no navegador.
+     *
+     * <h2>Item 8.7 da varredura</h2>
+     * <p>Eram os unicos endpoints publicos que nao chamavam {@code lojaAtiva}. Loja suspensa ou com
+     * prazo vencido tinha o cardapio devolvendo 404 e a <b>marca dela continuava servida</b> pela
+     * infraestrutura da plataforma — inclusive as fotos dos produtos. Ficava incoerente (uma porta
+     * fechada, a outra aberta) e a plataforma seguia hospedando a imagem de quem nao paga.</p>
+     */
     @GetMapping("/loja/{lojaId}/{qual:logo|banner}")
     public org.springframework.http.ResponseEntity<byte[]> imagemDaMarca(
             @PathVariable Long lojaId, @PathVariable String qual,
             @RequestHeader(value = "If-None-Match", required = false) String etagRecebida) {
+        lojaAtiva(lojaId);   // item 8.7
         var cfg = configuracoes.findByLojaId(lojaId).orElse(null);
         String dado = cfg == null ? null : ("logo".equals(qual) ? cfg.logoUrl : cfg.bannerUrl);
         return servirImagem(dado, etagRecebida);
@@ -291,11 +300,12 @@ public class PublicController {
         return "/public/loja/" + lojaId + "/produto/" + produtoId + "/imagem";
     }
 
-    /** Serve a foto do produto a partir do que está gravado, com cache no navegador. */
+    /** Serve a foto do produto a partir do que está gravado, com cache no navegador. Ver 8.7. */
     @GetMapping("/loja/{lojaId}/produto/{produtoId}/imagem")
     public org.springframework.http.ResponseEntity<byte[]> imagemDoProduto(
             @PathVariable Long lojaId, @PathVariable Long produtoId,
             @RequestHeader(value = "If-None-Match", required = false) String etagRecebida) {
+        lojaAtiva(lojaId);   // item 8.7
         return servirImagem(produtos.findByIdAndLojaId(produtoId, lojaId)
                 .map(pr -> pr.imagemUrl).orElse(null), etagRecebida);
     }
@@ -776,7 +786,9 @@ public class PublicController {
         IntegracaoCanal integ = integracoes.findByLojaIdAndCanal(lojaId, "PIX").orElse(null);
         boolean viaSubconta = token != null && loja.asaasWebhookToken != null
                 && token.equals(loja.asaasWebhookToken);
-        boolean viaLegado = token != null && integ != null && token.equals(integ.webhookToken);
+        // Item 8.8: comparacao em tempo constante. O `equals` parava no primeiro caractere diferente.
+        boolean viaLegado = integ != null
+                && br.com.bora.security.Segredos.iguais(token, integ.webhookToken);
         if (!viaSubconta && !viaLegado) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token inválido");
         }

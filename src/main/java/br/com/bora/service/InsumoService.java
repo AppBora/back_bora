@@ -36,7 +36,18 @@ public class InsumoService {
     }
 
     // ---- CRUD insumos ----
-    public List<Insumo> listar() { return insumos.findByLojaIdOrderByNomeAsc(ctx.lojaId()); }
+    /**
+     * Os insumos da loja.
+     *
+     * <h2>Item 8.3 da varredura</h2>
+     * <p>A tela de Insumos ja e GERENTE para cima no menu, mas o endpoint nao checava nada — e insumo
+     * e onde o custo da loja mora de verdade. Aqui a lista INTEIRA e numero de dono (nome e unidade
+     * de insumo nao servem ao balcao), entao bloqueia mesmo, em vez de omitir campo.</p>
+     */
+    public List<Insumo> listar() {
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
+        return insumos.findByLojaIdOrderByNomeAsc(ctx.lojaId());
+    }
 
     public Insumo salvar(Insumo i) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
@@ -113,6 +124,9 @@ public class InsumoService {
 
     // ---- Ficha técnica ----
     public List<Map<String, Object>> ficha(Long produtoId) {
+        // Item 8.3: a ficha tecnica traz o custo de cada insumo do produto. Quem monta ficha e quem
+        // cuida de cardapio e de custo, e a tela ja e GERENTE para cima.
+        ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         Map<Long, Insumo> map = new HashMap<>();
         insumos.findByLojaIdOrderByNomeAsc(loja).forEach(i -> map.put(i.id, i));

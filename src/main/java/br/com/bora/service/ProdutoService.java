@@ -39,12 +39,16 @@ public class ProdutoService {
      */
     public List<br.com.bora.dto.ProdutoResumo> listar() {
         Long lojaId = ctx.lojaId();
+        // Item 8.3: o custo so vai para quem pode ver numero de dono. A consulta continua aberta --
+        // a Frente de Caixa e do balconista e precisa de nome, preco e estoque.
+        boolean comCusto = ctx.podeVerNumeroDeDono();
         return repo.resumoDaLoja(lojaId).stream()
                 .map(r -> br.com.bora.dto.ProdutoResumo.de(
                         (Long) r[0], (String) r[1], (String) r[2],
                         (java.math.BigDecimal) r[3], (java.math.BigDecimal) r[4],
                         (Integer) r[5], (Integer) r[6], (Boolean) r[7],
                         lojaId, Boolean.TRUE.equals(r[8]), (String) r[9]))
+                .map(p -> comCusto ? p : p.semCusto())
                 .toList();
     }
 
