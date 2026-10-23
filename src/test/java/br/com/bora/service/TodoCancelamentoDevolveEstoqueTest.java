@@ -41,6 +41,7 @@ class TodoCancelamentoDevolveEstoqueTest {
     @Test
     void pixExpirado_devolveComOStatusAnterior() {
         PedidoRepository repo = mock(PedidoRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
         Pedido p = pedido(StatusPedido.RECEBIDO);
         p.aguardandoPagamento = true;
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
@@ -56,6 +57,7 @@ class TodoCancelamentoDevolveEstoqueTest {
     @Test
     void pixJaPago_naoDevolveNada() {
         PedidoRepository repo = mock(PedidoRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
         Pedido p = pedido(StatusPedido.RECEBIDO);
         p.aguardandoPagamento = true;
         p.pagoEm = OffsetDateTime.now().minusMinutes(1); // pagou entre a consulta e agora
@@ -71,6 +73,7 @@ class TodoCancelamentoDevolveEstoqueTest {
     @Test
     void cancelamentoPeloMarketplace_devolveComOStatusAnterior() {
         PedidoRepository repo = mock(PedidoRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
         Pedido p = pedido(StatusPedido.CONFIRMADO);
         p.canalExterno = "IFOOD";
         p.idExterno = "ped-ext-1";
@@ -87,6 +90,7 @@ class TodoCancelamentoDevolveEstoqueTest {
     @Test
     void cancelamentoNoPainel_devolveComOStatusAnterior() {
         PedidoRepository repo = mock(PedidoRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
         Pedido p = pedido(StatusPedido.EM_PREPARO);
         when(repo.findByIdAndLojaId(1L, 1L)).thenReturn(Optional.of(p));
         when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
@@ -100,6 +104,7 @@ class TodoCancelamentoDevolveEstoqueTest {
     @Test
     void mudancaDeStatusQueNaoEhCancelamento_naoDevolveNada() {
         PedidoRepository repo = mock(PedidoRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
         Pedido p = pedido(StatusPedido.RECEBIDO);
         when(repo.findByIdAndLojaId(1L, 1L)).thenReturn(Optional.of(p));
         when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
@@ -112,6 +117,7 @@ class TodoCancelamentoDevolveEstoqueTest {
     @Test
     void cancelamentoNoPainelDePedidoEsperandoPix_dizQueAVendaNaoFoiContabilizada() {
         PedidoRepository repo = mock(PedidoRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
         Pedido p = pedido(StatusPedido.RECEBIDO);
         p.aguardandoPagamento = true; // PIX gerado, dinheiro nunca entrou
         when(repo.findByIdAndLojaId(1L, 1L)).thenReturn(Optional.of(p));

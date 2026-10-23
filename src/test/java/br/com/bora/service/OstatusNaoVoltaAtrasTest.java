@@ -61,6 +61,10 @@ class OstatusNaoVoltaAtrasTest {
                 mock(EstornoDaVendaService.class), GerenciadorDeTransacaoFalso.novo());
         ReflectionNotif.injetar(service, notifCliente);
         when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
+        // A trava do avanco concorrente: no banco, 1 = este chamador ganhou. O duble precisa
+        // dizer isso, senao todo avanco vira 409 aqui dentro -- e o teste mediria a trava,
+        // nao o que ele quer medir.
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
     }
 
     /** O serviço recebe o notificador por campo; o teste precisa dele para medir o aviso ao cliente. */

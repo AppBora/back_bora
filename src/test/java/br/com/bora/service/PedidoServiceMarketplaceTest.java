@@ -60,6 +60,10 @@ class PedidoServiceMarketplaceTest {
         when(ctx.lojaId()).thenReturn(1L);
         when(ctx.atual()).thenReturn(new BoraPrincipal(7L, 1L, "ADMINISTRADOR_LOJA", "admin@bora.app"));
         when(repo.save(any(Pedido.class))).thenAnswer(inv -> inv.getArgument(0));
+        // A trava do avanco concorrente: no banco, 1 = este chamador ganhou. O duble precisa
+        // dizer isso, senao todo avanco vira 409 aqui dentro -- e o teste mediria a trava,
+        // nao o que ele quer medir.
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
     }
 
     private Pedido pedidoDoIfood() {

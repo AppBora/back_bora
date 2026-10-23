@@ -676,6 +676,20 @@ public class PedidoService {
         // o que existe para desfazer.
         final boolean vendaJaContabilizada = !p.pagamentoPendente();
         Pedido salvo = tx.execute(st -> {
+            // Toma o avanco no banco, condicionado ao status que foi LIDO la em cima. Sem isto, duas
+            // telas da mesma loja leem o mesmo RECEBIDO, as duas passam pelo exigirQueAvance e as
+            // duas gravam -- e o cliente leva dois avisos do mesmo passo no WhatsApp. Medido em
+            // 23/10/2026: acontecia em 2 de 10 tentativas simultaneas.
+            //
+            // Mesmo padrao da baixa de estoque e do resgate de cashback: quem decide e o Postgres,
+            // numa linha so, e nao o Java entre a leitura e a gravacao. Como estamos dentro da
+            // transacao, qualquer erro adiante (marketplace recusando, estorno estourando) desfaz
+            // este avanco junto.
+            if (repo.avancarSeAindaEsta(p.id, p.lojaId, anteriorFinal, status, p.atualizadoEm) == 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Outra tela mudou este pedido agora. Recarregue para ver em que etapa ele "
+                                + "esta -- o cliente ja foi avisado uma vez, e avisar de novo confunde.");
+            }
             Pedido gravado = repo.save(p);
             // Venda que nao aconteceu devolve o que consumiu: estoque, insumo e cashback. A regra
             // depende do estagio em que o pedido estava: ver EstornoDaVendaService.

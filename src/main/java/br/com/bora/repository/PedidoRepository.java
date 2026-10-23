@@ -298,4 +298,27 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     @org.springframework.data.jpa.repository.Query("delete from Pedido p where p.id = :id and p.lojaId = :lojaId")
     int apagarDaLoja(@org.springframework.data.repository.query.Param("id") Long id,
                      @org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
+    /**
+     * Toma o avanço de status, mas só se o pedido ainda estiver no status que quem chamou leu.
+     *
+     * <p><b>O defeito que isto fecha:</b> {@code alterarStatus} lia o pedido, validava o avanço
+     * contra o valor LIDO e gravava. Duas telas na mesma loja — a cozinha e o balcão, no pico —
+     * leem o mesmo RECEBIDO antes de qualquer uma gravar, e as duas gravam. Medido em 23/10/2026:
+     * em 2 de 10 tentativas as duas receberam 200, e o cliente levou DOIS avisos do mesmo passo
+     * no WhatsApp.</p>
+     *
+     * <p>É o mesmo padrão já usado na baixa de estoque e no resgate de cashback: quem decide é o
+     * Postgres, numa linha só, e não o Java entre uma leitura e uma gravação.</p>
+     *
+     * @return 1 se este chamador ganhou o avanço, 0 se outro já tinha mudado o pedido
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Pedido p set p.status = :novo, p.atualizadoEm = :agora "
+            + "where p.id = :id and p.lojaId = :lojaId and p.status = :esperado")
+    int avancarSeAindaEsta(@Param("id") Long id,
+                           @Param("lojaId") Long lojaId,
+                           @Param("esperado") StatusPedido esperado,
+                           @Param("novo") StatusPedido novo,
+                           @Param("agora") OffsetDateTime agora);
 }
