@@ -22,13 +22,17 @@ import static org.mockito.Mockito.*;
  */
 class AsaasWebhookPayloadTest {
 
+    private static final String TOKEN = "segredo-do-webhook";
+
     private AssinaturaService service;
     private AsaasWebhookController controller;
 
     @BeforeEach
     void montar() {
         service = mock(AssinaturaService.class);
-        controller = new AsaasWebhookController(service, "");
+        // Com token, que e o estado de producao. Sem token o webhook agora RECUSA, de
+        // proposito: ver AsaasWebhookController e RecusaWebhookSemTokenTest.
+        controller = new AsaasWebhookController(service, TOKEN);
     }
 
     private Map<String, Object> aviso(Map<String, Object> pagamento) {
@@ -57,7 +61,7 @@ class AsaasWebhookPayloadTest {
         pag.put("value", 199.0);
         pag.put("paymentDate", "2026-10-01");
 
-        controller.receber(null, aviso(pag));
+        controller.receber(TOKEN, aviso(pag));
 
         Object[] c = capturado();
         assertEquals("pay_abc", c[0]);
@@ -74,7 +78,7 @@ class AsaasWebhookPayloadTest {
         pag.put("value", "199.00");
         pag.put("confirmedDate", "2026-09-30 00:00:00");
 
-        controller.receber(null, aviso(pag));
+        controller.receber(TOKEN, aviso(pag));
 
         OffsetDateTime quando = (OffsetDateTime) capturado()[2];
         assertEquals(30, quando.getDayOfMonth());
@@ -89,7 +93,7 @@ class AsaasWebhookPayloadTest {
         pag.put("value", "cento e noventa e nove");
         pag.put("paymentDate", "ontem");
 
-        assertDoesNotThrow(() -> controller.receber(null, aviso(pag)));
+        assertDoesNotThrow(() -> controller.receber(TOKEN, aviso(pag)));
 
         Object[] c = capturado();
         assertNull(c[1], "valor ilegivel vira nulo e quem grava usa o valor da assinatura");

@@ -9,13 +9,32 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.Map;
 
 /**
- * Recebe os webhooks de pagamento do Asaas (público). Se ASAAS_WEBHOOK_TOKEN estiver definido,
- * exige o header 'asaas-access-token' igual ao token configurado.
- * URL: POST /public/asaas-webhook
+ * Recebe os webhooks de pagamento do Asaas (público).
+ *
+ * <p>URL: {@code POST /public/asaas-webhook}. Exige o header {@code asaas-access-token} igual ao
+ * {@code ASAAS_WEBHOOK_TOKEN} configurado.</p>
+ *
+ * <h2>Por que ele RECUSA quando não há token (item 18 da lista de 23/10)</h2>
+ * <p>Antes a conferência era {@code if (token != null && !token.isBlank() && ...)}: sem token
+ * configurado, o endpoint <b>aceitava qualquer corpo de qualquer um</b>, calado. Hoje a variável
+ * está definida em produção — conferi —, mas ela é ambiente, e ambiente some: basta um deploy sem
+ * ela, ou um arquivo de env trocado, para esta porta abrir sozinha, sem erro e sem log.</p>
+ *
+ * <p>E o que entra por ela não é pouco: este webhook <b>libera e corta o acesso de loja</b> a
+ * partir de evento de pagamento. Quem conseguisse postar aqui manteria a própria loja no ar de
+ * graça, ou tiraria a de um concorrente do ar.</p>
+ *
+ * <p>Falhar fechado tem um custo conhecido e pequeno: se alguém subir a API sem a variável, o
+ * Asaas passa a receber 503 e <b>reenvia</b> — ele tem fila de retentativa. Nada se perde, e o
+ * 503 aparece no painel do Asaas, que é onde alguém olha. Falhar aberto não tem conserto: não dá
+ * para saber depois quais chamadas eram legítimas.</p>
  */
 @RestController
 @RequestMapping("/public/asaas-webhook")
 public class AsaasWebhookController {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(AsaasWebhookController.class);
 
     private final AssinaturaService service;
     private final String token;
@@ -28,7 +47,17 @@ public class AsaasWebhookController {
     @PostMapping
     public Map<String, Object> receber(@RequestHeader(value = "asaas-access-token", required = false) String header,
                                        @RequestBody Map<String, Object> payload) {
-        if (token != null && !token.isBlank() && !token.equals(header)) {
+        // SEM TOKEN CONFIGURADO, NINGUEM ENTRA. Ver o cabecalho desta classe: era aqui que a porta
+        // abria sozinha num deploy sem a variavel. 503 e nao 401 de proposito -- o problema e
+        // nosso, nao de quem chamou, e o Asaas reenvia o que recebe 5xx.
+        if (token == null || token.isBlank()) {
+            log.error("ASAAS_WEBHOOK_TOKEN nao esta configurado: recusando o webhook do Asaas. "
+                    + "Enquanto isso, pagamento e estorno NAO entram -- o Asaas vai reenviar. "
+                    + "Defina a variavel e reinicie a API.");
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Webhook não configurado");
+        }
+        if (!token.equals(header)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token de webhook inválido");
         }
         String event = (String) payload.get("event");

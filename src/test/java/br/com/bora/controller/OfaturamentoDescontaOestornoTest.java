@@ -72,7 +72,8 @@ class OfaturamentoDescontaOestornoTest {
 
         // O segundo argumento e o token do webhook; vazio desliga a conferencia, que nao e o assunto
         // desta classe (ela tem teste proprio no AsaasWebhookPayloadTest).
-        webhook = new AsaasWebhookController(servico, "");
+        // Com token: sem ele o webhook recusa, de proposito (ver RecusaWebhookSemTokenTest).
+        webhook = new AsaasWebhookController(servico, "segredo-do-webhook");
     }
 
     /** Uma mensalidade paga no mês, com o estorno que se quiser. */
@@ -169,7 +170,7 @@ class OfaturamentoDescontaOestornoTest {
     }
 
     private BigDecimal estornadoQueChegou(Object refunds) {
-        webhook.receber(null, aviso(refunds));
+        webhook.receber("segredo-do-webhook", aviso(refunds));
         var cap = org.mockito.ArgumentCaptor.forClass(BigDecimal.class);
         verify(servico).processarWebhook(eq("PAYMENT_PARTIALLY_REFUNDED"), any(), eq("pay_1"),
                 cap.capture(), any(), any());
