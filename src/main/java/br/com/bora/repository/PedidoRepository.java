@@ -313,6 +313,25 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
      *
      * @return 1 se este chamador ganhou o avanço, 0 se outro já tinha mudado o pedido
      */
+    /*
+     * QUEM CHAMA ISTO NÃO PODE TER MEXIDO NO PEDIDO ANTES. É a regra que faltava, e custou caro.
+     *
+     * Em 24/10/2026 descobrimos que NENHUM pedido mudava de status — nem com uma requisição só.
+     * O {@code alterarStatus} fazia {@code p.status = status} antes de chamar este UPDATE. O
+     * {@code p} é uma entidade gerenciada, e o Hibernate grava as mudanças pendentes dela ANTES
+     * de rodar uma consulta que toque a mesma tabela. Quando o UPDATE chegava, a linha já estava
+     * com o status novo: o {@code where p.status = :esperado} casava ZERO, e o serviço devolvia
+     * 409 ("Outra tela mudou este pedido agora") sem nenhuma outra tela existir.
+     *
+     * Tirar o {@code flushAutomatically} NÃO resolve — medimos. Esse auto-flush é do Hibernate,
+     * não do Spring Data, e acontece de qualquer jeito. A consulta não tem como se defender: a
+     * única correção é a ORDEM em quem chama — primeiro este UPDATE, e só depois mexer na
+     * entidade. É assim que o {@code PedidoService.alterarStatus} faz hoje, e é isso que o
+     * {@code AvancarComEntidadeSujaIT} guarda.
+     *
+     * O {@code clearAutomatically} é necessário: depois do UPDATE o contexto precisa esquecer a
+     * versão velha, senão uma leitura seguinte devolveria o status anterior.
+     */
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update Pedido p set p.status = :novo, p.atualizadoEm = :agora "
             + "where p.id = :id and p.lojaId = :lojaId and p.status = :esperado")

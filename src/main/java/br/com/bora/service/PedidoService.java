@@ -659,13 +659,20 @@ public class PedidoService {
         // e o pedido NÃO é cancelado aqui.
         if (status == StatusPedido.CANCELADO) integracoes.cancelarNoMarketplace(p, motivo);
         StatusPedido anterior = p.status;
-        p.status = status;
-        p.atualizadoEm = OffsetDateTime.now();
-        if (status == StatusPedido.ENTREGUE) p.entregueEm = OffsetDateTime.now();
-        if (status == StatusPedido.CANCELADO) {
-            p.canceladoEm = OffsetDateTime.now();
-            p.motivoCancelamento = motivo;
-        }
+        // A ENTIDADE SO E MEXIDA DEPOIS QUE O AVANCO GANHA, la embaixo. Nao e estilo: era um
+        // defeito que parava a operacao inteira.
+        //
+        // Aqui estava `p.status = status` ANTES do `avancarSeAindaEsta`. O `p` e gerenciado pelo
+        // Hibernate, e aquela consulta tinha `flushAutomatically = true`: o Hibernate gravava a
+        // mudanca pendente na linha ANTES de rodar o UPDATE condicional. O UPDATE entao procurava
+        // `where p.status = :esperado` numa linha que JA estava com o status novo -- casava zero,
+        // e o servico devolvia 409.
+        //
+        // Efeito, medido em 24/10/2026 contra a API de verdade: NENHUM pedido mudava de status,
+        // nem com uma requisicao so. KDS, Pedidos, Entregas, cancelamento e a Frente de Caixa
+        // (que fecha a venda e marca ENTREGUE em seguida) travados, com "Outra tela mudou este
+        // pedido agora" sem nenhuma outra tela existir. Ver AvancarComEntidadeSujaIT.
+        final OffsetDateTime agora = OffsetDateTime.now();
         // Gravar o pedido, devolver o estoque e registrar o log sao UMA coisa so. Sem isto eram tres
         // gravacoes soltas: se a devolucao estourasse, o pedido ja estava CANCELADO, o lojista via
         // erro 500, tentar de novo dava "estado final" e o estoque nunca voltava.
@@ -685,10 +692,19 @@ public class PedidoService {
             // numa linha so, e nao o Java entre a leitura e a gravacao. Como estamos dentro da
             // transacao, qualquer erro adiante (marketplace recusando, estorno estourando) desfaz
             // este avanco junto.
-            if (repo.avancarSeAindaEsta(p.id, p.lojaId, anteriorFinal, status, p.atualizadoEm) == 0) {
+            if (repo.avancarSeAindaEsta(p.id, p.lojaId, anteriorFinal, status, agora) == 0) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                         "Outra tela mudou este pedido agora. Recarregue para ver em que etapa ele "
                                 + "esta -- o cliente ja foi avisado uma vez, e avisar de novo confunde.");
+            }
+            // SO AGORA a entidade e mexida: o UPDATE la em cima ja gravou status e atualizadoEm,
+            // e estes campos completam a linha. Mexer antes era o que derrubava o proprio avanco.
+            p.status = status;
+            p.atualizadoEm = agora;
+            if (status == StatusPedido.ENTREGUE) p.entregueEm = agora;
+            if (status == StatusPedido.CANCELADO) {
+                p.canceladoEm = agora;
+                p.motivoCancelamento = motivo;
             }
             Pedido gravado = repo.save(p);
             // Venda que nao aconteceu devolve o que consumiu: estoque, insumo e cashback. A regra
