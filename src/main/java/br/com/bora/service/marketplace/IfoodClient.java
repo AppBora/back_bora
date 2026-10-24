@@ -84,6 +84,46 @@ public class IfoodClient implements MarketplaceClient {
         };
     }
 
+    /**
+     * Por que o cliente desistiu — o que o iFood manda no evento de cancelamento.
+     *
+     * <p><b>O que faltava:</b> esta classe não sobrescrevia o método, então caía no padrão de
+     * {@link MarketplaceClient#motivoDoCancelamento} que devolve {@code null}. O painel então
+     * gravava o texto genérico "Cancelado pelo marketplace", e <b>qualquer motivo que o iFood
+     * mandasse era descartado por construção</b>. O lojista via o pedido cancelado e nunca sabia
+     * se foi o cliente que desistiu, endereço fora da área, ou falta de entregador — que é o que
+     * ele precisa para saber se deve ligar para alguém ou refazer a comida.</p>
+     *
+     * <p>A 99Food já lia o motivo desde sempre ({@code OpenDeliveryClient.motivoDoCancelamento}),
+     * então no mesmo painel um canal explicava e o outro não.</p>
+     *
+     * <p><b>Onde o campo vive:</b> o iFood não tem um formato único aqui — o motivo aparece em
+     * {@code metadata} nos eventos novos e solto na raiz em integrações mais antigas, com nomes
+     * que variam. Por isso procuramos nos dois lugares e em mais de um nome, em vez de apostar
+     * num só e voltar ao genérico sempre que ele faltar.</p>
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public String motivoDoCancelamento(Map<String, Object> ev) {
+        final String GENERICO = "Cancelado pelo iFood";
+        if (ev == null) return GENERICO;
+
+        Map<String, Object> onde = ev;
+        Object meta = ev.get("metadata");
+        if (meta instanceof Map) onde = (Map<String, Object>) meta;
+
+        String motivo = str(firstNonNull(onde.get("reason"),
+                firstNonNull(onde.get("cancellationReason"), onde.get("description"))));
+        String codigo = str(firstNonNull(onde.get("cancellationCode"),
+                firstNonNull(onde.get("code"), onde.get("cancelCodeId"))));
+
+        // Sem o motivo por extenso, um código sozinho não diz nada a quem lê o painel — melhor o
+        // genérico do que "Cancelado pelo iFood (501)".
+        if (motivo == null || motivo.isBlank()) return GENERICO;
+        String base = GENERICO + ": " + motivo;
+        return (codigo == null || codigo.isBlank()) ? base : base + " (" + codigo + ")";
+    }
+
     /** Credencial do app da plataforma: a colada na tela vale mais que a do servidor. */
     private String clientId() {
         return credenciais.clientId(canal());

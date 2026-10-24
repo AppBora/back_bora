@@ -1043,6 +1043,24 @@ public class AssinaturaService {
             // Pagamento não levanta suspensão administrativa: quem suspendeu foi a plataforma,
             // e só a plataforma reativa. Sem esta guarda, a mensalidade seguinte desfaria a decisão.
             if (ativo && l.bloqueadaPelaPlataforma()) return;
+
+            // E DESLIGAR TAMBÉM TEM GUARDA — o acidente da Zirá por outra porta.
+            //
+            // O {@link #prazoSemEncurtar} já protege a DATA: acesso aberto por PAGAMENTO_MANUAL ou
+            // LIBERACAO não é encurtado por aviso do Asaas. Mas `ativo` é OUTRA chave, e ninguém a
+            // protegia: o SUBSCRIPTION_DELETED chamava isto com `false` e a loja saía do ar mesmo
+            // com a data intacta — cardápio 404 para o cliente, painel aberto para o lojista, e
+            // nenhuma explicação em lugar nenhum. Medido em 24/10/2026.
+            //
+            // A regra é a mesma, e vale para as duas chaves: entrou dinheiro, ou o dono decidiu,
+            // aviso do gateway não desfaz. Quem quiser tirar do ar uma loja assim usa o caminho da
+            // plataforma (suspender), que é explícito e fica no log.
+            if (!ativo && (l.acessoMotivo == MotivoDoAcesso.PAGAMENTO_MANUAL
+                    || l.acessoMotivo == MotivoDoAcesso.LIBERACAO)) {
+                AUDITORIA.info("Loja {} NAO foi desligada: o acesso esta aberto por {}, que aviso "
+                        + "do Asaas nao desfaz", lojaId, l.acessoMotivo);
+                return;
+            }
             l.setAtivo(ativo);
             lojas.save(l);
         });
