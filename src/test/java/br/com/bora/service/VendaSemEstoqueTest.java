@@ -168,6 +168,22 @@ class VendaSemEstoqueTest {
     }
 
     @Test
+    void fichaDaParaFazer_insumoEmZERO_APAGA_oProdutoDoCardapio() {
+        // O caso da Zira, medido na producao em 24/10/2026: 42 dos 43 insumos com `estoque = 0`
+        // (nao nulo). ZERO e "nao tem nenhum" e BLOQUEIA; NULO e "nao controla estoque" e nao
+        // bloqueia -- e o teste logo acima prova o lado nulo.
+        //
+        // Por que isto importa para a operacao: enquanto nao existe ficha, o zero e inofensivo. No
+        // minuto em que a ficha e salva, todo produto que use um insumo zerado passa a sair
+        // `esgotado: true` no cardapio publico. Montar as fichas antes de lancar a contagem apaga o
+        // cardapio inteiro para o cliente final, sem erro nenhum na tela do lojista.
+        comFicha("Polpa de Acai", "0.500", "0.000");
+
+        assertFalse(service.fichaDaParaFazer(LOJA, PRODUTO, 1),
+                "insumo em ZERO tem de bloquear: e a diferenca entre 'nao tem' e 'nao controla'");
+    }
+
+    @Test
     void fichaDaParaFazer_insumoAPAGADOnaoEsgota() {
         // Ficha fantasma: o lojista apagou o insumo e a linha da ficha ficou. O consumo tambem pula
         // essa linha, entao o cardapio nao pode fingir que falta. E outro problema (varredura 2.5).
