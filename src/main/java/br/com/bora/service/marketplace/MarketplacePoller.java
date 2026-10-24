@@ -345,15 +345,22 @@ public class MarketplacePoller {
         if (client.enviarStatus(i, orderId, MarketplaceClient.ACEITE_INICIAL)) {
             pedidos.marcarAceiteEnviado(p.lojaId, p.id);
         } else {
-            // Fica sem a marca de proposito: o proximo evento do mesmo pedido tenta de novo. E o erro
-            // vai para `ultimo_erro` da integracao, que a tela de Integracoes mostra.
+            // Fica sem a marca de proposito: o proximo evento do mesmo pedido tenta de novo. E o
+            // recado vai para a coluna PROPRIA de recado (V61), que a tela de Integracoes mostra.
+            //
+            // Antes ia para `ultimo_erro`, de onde o marcarPollingOk apagava a cada 30 segundos. Aqui
+            // doia menos que no status recusado, porque este caso se resolve sozinho no reenvio — mas
+            // enquanto nao se resolve, o lojista tem um pedido do marketplace que nao entrou e nada
+            // na tela dizendo isso.
+            //
             // O `orderId` vem do marketplace, entao e texto de fora e nao tem tamanho garantido.
-            i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(
+            i.ultimoAvisoEm = java.time.OffsetDateTime.now();
+            i.ultimoAviso = br.com.bora.entity.LarguraDeColuna.encurtar(
                     "Aceite do pedido " + orderId + " recusado pelo " + IntegracaoService.label(i.canal)
                             + "; sera reenviado",
                     br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
-                    "integracao_canal.ultimo_erro da loja " + i.lojaId);
-            repo.marcarAviso(i.id, i.lojaId, i.ultimoErro);   // item 5.5: recado, sem marcar ERRO
+                    "integracao_canal.ultimo_aviso da loja " + i.lojaId);
+            repo.marcarAviso(i.id, i.lojaId, i.ultimoAviso, i.ultimoAvisoEm);   // item 5.5: sem ERRO
         }
     }
 

@@ -76,6 +76,29 @@ public class IntegracaoService {
         return Map.of("canal", i.canal, "status", i.status, "conectado", true);
     }
 
+    /**
+     * O lojista leu o recado e mandou tirar da tela — o único jeito de limpar o {@code ultimo_aviso}.
+     *
+     * <p>É de propósito que nada mais o apague: o marketplace recusou um status e o pedido ficou
+     * parado lá dentro, e isso não deixa de ser verdade porque o polling seguinte funcionou. Era
+     * exatamente esse o defeito que a V61 fecha.</p>
+     *
+     * <p>Mesmo papel do resto da tela de Integrações. Fica no log de auditoria com quem dispensou,
+     * porque dispensar é dizer "eu vi e resolvi" sobre um pedido de cliente.</p>
+     */
+    public Map<String, Object> marcarAvisoComoLido(String canal) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
+        IntegracaoCanal i = exigirIntegracao(canal);
+        String oQueFoiLido = i.ultimoAviso;
+        repo.limparAviso(i.id, i.lojaId);
+        i.ultimoAviso = null;
+        i.ultimoAvisoEm = null;
+        log.warn("AUDITORIA marketplace: usuario {} dispensou o recado do {} na loja {}. Era: {}",
+                ctx.atual() == null ? null : ctx.atual().userId(), label(i.canal), i.lojaId,
+                oQueFoiLido);
+        return Map.of("canal", i.canal, "avisoLido", true);
+    }
+
     /** Diagnóstico da conexão — o que o lojista precisa ver quando "não chega pedido". */
     public Map<String, Object> diagnostico(String canal) {
         ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
@@ -93,6 +116,12 @@ public class IntegracaoService {
         m.put("ultimaSync", i.ultimaSync);
         m.put("pedidosRecebidos", i.pedidosRecebidos);
         m.put("ultimoErro", i.ultimoErro);
+        // O recado vai SEPARADO do erro: sao coisas diferentes para quem le a tela. "ultimoErro"
+        // quer dizer "a integracao esta com problema"; "ultimoAviso" quer dizer "a integracao esta
+        // boa, mas um pedido seu ficou parado lá dentro". Misturar os dois era o que fazia o recado
+        // ser apagado junto com o erro, a cada polling. Ver V61.
+        m.put("ultimoAviso", i.ultimoAviso);
+        m.put("ultimoAvisoEm", i.ultimoAvisoEm);
         m.put("tokenExpiraEm", i.tokenExpiraEm);
         // No iFood a loja só aparece como aberta enquanto o polling roda.
         boolean online = i.ultimoPollingEm != null
@@ -156,6 +185,8 @@ public class IntegracaoService {
             m.put("vinculoExpiraEm", i == null ? null : i.vinculoExpiraEm);
             m.put("ultimoPollingEm", i == null ? null : i.ultimoPollingEm);
             m.put("ultimoErro", i == null ? null : i.ultimoErro);
+            m.put("ultimoAviso", i == null ? null : i.ultimoAviso);
+            m.put("ultimoAvisoEm", i == null ? null : i.ultimoAvisoEm);
             out.add(m);
         }
         return out;
@@ -313,12 +344,15 @@ public class IntegracaoService {
     private void avisarStatusNaoPropagado(IntegracaoCanal i, Pedido p, String novoStatus) {
         String aviso = "O " + label(i.canal) + " nao aceitou o status " + novoStatus + " do pedido "
                 + (p.codigo == null ? p.id : p.codigo) + ". Lá dentro ele continua no status anterior.";
-        i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(aviso,
+        // Coluna PROPRIA do recado (V61), e nao a ultimo_erro: ali o marcarPollingOk apagava a cada
+        // 30 segundos, e o lojista nunca via.
+        i.ultimoAvisoEm = OffsetDateTime.now();
+        i.ultimoAviso = br.com.bora.entity.LarguraDeColuna.encurtar(aviso,
                 br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
-                "integracao_canal.ultimo_erro da loja " + i.lojaId);
-        // Item 5.5: so a coluna do recado. Esta chamada acontece enquanto o operador mexe no painel;
-        // gravar a linha inteira aqui desfaria o que ele salvou na tela de Integracoes.
-        repo.marcarAviso(i.id, i.lojaId, i.ultimoErro);
+                "integracao_canal.ultimo_aviso da loja " + i.lojaId);
+        // Item 5.5: so as colunas do recado. Esta chamada acontece enquanto o operador mexe no
+        // painel; gravar a linha inteira aqui desfaria o que ele salvou na tela de Integracoes.
+        repo.marcarAviso(i.id, i.lojaId, i.ultimoAviso, i.ultimoAvisoEm);
         log.warn("AUDITORIA marketplace: {} (loja {}, pedido {}). Na 99 a ordem dos status e "
                         + "obrigatoria, entao os status seguintes deste pedido podem ser recusados "
                         + "tambem.",

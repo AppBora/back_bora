@@ -178,12 +178,46 @@ class OpollerNaoDesfazOqueOlojistaSalvouIT {
         repo.marcarPollingOk(integracaoId, loja, OffsetDateTime.now());   // deixa CONECTADO
         limpar();
 
-        repo.marcarAviso(integracaoId, loja, "o 99Food nao aceitou o status PRONTO");
+        repo.marcarAviso(integracaoId, loja, "o 99Food nao aceitou o status PRONTO",
+                OffsetDateTime.now());
 
         IntegracaoCanal depois = doBanco();
-        assertEquals("o 99Food nao aceitou o status PRONTO", depois.ultimoErro);
+        assertEquals("o 99Food nao aceitou o status PRONTO", depois.ultimoAviso);
+        assertNotNull(depois.ultimoAvisoEm, "recado sem hora nao da para usar");
+        assertNull(depois.ultimoErro, "o recado nao e saude de integracao e nao pode ir nessa coluna");
         assertEquals("CONECTADO", depois.status, "recado NAO e erro de integracao");
         assertTrue(depois.prontaParaSincronizar());
+    }
+
+    @Test
+    void oPOLLINGqueFUNCIONAnaoAPAGAoRECADO_contraPOSTGRES() {
+        // O defeito da V61, medido contra o banco de verdade e nao contra um dublê. Era aqui que ele
+        // vivia: `marcarPollingOk` faz `ultimo_erro = null` sem condicao, e roda a cada 30 segundos.
+        // Com o recado morando naquela coluna, o lojista tinha ate meio minuto para ve-lo.
+        repo.marcarAviso(integracaoId, loja, "o 99Food nao aceitou o status PRONTO do pedido 1234",
+                OffsetDateTime.now());
+        repo.marcarPollingFalhou(integracaoId, loja, OffsetDateTime.now(), "timeout no polling");
+        limpar();
+
+        repo.marcarPollingOk(integracaoId, loja, OffsetDateTime.now());
+
+        IntegracaoCanal depois = doBanco();
+        assertNull(depois.ultimoErro, "o polling que volta a funcionar TEM de limpar a saude");
+        assertEquals("o 99Food nao aceitou o status PRONTO do pedido 1234", depois.ultimoAviso,
+                "o polling apagou o recado: o pedido continua parado no marketplace e o lojista "
+                        + "perdeu a unica tela que dizia isso");
+    }
+
+    @Test
+    void SOoLIMPARAVISOapagaORECADO_contraPOSTGRES() {
+        repo.marcarAviso(integracaoId, loja, "recado qualquer", OffsetDateTime.now());
+        limpar();
+
+        repo.limparAviso(integracaoId, loja);
+
+        IntegracaoCanal depois = doBanco();
+        assertNull(depois.ultimoAviso);
+        assertNull(depois.ultimoAvisoEm, "a hora tem de sair junto, senao sobra data sem recado");
     }
 
     // =============================================================== o status que nao pode ser promovido

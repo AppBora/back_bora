@@ -74,14 +74,37 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
     /**
      * Recado para a tela de Integracoes <b>sem</b> marcar ERRO: a integracao esta funcionando, foi um
      * aviso que nao passou. Marcar ERRO a jogaria na fila de 10 minutos do item 5.1.
+     *
+     * <p><b>Grava na coluna propria do recado</b> ({@code ultimo_aviso}), e nao no
+     * {@code ultimo_erro}. Era ali que ficava, e o {@link #marcarPollingOk} — que roda a cada 30
+     * segundos — apagava: o lojista tinha ate meio minuto para ver, e so com a tela aberta na hora.
+     * Ver V61.</p>
+     *
+     * <p>A hora vai junto porque recado sem data nao da para usar: "a 99 nao aceitou o status do
+     * pedido 1234" e outra informacao se foi agora ou se foi semana passada.</p>
      */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.transaction.annotation.Transactional
     @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
-            + "i.ultimoErro = :erro where i.id = :id and i.lojaId = :lojaId")
+            + "i.ultimoAviso = :erro, i.ultimoAvisoEm = :agora where i.id = :id and i.lojaId = :lojaId")
     int marcarAviso(@org.springframework.data.repository.query.Param("id") Long id,
                     @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
-                    @org.springframework.data.repository.query.Param("erro") String erro);
+                    @org.springframework.data.repository.query.Param("erro") String erro,
+                    @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora);
+
+    /**
+     * O lojista leu o recado e mandou tirar da tela.
+     *
+     * <p>E o unico jeito de limpar o {@code ultimo_aviso}, de proposito: nada que acontece depois
+     * desfaz o fato de que um status foi recusado e o pedido ficou parado do outro lado. Quem decide
+     * que o assunto esta resolvido e quem atende a loja.</p>
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
+            + "i.ultimoAviso = null, i.ultimoAvisoEm = null where i.id = :id and i.lojaId = :lojaId")
+    int limparAviso(@org.springframework.data.repository.query.Param("id") Long id,
+                    @org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 
     /**
      * Tenta pegar a vez de renovar o token: grava a marca se ninguem a tem, ou se a de quem tem

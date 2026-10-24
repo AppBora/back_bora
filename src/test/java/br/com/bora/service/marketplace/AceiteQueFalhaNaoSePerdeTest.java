@@ -123,7 +123,11 @@ class AceiteQueFalhaNaoSePerdeTest {
         // Sem a marca, o proximo evento do mesmo pedido tenta outra vez.
         verify(pedidos, never()).marcarAceiteEnviado(anyLong(), anyLong());
         // Item 5.5: so a coluna do recado, nao a linha inteira.
-        verify(repo).marcarAviso(eq(7L), eq(LOJA), argThat(erro -> erro.contains(ORDEM)));
-        assertNotNull(integ.ultimoErro, "a tela de Integracoes mostra `ultimo_erro`; o lojista precisa ver");
+        verify(repo).marcarAviso(eq(7L), eq(LOJA), argThat(erro -> erro.contains(ORDEM)), any());
+        // V61: vai para a coluna PROPRIA do recado. No `ultimo_erro` o polling apagava a cada 30s —
+        // aqui doia menos que no status recusado, porque o reenvio pode resolver sozinho, mas
+        // enquanto nao resolve ha um pedido do marketplace que nao entrou e nada dizia isso.
+        assertNotNull(integ.ultimoAviso, "a tela de Integracoes mostra o recado; o lojista precisa ver");
+        assertNull(integ.ultimoErro, "recado nao e saude de integracao: dali o polling apaga");
     }
 }

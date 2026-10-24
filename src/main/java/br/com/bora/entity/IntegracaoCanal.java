@@ -71,8 +71,35 @@ public class IntegracaoCanal {
 
     @Column(name = "ultimo_polling_em")
     public OffsetDateTime ultimoPollingEm;
+
+    /**
+     * SAUDE da integracao: falha de polling, de autenticacao, de vinculo.
+     *
+     * <p>E apagada por {@code marcarPollingOk} quando o polling volta a funcionar — e tem de ser,
+     * senao a tela mostra erro de uma integracao que esta boa.</p>
+     *
+     * <p><b>Recado sobre um pedido nao vai aqui.</b> Ver {@link #ultimoAviso}.</p>
+     */
     @Column(name = "ultimo_erro")
     public String ultimoErro;
+
+    /**
+     * RECADO para o lojista sobre um pedido — hoje, "o marketplace recusou este status".
+     *
+     * <p>Coluna propria porque o significado e o oposto do {@link #ultimoErro}: o polling bom NAO
+     * apaga este campo. Antes os dois moravam no {@code ultimo_erro}, e o poller (a cada 30s) apagava
+     * o recado — o lojista tinha ate meio minuto para ve-lo, e so com a tela aberta na hora.</p>
+     *
+     * <p>Por que isso importa: na 99 a ordem dos status e obrigatoria, entao depois de um status
+     * recusado os seguintes DO MESMO PEDIDO tambem sao recusados. O lojista avanca no painel, ve
+     * tudo verde do lado dele, e lá dentro o pedido ficou parado. Ver V61.</p>
+     */
+    @Column(name = "ultimo_aviso")
+    public String ultimoAviso;
+
+    /** Quando o {@link #ultimoAviso} foi gravado. Recado sem data nao da para usar. */
+    @Column(name = "ultimo_aviso_em")
+    public OffsetDateTime ultimoAvisoEm;
 
     public String status = "DESCONECTADO";   // DESCONECTADO | AGUARDANDO_AUTORIZACAO | CONECTADO | ERRO
     @Column(name = "ultima_sync")

@@ -48,4 +48,17 @@ public class IntegracaoController {
     public Map<String, Object> diagnostico(@PathVariable String canal) {
         return service.diagnostico(canal);
     }
+
+    /**
+     * O lojista leu o recado do marketplace e mandou tirar da tela.
+     *
+     * <p>O recado ({@code ultimo_aviso}) é o único campo da integração que <b>nada apaga sozinho</b>,
+     * de propósito: se o marketplace recusou um status, o pedido ficou parado lá dentro e isso não
+     * deixa de ser verdade porque o polling seguinte funcionou. Era esse o defeito — o recado morava
+     * no {@code ultimo_erro} e o polling o apagava a cada 30 segundos. Ver V61.</p>
+     */
+    @PostMapping("/{canal}/aviso-lido")
+    public Map<String, Object> avisoLido(@PathVariable String canal) {
+        return service.marcarAvisoComoLido(canal);
+    }
 }
