@@ -93,6 +93,37 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
                     @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora);
 
     /**
+     * A integracao esta ativa mas NAO PODE sincronizar: grava o motivo onde o lojista ve.
+     *
+     * <h2>O defeito que isto fecha (achado em 25/10/2026, atacando o item 24)</h2>
+     * <p>O poller fazia {@code continue} em silencio quando {@code prontaParaSincronizar()} era
+     * falso — sem log, sem nada. A integracao ficava {@code CONECTADO} e {@code ativo} para sempre,
+     * sem nunca buscar um pedido, e ninguem era avisado. Medido na producao: a loja 17 estava assim,
+     * com {@code merchant_id} vazio e {@code ultimo_polling_em} NULO — ou seja, nunca buscou nada
+     * desde que foi criada. O painel dizia conectado.</p>
+     *
+     * <p>Repare no contraste: o caso vizinho no mesmo laco ("a loja nao pode operar") JA logava.
+     * Este nao.</p>
+     *
+     * <h2>Por que no {@code ultimo_erro} e nao no {@code ultimo_aviso}</h2>
+     * <p>Isto e SAUDE da integracao, nao recado sobre um pedido: e uma condicao do presente que
+     * deixa de existir sozinha quando o lojista preenche o que falta. E o ciclo de vida fecha
+     * exatamente certo — quando o dado chega, o polling comeca a rodar, da certo, e o
+     * {@link #marcarPollingOk} limpa a mensagem. Por isso NAO vai na coluna do recado, que so o
+     * lojista apaga. Ver V61 para a diferenca entre as duas.</p>
+     *
+     * <p>Nao mexe no status de proposito: {@code ERRO} jogaria a loja na fila de 10 minutos do item
+     * 5.1, e isto nao e falha — e configuracao incompleta.</p>
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
+            + "i.ultimoErro = :motivo where i.id = :id and i.lojaId = :lojaId")
+    int marcarImpedimento(@org.springframework.data.repository.query.Param("id") Long id,
+                          @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
+                          @org.springframework.data.repository.query.Param("motivo") String motivo);
+
+    /**
      * O lojista leu o recado e mandou tirar da tela.
      *
      * <p>E o unico jeito de limpar o {@code ultimo_aviso}, de proposito: nada que acontece depois

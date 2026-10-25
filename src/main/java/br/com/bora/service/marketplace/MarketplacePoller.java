@@ -115,8 +115,17 @@ public class MarketplacePoller {
             // Quem esta em ERRO tambem entra, mas espacado: ver IntegracaoCanal.mereceNovaTentativa.
             // Sem isso, integracao que caiu nunca mais se levanta sozinha, nem com o problema
             // resolvido.
-            if (!canal.equalsIgnoreCase(i.canal)
-                    || !(i.prontaParaSincronizar() || i.mereceNovaTentativa())) continue;
+            if (!canal.equalsIgnoreCase(i.canal)) continue;
+            if (!(i.prontaParaSincronizar() || i.mereceNovaTentativa())) {
+                // NAO PULA MAIS EM SILENCIO. Era `continue` seco aqui, e isso criava um estado que
+                // nao tem como ser descoberto: integracao ATIVA e marcada CONECTADO, que nunca busca
+                // um pedido, sem log e sem nada na tela. Medido na producao em 25/10/2026: a loja 17
+                // estava assim, com merchant_id vazio e ultimo_polling_em NULO -- nunca buscou nada
+                // desde que nasceu -- e o painel dizia conectado. O caso vizinho ("a loja nao pode
+                // operar") ja logava; este nao.
+                anotarImpedimento(i);
+                continue;
+            }
             // A integração estar conectada não basta: a LOJA precisa poder operar. Suspender ou
             // arquivar um cliente não encostava nas integrações, então o robô seguia puxando e
             // aceitando pedido de uma loja que ninguém conseguia abrir — o cliente final pedia, o
@@ -129,6 +138,41 @@ public class MarketplacePoller {
             out.add(i);
         }
         return out;
+    }
+
+    /**
+     * Diz, onde o lojista ve, por que esta integracao nao consegue buscar pedido.
+     *
+     * <p>Escreve no {@code ultimo_erro} — que e saude de integracao, e nao recado sobre um pedido
+     * (ver V61). O ciclo de vida fecha certo: quando o lojista preenche o que falta, o polling passa
+     * a rodar, da certo, e o {@code marcarPollingOk} limpa a mensagem sozinho.</p>
+     *
+     * <p><b>Grava so quando o texto MUDA.</b> O poller roda a cada 30 segundos; gravar a cada ciclo
+     * seria uma escrita por integracao a cada meio minuto, para sempre, dizendo a mesma coisa.</p>
+     *
+     * <p>NAO mexe no status: {@code ERRO} jogaria a loja na fila de 10 minutos do item 5.1, e isto
+     * nao e falha — e configuracao incompleta.</p>
+     */
+    private void anotarImpedimento(IntegracaoCanal i) {
+        String motivo;
+        if (i.merchantId == null || i.merchantId.isBlank()) {
+            // O caso da loja 17. O texto nomeia o campo como ele aparece na tela de cada canal.
+            motivo = "Nenhum pedido do " + IntegracaoService.label(i.canal) + " vai entrar: falta o "
+                    + ("IFOOD".equalsIgnoreCase(i.canal) ? "Merchant ID" : "ID da loja")
+                    + " para casar os pedidos com esta loja. Informe-o em Integracoes e salve.";
+        } else if (!"CONECTADO".equals(i.status)) {
+            motivo = "Nenhum pedido do " + IntegracaoService.label(i.canal) + " vai entrar: a conexao"
+                    + " esta em " + i.status + ". Refaca o vinculo em Integracoes.";
+        } else {
+            return;   // pronta, ou em ERRO esperando a vez — nao e impedimento
+        }
+        if (motivo.equals(i.ultimoErro)) return;          // ja esta dito; nao reescreve a cada 30s
+        i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(motivo,
+                br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                "integracao_canal.ultimo_erro da loja " + i.lojaId);
+        repo.marcarImpedimento(i.id, i.lojaId, i.ultimoErro);
+        log.warn("AUDITORIA marketplace: loja {} tem o {} ATIVO e nao consegue buscar pedido. {}",
+                i.lojaId, i.canal, i.ultimoErro);
     }
 
     private void processar(MarketplaceClient client, IntegracaoCanal i) {
