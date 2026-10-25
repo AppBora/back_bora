@@ -164,17 +164,56 @@ class IntegracaoQueNaoPodeReceberNaoFicaCaladaTest {
         assertNull(integ.ultimoErro, "encheu a tela de aviso numa integracao que esta boa");
     }
 
+    // ---------------------------------------------------------- o que eu errei e tive de desfazer
+    //
+    // A primeira versao deste conserto tambem escrevia quando o status nao era CONECTADO. Subi a
+    // v147, fui conferir em producao e vi que ela havia passado por cima do `ultimo_erro` do 99Food
+    // da loja 1, que estava em ERRO: trocou o motivo REAL gravado pelo `marcarErro` por "a conexao
+    // esta em ERRO" -- uma tautologia -- e mandou "refaca o vinculo", conselho ERRADO, porque
+    // integracao em ERRO com o ID preenchido tenta de novo sozinha a cada 10 minutos e pode se
+    // resolver sem ninguem fazer nada.
+    //
+    // Eu apaguei o diagnostico e dei trabalho inutil ao lojista, para dizer o que o campo `status`
+    // ja dizia. Estes dois testes travam o conserto do conserto.
+
     @Test
-    void statusQUEnaoEHconectado_tambemEHdito() {
-        // Outro jeito de ficar parada em silencio: ativa, com o ID preenchido, e desconectada.
+    void comOidPREENCHIDOeEmERRO_NAOencostaNOmotivoREAL() {
+        integ.merchantId = "boraloja2";
+        integ.status = "ERRO";
+        integ.ultimoPollingEm = java.time.OffsetDateTime.now();   // dentro da espera de 10 min
+        integ.ultimoErro = "401 do 99Food: credencial recusada";
+
+        poller.rodar();
+
+        assertEquals("401 do 99Food: credencial recusada", integ.ultimoErro,
+                "apagou o diagnostico de verdade e pos uma tautologia no lugar");
+        verify(repo, never()).marcarImpedimento(anyLong(), anyLong(), anyString());
+    }
+
+    @Test
+    void comOidPREENCHIDOeDESCONECTADO_naoESCREVEnada() {
+        // O status e honesto e a tela tem caixa propria para esse estado ("Passo 1 -- conectar a
+        // loja"). Escrever aqui so enche a tela de texto que repete o status.
         integ.merchantId = "m-1";
         integ.status = "DESCONECTADO";
 
         poller.rodar();
 
-        assertNotNull(integ.ultimoErro);
-        assertTrue(integ.ultimoErro.contains("DESCONECTADO"),
-                "tem de dizer em que estado a conexao esta: " + integ.ultimoErro);
+        assertNull(integ.ultimoErro, "escreveu o obvio por cima da tela");
+        verify(repo, never()).marcarImpedimento(anyLong(), anyLong(), anyString());
+    }
+
+    @Test
+    void SEMoIDeEmERRO_aiSIMeDITO() {
+        // Sem o ID, `mereceNovaTentativa` tambem e falso (ele exige o ID): nao tenta de novo nunca.
+        // Este e o unico ERRO que fica preso em silencio de verdade.
+        integ.merchantId = null;
+        integ.status = "ERRO";
+
+        poller.rodar();
+
+        assertNotNull(integ.ultimoErro, "este caso nao se resolve sozinho e tem de ser dito");
+        assertTrue(integ.ultimoErro.contains("Merchant ID"), integ.ultimoErro);
     }
 
     @Test

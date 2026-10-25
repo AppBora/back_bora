@@ -154,18 +154,28 @@ public class MarketplacePoller {
      * nao e falha — e configuracao incompleta.</p>
      */
     private void anotarImpedimento(IntegracaoCanal i) {
-        String motivo;
-        if (i.merchantId == null || i.merchantId.isBlank()) {
-            // O caso da loja 17. O texto nomeia o campo como ele aparece na tela de cada canal.
-            motivo = "Nenhum pedido do " + IntegracaoService.label(i.canal) + " vai entrar: falta o "
-                    + ("IFOOD".equalsIgnoreCase(i.canal) ? "Merchant ID" : "ID da loja")
-                    + " para casar os pedidos com esta loja. Informe-o em Integracoes e salve.";
-        } else if (!"CONECTADO".equals(i.status)) {
-            motivo = "Nenhum pedido do " + IntegracaoService.label(i.canal) + " vai entrar: a conexao"
-                    + " esta em " + i.status + ". Refaca o vinculo em Integracoes.";
-        } else {
-            return;   // pronta, ou em ERRO esperando a vez — nao e impedimento
-        }
+        // SO o caso que fica preso em silencio: sem o ID da loja, NADA pode funcionar nunca -- nem o
+        // polling, nem o `mereceNovaTentativa` (que exige o ID). E o estado da loja 17.
+        //
+        // O QUE EU TIREI DAQUI, E POR QUE (25/10/2026, minutos depois de subir a v147)
+        //
+        // A primeira versao tambem escrevia quando o status nao era CONECTADO. Fui conferir em
+        // producao e ela havia passado por cima do `ultimo_erro` do 99Food da loja 1, que estava em
+        // ERRO: trocou o motivo REAL que o `marcarErro` havia gravado por "a conexao esta em ERRO"
+        // -- uma tautologia -- e mandou "refaca o vinculo", conselho ERRADO, porque integracao em
+        // ERRO com o ID preenchido tenta de novo sozinha a cada 10 minutos
+        // (`mereceNovaTentativa`) e pode se resolver sem ninguem fazer nada.
+        //
+        // Ou seja: eu apaguei o diagnostico e dei trabalho inutil ao lojista, para dizer o que o
+        // proprio campo `status` ja dizia. Os outros estados (DESCONECTADO, PRONTO,
+        // AGUARDANDO_AUTORIZACAO) tambem nao precisam: o status e honesto e a tela tem caixa propria
+        // para cada um ("Passo 1 -- conectar a loja", "Passo 2 -- autorize no portal").
+        if (i.merchantId != null && !i.merchantId.isBlank()) return;
+
+        // O texto nomeia o campo como ele aparece na tela de cada canal.
+        String motivo = "Nenhum pedido do " + IntegracaoService.label(i.canal) + " vai entrar: falta o "
+                + ("IFOOD".equalsIgnoreCase(i.canal) ? "Merchant ID" : "ID da loja")
+                + " para casar os pedidos com esta loja. Informe-o em Integracoes e salve.";
         if (motivo.equals(i.ultimoErro)) return;          // ja esta dito; nao reescreve a cada 30s
         i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(motivo,
                 br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
