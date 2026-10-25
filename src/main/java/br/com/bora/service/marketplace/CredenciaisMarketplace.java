@@ -66,6 +66,42 @@ public class CredenciaisMarketplace {
         return daTela(canal, "client-secret") != null;
     }
 
+    /**
+     * QUANTOS caracteres tem o segredo salvo — nunca quais.
+     *
+     * <h2>Por que o tamanho sai, se o valor nao sai</h2>
+     * <p>Foi exatamente o que resolveu o caso de 25/10/2026. A loja 1 estava com o 99Food em 401 por
+     * dias, e a causa so ficou visivel comparando tamanhos: o segredo da plataforma tem 13
+     * caracteres e o do unico app de 99Food que funciona neste sistema tem 32. Sem esse numero, a
+     * tela diz "segredo salvo ✓" e o dono nao tem como desconfiar do que esta salvo.</p>
+     *
+     * <h2>O que isso custa, dito com honestidade</h2>
+     * <p>Tamanho de segredo e informacao a menos do que zero. Estreita de leve uma tentativa de
+     * adivinhacao. Mas o endpoint exige {@code ADMINISTRADOR_BORA}, o segredo e do proprio dono, e
+     * sao chaves de API (nao senha de pessoa, nao reusada em outro lugar). O risco e pequeno e o
+     * ganho e concreto: foi este numero que transformou "nao chega pedido" em "o segredo esta
+     * errado". O VALOR continua nao saindo nunca.</p>
+     *
+     * <p>Devolve 0 quando nao ha segredo salvo.</p>
+     */
+    public int tamanhoDoSecret(String canal) {
+        String v = valor(canal, "client-secret");
+        return v == null ? 0 : v.length();
+    }
+
+    /**
+     * Quando o segredo salvo PELA TELA foi gravado — null quando vem do servidor ou nao existe.
+     *
+     * <p>Responde a pergunta que o dono fez de verdade: "isso aqui e de quando?". Credencial salva na
+     * epoca da homologacao e credencial salva hoje tem o mesmo jeito na tela, e a data e a unica
+     * coisa que as separa.</p>
+     */
+    public OffsetDateTime secretAtualizadoEm(String canal) {
+        return configs.findById(chave(canal, "client-secret"))
+                .map(ConfigPlataforma::getAtualizadoEm)
+                .orElse(null);
+    }
+
     /** "TELA" (salvas pelo painel), "SERVIDOR" (api.env) ou null (nenhuma). */
     public String origem(String canal) {
         if (daTela(canal, "client-id") != null) return "TELA";

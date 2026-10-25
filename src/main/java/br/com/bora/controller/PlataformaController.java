@@ -837,6 +837,14 @@ public class PlataformaController {
             m.put("label", br.com.bora.service.IntegracaoService.label(canal));
             m.put("clientId", credenciais.clientId(canal));
             m.put("temSecret", credenciais.clientSecret(canal) != null);
+            // O TAMANHO do segredo sai; o valor, nunca. Foi este numero que resolveu o 401 do 99Food
+            // em 25/10/2026: o segredo da plataforma tem 13 caracteres e o do app que funciona tem
+            // 32. Sem ele a tela diz "salvo ✓" e nao ha como desconfiar do que esta salvo. O custo
+            // esta discutido no javadoc de CredenciaisMarketplace.tamanhoDoSecret.
+            m.put("tamanhoSecret", credenciais.tamanhoDoSecret(canal));
+            // "Isso aqui e de quando?" — credencial da epoca da homologacao e credencial de hoje tem
+            // o mesmo jeito na tela, e a data e a unica coisa que as separa.
+            m.put("secretAtualizadoEm", credenciais.secretAtualizadoEm(canal));
             m.put("origem", credenciais.origem(canal));
             out.add(m);
         }
