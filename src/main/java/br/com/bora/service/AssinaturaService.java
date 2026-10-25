@@ -144,7 +144,13 @@ public class AssinaturaService {
         // nascia o teste gratis infinito.
         String anterior = a.getAsaasSubscriptionId();
         boolean primeiraVez = anterior == null;
-        String nextDue = LocalDate.now().plusDays(primeiraVez ? 7 : 1).toString();
+        // ZONE, e nao LocalDate.now() sem fuso: o container roda em UTC, e das 21h a meia-noite de
+        // Brasilia o "hoje" sem fuso ja e amanha. O teste gratis nascia com 8 dias em vez de 7, e a
+        // reassinatura vencia em 2 dias em vez de 1 -- justo o numero que este bloco existe para
+        // conter. Pequeno, mas e data de cobranca, e erra sempre no mesmo sentido: a nosso favor
+        // nunca. Mesmo defeito do Cupom (que vencia as 21h) e do teste do liberarAcesso, que
+        // impedia qualquer deploy nessas tres horas.
+        String nextDue = LocalDate.now(ZONE).plusDays(primeiraVez ? 7 : 1).toString();
 
         // CRIA primeiro, cancela depois. Ver o javadoc deste metodo: na ordem antiga, uma falha na
         // criacao deixava a loja sem cobranca nenhuma e o painel dizendo que estava tudo certo.

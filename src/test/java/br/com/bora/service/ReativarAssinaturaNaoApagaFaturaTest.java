@@ -46,6 +46,18 @@ import static org.mockito.Mockito.*;
  */
 class ReativarAssinaturaNaoApagaFaturaTest {
 
+    /**
+     * "Hoje" no fuso de Brasilia, o MESMO que o AssinaturaService usa para montar o vencimento.
+     *
+     * <p>Estes testes usavam LocalDate.now() sem fuso. Na maquina de desenvolvimento o padrao e
+     * America/Sao_Paulo e passavam; o container do deploy roda em <b>UTC</b>, e das 21h a meia-noite
+     * de Brasilia o "hoje" sem fuso ja e amanha -- a data esperada ficava um dia a frente da que o
+     * servico produz. Ver OfusoNaoPodeSerOdoSistemaTest, que proibe a classe toda do defeito.</p>
+     */
+    private static java.time.LocalDate hojeEmBrasilia() {
+        return java.time.LocalDate.now(java.time.ZoneId.of("America/Sao_Paulo"));
+    }
+
     private AssinaturaRepository repo;
     private AsaasClient asaas;
     private AssinaturaService service;
@@ -238,7 +250,7 @@ class ReativarAssinaturaNaoApagaFaturaTest {
 
         service.assinar("12345678901");
 
-        assertEquals(LocalDate.now().plusDays(7).toString(), vencimentoCriado());
+        assertEquals(hojeEmBrasilia().plusDays(7).toString(), vencimentoCriado());
     }
 
     @Test
@@ -249,7 +261,7 @@ class ReativarAssinaturaNaoApagaFaturaTest {
 
         service.assinar(null);
 
-        assertEquals(LocalDate.now().plusDays(1).toString(), vencimentoCriado(),
+        assertEquals(hojeEmBrasilia().plusDays(1).toString(), vencimentoCriado(),
                 "quem ja usou o periodo de teste nao ganha outro por clicar de novo");
     }
 

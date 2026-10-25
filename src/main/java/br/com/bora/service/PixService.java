@@ -22,6 +22,20 @@ import java.util.UUID;
 @Service
 public class PixService {
 
+    /**
+     * Fuso de Brasilia, explicito — o container roda em UTC.
+     *
+     * <p>O {@code dueDate} da cobranca PIX usava {@code LocalDate.now()} sem fuso. Das 21h a
+     * meia-noite de Brasilia — <b>dentro do horario de jantar, que e o pico da loja</b> — isso ja e
+     * "amanha" em UTC, e a cobranca nascia com o vencimento de um dia depois do pretendido.</p>
+     *
+     * <p>Aqui o efeito e brando (o cliente ganha mais prazo, nao menos), mas e data de cobranca
+     * escrita errada no Asaas, e o mesmo descuido em outros lugares nao foi brando: o cupom com
+     * validade "hoje" parava de valer as 21h ({@link br.com.bora.entity.Cupom}), e o teste do
+     * liberarAcesso impedia QUALQUER deploy nessas tres horas.</p>
+     */
+    private static final java.time.ZoneId ZONE = java.time.ZoneId.of("America/Sao_Paulo");
+
     private final String baseUrl;
     private final String walletPlataforma;
     private final java.math.BigDecimal taxaPercentual;
@@ -158,7 +172,7 @@ public class PixService {
         corpo.put("customer", customerId);
         corpo.put("billingType", "PIX");
         corpo.put("value", pedido.valorTotal);
-        corpo.put("dueDate", LocalDate.now().toString());
+        corpo.put("dueDate", LocalDate.now(ZONE).toString());
         corpo.put("description", "Pedido " + (pedido.codigo == null ? pedido.id : pedido.codigo) + " - " + loja.nome);
         corpo.put("externalReference", String.valueOf(pedido.id));
         // Split: retém a taxa da plataforma quando o recebimento é pela subconta do lojista.

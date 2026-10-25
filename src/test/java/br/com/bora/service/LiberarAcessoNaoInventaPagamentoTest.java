@@ -39,6 +39,27 @@ class LiberarAcessoNaoInventaPagamentoTest {
 
     private static final Long LOJA = 18L;
 
+    /**
+     * "Hoje" no fuso de Brasília — o MESMO que o {@code AssinaturaService} usa.
+     *
+     * <h2>O defeito que isto conserta (24/10/2026)</h2>
+     * <p>Estes testes chamavam {@code LocalDate.now()} sem fuso, que usa o do sistema. Na minha máquina
+     * o padrão <b>é</b> America/Sao_Paulo e tudo passava. Dentro do contêiner do deploy, que roda em
+     * <b>UTC</b>, não: entre 00:00 e 03:00 UTC — ou seja das 21h à meia-noite em Brasília — o "hoje"
+     * do teste fica <b>um dia à frente</b> do "hoje" do serviço.</p>
+     *
+     * <p>O estrago não era um teste chato: o {@code Dockerfile} roda {@code mvn package}, então
+     * teste vermelho impede a imagem de nascer. <b>Qualquer deploy tentado nessas três horas
+     * falhava</b> — e é exatamente a hora em que uma loja fecha o caixa e alguém mexe no sistema.
+     * Descoberto tentando subir a v146 às 21h15.</p>
+     *
+     * <p>O serviço está certo em usar o fuso do negócio: "até que dia o acesso vale" é uma data que
+     * o lojista lê no relógio da loja, não em UTC. Quem tinha de acompanhar era o teste.</p>
+     */
+    private static java.time.LocalDate hoje() {
+        return java.time.LocalDate.now(java.time.ZoneId.of("America/Sao_Paulo"));
+    }
+
     private LojaRepository lojas;
     private AssinaturaRepository repo;
     private PagamentoAssinaturaRepository pagamentos;
@@ -79,7 +100,7 @@ class LiberarAcessoNaoInventaPagamentoTest {
     @Test
     void liberaOacesso_eNAOregistraPAGAMENTOnenhum() {
         // O coracao: mexe no acesso e NAO toca em dinheiro.
-        var r = service.liberarAcesso(LOJA, LocalDate.now().plusDays(30), "pagou R$ 398, Asaas cancelou");
+        var r = service.liberarAcesso(LOJA, hoje().plusDays(30), "pagou R$ 398, Asaas cancelou");
 
         assertNotNull(loja.acessoAte);
         assertTrue(loja.acessoAte.isAfter(OffsetDateTime.now().plusDays(29)));
@@ -91,7 +112,7 @@ class LiberarAcessoNaoInventaPagamentoTest {
     void naoMEXEnoSTATUSdaASSINATURA() {
         // Liberar acesso nao e dizer que a assinatura voltou: ela continua cancelada no Asaas, e o
         // painel tem que continuar mostrando isso.
-        service.liberarAcesso(LOJA, LocalDate.now().plusDays(30), "cortesia");
+        service.liberarAcesso(LOJA, hoje().plusDays(30), "cortesia");
 
         assertEquals(StatusAssinatura.CANCELADA, repo.findByLojaId(LOJA).orElseThrow().getStatus());
     }
@@ -100,7 +121,7 @@ class LiberarAcessoNaoInventaPagamentoTest {
     void aRESPOSTAdizDEondeVEIOePARAonde() {
         OffsetDateTime antes = loja.acessoAte;
 
-        var r = service.liberarAcesso(LOJA, LocalDate.now().plusDays(30), "cortesia");
+        var r = service.liberarAcesso(LOJA, hoje().plusDays(30), "cortesia");
 
         assertEquals(antes, r.get("acessoAteAntes"));
         assertNotNull(r.get("acessoAte"));
@@ -113,8 +134,8 @@ class LiberarAcessoNaoInventaPagamentoTest {
     void semMOTIVOnaoLIBERA() {
         // Acesso liberado sem motivo vira misterio em tres meses: quem procurar no log acha o efeito
         // e nao acha a decisao.
-        assertEquals(400, recusa(LocalDate.now().plusDays(30), null).getStatusCode().value());
-        assertEquals(400, recusa(LocalDate.now().plusDays(30), "   ").getStatusCode().value());
+        assertEquals(400, recusa(hoje().plusDays(30), null).getStatusCode().value());
+        assertEquals(400, recusa(hoje().plusDays(30), "   ").getStatusCode().value());
     }
 
     @Test
@@ -125,20 +146,20 @@ class LiberarAcessoNaoInventaPagamentoTest {
     @Test
     void dataNOpassadoNAOlibera() {
         // "Liberar" para tras seria TIRAR acesso por um caminho que nao avisa ninguem.
-        var e = recusa(LocalDate.now().minusDays(1), "cortesia");
+        var e = recusa(hoje().minusDays(1), "cortesia");
         assertTrue(e.getReason().contains("suspenda"), "foi: " + e.getReason());
     }
 
     @Test
     void dataDEhojeNAOlibera() {
-        assertEquals(400, recusa(LocalDate.now(), "cortesia").getStatusCode().value());
+        assertEquals(400, recusa(hoje(), "cortesia").getStatusCode().value());
     }
 
     @Test
     void acimaDOtetoNAOlibera() {
         // "Liberar para sempre" por engano e facil de fazer e dificil de notar: a loja some da
         // cobranca e ninguem repara.
-        var e = recusa(LocalDate.now().plusDays(AssinaturaService.MAXIMO_DIAS_DE_LIBERACAO + 1), "cortesia");
+        var e = recusa(hoje().plusDays(AssinaturaService.MAXIMO_DIAS_DE_LIBERACAO + 1), "cortesia");
 
         assertTrue(e.getReason().contains(String.valueOf(AssinaturaService.MAXIMO_DIAS_DE_LIBERACAO)),
                 "foi: " + e.getReason());
@@ -149,7 +170,7 @@ class LiberarAcessoNaoInventaPagamentoTest {
     @Test
     void noTETOexatoLIBERA() {
         assertDoesNotThrow(() ->
-                service.liberarAcesso(LOJA, LocalDate.now().plusDays(AssinaturaService.MAXIMO_DIAS_DE_LIBERACAO),
+                service.liberarAcesso(LOJA, hoje().plusDays(AssinaturaService.MAXIMO_DIAS_DE_LIBERACAO),
                         "negociacao"));
     }
 
@@ -157,6 +178,6 @@ class LiberarAcessoNaoInventaPagamentoTest {
     void lojaQUEnaoEXISTEda404() {
         when(lojas.findById(LOJA)).thenReturn(Optional.empty());
 
-        assertEquals(404, recusa(LocalDate.now().plusDays(10), "cortesia").getStatusCode().value());
+        assertEquals(404, recusa(hoje().plusDays(10), "cortesia").getStatusCode().value());
     }
 }

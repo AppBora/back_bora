@@ -30,7 +30,31 @@
       senha `teste` (o comando docker esta no javadoc do PreviaDoAcertoBateComOPagamentoIT) e chame:
         mvn test -Dtest='*IT' -DfailIfNoTests=false
     -->
+    <!--
+      O TESTE RODA NO FUSO DO SERVIDOR, NAO NO DA MINHA MAQUINA.
+
+      O container de producao roda em UTC; a minha maquina, em America/Sao_Paulo. Testes que usavam
+      data local sem fuso passavam aqui e falhavam la, mas SO entre 00:00 e 03:00 UTC — das 21h a
+      meia-noite de Brasilia, tres das vinte e quatro horas. Nas outras vinte e uma, verde.
+
+      O estrago nao era um teste chato: o Dockerfile roda `mvn package`, e teste vermelho impede a
+      imagem de nascer. Qualquer deploy tentado nessas tres horas falhava, e a causa aparecia como
+      "um teste de assinatura quebrou" — sem relacao visivel com a hora. Aconteceu de novo em
+      24/10/2026, tentando subir a v146 as 21h15, e era a QUARTA vez do mesmo defeito.
+
+      Fixando UTC aqui, o teste local falha quando o do deploy falharia: o defeito aparece na
+      primeira rodada, na minha mao, e nao duas horas depois dentro de um build de imagem.
+
+      Cuidado ao mexer: isto NAO quer dizer que a regra de negocio seja UTC. "Ate que dia o acesso
+      vale", "o cupom venceu" e "o vencimento da cobranca" sao datas que o lojista le no relogio da
+      loja — o codigo de producao usa ZoneId.of("America/Sao_Paulo") explicito, e
+      OfusoNaoPodeSerOdoSistemaTest proibe data local sem fuso. Esta linha serve para o teste
+      PERCEBER a diferenca, nao para apaga-la.
+    -->
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
-      <configuration><excludes><exclude>**/*IT.java</exclude></excludes></configuration></plugin>
+      <configuration>
+        <excludes><exclude>**/*IT.java</exclude></excludes>
+        <argLine>-Duser.timezone=UTC</argLine>
+      </configuration></plugin>
   </plugins></build>
 </project>
