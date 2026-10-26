@@ -436,5 +436,26 @@ public class MarketplaceNormalizer {
     private String firstNonBlank(String... v) { for (String s : v) if (s != null && !s.isBlank()) return s; return null; }
     private BigDecimal firstNum(BigDecimal... v) { for (BigDecimal b : v) if (b != null) return b; return null; }
     private Integer firstInt(Integer... v) { for (Integer i : v) if (i != null) return i; return null; }
-    private String join(String a, String b) { return firstNonBlank(a, "") + (b != null && !b.isBlank() ? ", " + b : ""); }
+    /**
+     * Junta rua e numero sem escrever a palavra "null" no endereco de entrega.
+     *
+     * <h2>O defeito (achado pelo QA em 26/10/2026)</h2>
+     * <p>Era {@code firstNonBlank(a, "") + ...}. O {@code firstNonBlank} devolve <b>null</b> quando
+     * nada esta preenchido — e {@code ""} E blank, entao o segundo argumento nunca salvava nada. Em
+     * Java, {@code null + ", 999"} escreve o texto literal <b>{@code "null, 999"}</b>.</p>
+     *
+     * <p>Pedido de marketplace sem {@code streetName} (iFood) ou {@code street} (99Food) gravava isso
+     * como {@code endereco_entrega}. E esse campo vai para a tela de Entregas e para a comanda
+     * impressa — ou seja, chega na mao de quem esta na rua. Nenhum campo do payload e obrigatorio no
+     * normalizador, e texto de fora nao tem forma garantida.</p>
+     *
+     * <p>Agora: sem rua e com numero sai so o numero; sem nada sai vazio, que e o que "nao sei o
+     * endereco" deve parecer na tela — e nao a palavra null.</p>
+     */
+    private String join(String a, String b) {
+        String rua = a == null || a.isBlank() ? "" : a.trim();
+        String numero = b == null || b.isBlank() ? "" : b.trim();
+        if (rua.isEmpty()) return numero;
+        return numero.isEmpty() ? rua : rua + ", " + numero;
+    }
 }

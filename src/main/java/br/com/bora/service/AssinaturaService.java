@@ -918,13 +918,30 @@ public class AssinaturaService {
      * <p>Se ela voltou com assinatura viva, nada muda. Se a assinatura foi cancelada na suspensão (o
      * caso normal), ela ganha a carência: usa o sistema, mas com data para reassinar. Sem isto a loja
      * voltava com acesso sem fim e sem cobrança nenhuma.</p>
+     *
+     * <h2>USA A GUARDA, e isto foi um conserto de 26/10/2026</h2>
+     * <p>Este método chamava {@code prazoDeAcesso(...)} direto — que <b>sobrescreve</b>. A guarda
+     * {@link #prazoSemEncurtar} existe 100 linhas abaixo, criada exatamente para o acidente da Zirá,
+     * e protegia os caminhos do webhook mas <b>não este</b>.</p>
+     *
+     * <p>O que isso fazia, medido pelo QA: loja com {@code LIBERACAO} até <b>23/01/2027</b> — o
+     * estado da Zirá hoje — depois de um suspender + reativar ficava com {@code acesso_ate} em
+     * <b>hoje + 10 dias</b> e {@code acesso_motivo} trocado para {@code CORTESIA}. Com o corte por
+     * falta de pagamento ligado, ela sairia do ar dez dias depois de um clique, e o log de auditoria
+     * passaria a dizer CORTESIA em vez do motivo real. Sem caminho de volta automático.</p>
+     *
+     * <p>Também acontecia com quem <b>pagou por fora</b>: acesso sem data de fim por
+     * {@code PAGAMENTO_MANUAL} ganhava uma data de vencimento que ninguém pediu.</p>
+     *
+     * <p>Com a guarda: quem tem motivo intocável (pagou por fora, ou o dono liberou) fica como está;
+     * quem já tem prazo mais longo que a carência mantém o prazo; e só quem não tem nada melhor ganha
+     * a carência. É o que "reativar" sempre quis dizer.</p>
      */
     @Transactional
     public String prazoAoReativar(Long lojaId) {
         Assinatura a = repo.findByLojaId(lojaId).orElse(null);
         if (a != null && a.getStatus() == StatusAssinatura.ATIVA) return "assinatura ativa, sem prazo";
-        prazoDeAcesso(lojaId, OffsetDateTime.now().plusDays(carenciaDias), MotivoDoAcesso.CORTESIA);
-        return "sem assinatura ativa: acesso liberado por " + carenciaDias + " dias";
+        return "sem assinatura ativa: " + prazoSemEncurtar(lojaId, MotivoDoAcesso.CORTESIA);
     }
 
     /**

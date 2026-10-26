@@ -133,7 +133,15 @@ class CobrancaAcompanhaARealidadeTest {
         String recado = service.prazoAoReativar(18L);
 
         assertNotNull(loja.acessoAte, "voltava com acesso sem fim e sem cobranca");
-        assertTrue(recado.contains("10"));
+        // Mede a DATA, e nao o texto. A versao anterior afirmava `recado.contains("10")`, presa a
+        // mensagem "acesso liberado por 10 dias" — e quebrou em 26/10, quando o `prazoAoReativar`
+        // passou a usar a guarda `prazoSemEncurtar` (que nao encurta acesso de quem pagou por fora
+        // nem de quem o dono liberou) e a mensagem mudou. O comportamento protegido aqui e o prazo
+        // existir; travar o texto fazia o teste falhar por um conserto certo.
+        assertTrue(loja.acessoAte.isAfter(OffsetDateTime.now().plusDays(9))
+                        && loja.acessoAte.isBefore(OffsetDateTime.now().plusDays(11)),
+                "a carencia de 10 dias nao foi aplicada: " + loja.acessoAte);
+        assertFalse(recado.isBlank(), "o retorno alimenta o log de auditoria do reativar");
     }
 
     @Test

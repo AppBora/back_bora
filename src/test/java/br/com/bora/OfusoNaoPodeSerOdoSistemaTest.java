@@ -46,6 +46,39 @@ class OfusoNaoPodeSerOdoSistemaTest {
 
     private static final Path FONTES = Paths.get("src/main/java");
 
+    /**
+     * Tudo que resolve fuso pelo SISTEMA. A lista existe porque a primeira versao deste teste
+     * proibia dois padroes e eu disse ao dono que ela "proibia a classe toda".
+     *
+     * <h2>O que escapou, e o que custou (achado pelo QA em 26/10/2026)</h2>
+     * <p>A versao de 25/10 procurava so {@code LocalDate.now()} e {@code LocalDateTime.now()}.
+     * Passaram tres instancias, todas em caminho de dinheiro:</p>
+     * <ul>
+     *   <li>{@code AsaasWebhookController.dia()} com {@code ZoneId.systemDefault()} — gravava o dia
+     *       do pagamento em UTC enquanto a guarda contra duplicidade procurava em Brasilia. As tres
+     *       primeiras horas do dia ficavam fora da janela, e o faturamento podia contar o mesmo
+     *       R$ 199 duas vezes. Esse faturamento e a base da nota fiscal.</li>
+     *   <li>{@code PlataformaController.faturamento()} com {@code YearMonth.now()} — entre 21h e
+     *       meia-noite do ultimo dia do mes, a tela mostrava o mes seguinte, zerado.</li>
+     *   <li>o mesmo metodo com {@code ZoneId.systemDefault()} nas bordas do mes.</li>
+     * </ul>
+     *
+     * <p><b>Licao:</b> teste que proibe "alguns padroes" nao proibe uma classe de defeito. Quando o
+     * mesmo defeito aparece pela terceira vez, a lista tem de cobrir as formas que ele sabe tomar —
+     * e crescer quando aparecer uma nova.</p>
+     *
+     * <p>Nao entram aqui {@code OffsetDateTime.now()} nem {@code Instant.now()}: esses carregam o
+     * instante e nao dependem de fuso para dizer QUANDO. O problema e so com data e hora locais,
+     * que precisam saber de qual relogio estao falando — e o relogio que importa e o da loja.</p>
+     */
+    private static final List<String> PROIBIDOS = List.of(
+            "LocalDate.now()",
+            "LocalDateTime.now()",
+            "LocalTime.now()",
+            "YearMonth.now()",
+            "ZoneId.systemDefault()",
+            "TimeZone.getDefault()");
+
     @Test
     void nenhumaDataLOCALsemFUSOnoCodigoDePRODUCAO() throws IOException {
         List<String> achados = new ArrayList<>();
@@ -59,8 +92,11 @@ class OfusoNaoPodeSerOdoSistemaTest {
                     String semEspaco = l.stripLeading();
                     if (semEspaco.startsWith("//") || semEspaco.startsWith("*")
                             || semEspaco.startsWith("/*")) continue;
-                    if (l.contains("LocalDate.now()") || l.contains("LocalDateTime.now()")) {
-                        achados.add(FONTES.relativize(p) + ":" + (i + 1) + "  " + l.trim());
+                    for (String proibido : PROIBIDOS) {
+                        if (l.contains(proibido)) {
+                            achados.add(FONTES.relativize(p) + ":" + (i + 1) + "  " + l.trim());
+                            break;
+                        }
                     }
                 }
             }

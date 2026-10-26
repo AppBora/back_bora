@@ -76,6 +76,44 @@ public class AsaasWebhookController {
             pagoEm = dia(m.get("paymentDate") != null ? m.get("paymentDate") : m.get("confirmedDate"));
             valorEstornado = somaDosEstornos(m.get("refunds"));
         }
+
+        // EVENTO DE ASSINATURA TRAZ O ID NA RAIZ, E NÃO DENTRO DE `payment`.
+        //
+        // Achado pelo QA em 26/10/2026, e era o defeito mais caro desta classe: só o bloco acima
+        // lia o `subscription`, de dentro do objeto `payment`. Evento de ASSINATURA
+        // (`SUBSCRIPTION_DELETED`, `SUBSCRIPTION_*`) não tem `payment` nenhum — o corpo traz a
+        // assinatura no topo. Resultado: `subscriptionId` ficava nulo, o
+        // `AssinaturaService.processarWebhook` saía na primeira linha (`if (subscriptionId == null)
+        // return;`) e este endpoint respondia 200 "received".
+        //
+        // Ou seja: TODO o ramo `SUBSCRIPTION_DELETED` — o que existe justamente para impor prazo
+        // quando a assinatura é cancelada no Asaas — era código inalcançável pela porta HTTP. E
+        // falhava calado: nada no log, 200 na resposta, o Asaas nunca reenviando.
+        //
+        // Pior: isso anulava uma decisão pendente do dono. Marcar os eventos `SUBSCRIPTION_*` no
+        // painel do Asaas não teria efeito nenhum, e não daria erro para avisar.
+        //
+        // Por que `subscription` pode ser Map OU texto: nos eventos de assinatura o Asaas manda o
+        // objeto inteiro (`{"subscription": {"id": "sub_x", ...}}`); em outros formatos manda só o
+        // id. Aceitar os dois custa três linhas e evita que a mesma correção precise voltar.
+        if (subscriptionId == null) {
+            Object sub = payload.get("subscription");
+            if (sub instanceof Map<?, ?> sm) {
+                if (sm.get("id") != null) subscriptionId = sm.get("id").toString();
+            } else if (sub != null && !sub.toString().isBlank()) {
+                subscriptionId = sub.toString();
+            }
+        }
+
+        // NÃO ENGOLE EVENTO DE ASSINATURA SEM ID. Antes o serviço descartava em silêncio e o
+        // endpoint dizia 200: ninguém tinha como descobrir que o aviso não foi aplicado. Agora fica
+        // no log com o evento e as chaves que vieram — sem imprimir o corpo, que carrega dado do
+        // pagador. A resposta segue 200 de propósito: reenviar não resolveria um corpo sem id.
+        if (subscriptionId == null && event != null && event.startsWith("SUBSCRIPTION_")) {
+            log.warn("AUDITORIA cobranca: evento {} do Asaas chegou SEM id de assinatura e nao foi "
+                    + "aplicado. Chaves do corpo: {}", event, payload.keySet());
+        }
+
         service.processarWebhook(event, subscriptionId, paymentId, valorEstornado, valor, pagoEm);
         return Map.of("received", true);
     }
@@ -117,11 +155,38 @@ public class AsaasWebhookController {
     }
 
     /** "2026-10-02" (formato que o Asaas manda) vira o começo daquele dia. */
+    /**
+     * O fuso do NEGÓCIO, não o do sistema — e aqui isso vale dinheiro.
+     *
+     * <p>O {@code paymentDate} do Asaas é uma data sem hora ("2026-10-15"). Transformá-la em
+     * instante exige escolher um fuso, e este método usava {@code ZoneId.systemDefault()} — que no
+     * container é <b>UTC</b>. Então o dia 15 virava {@code 2026-10-15T00:00Z}.</p>
+     *
+     * <p>A guarda que impede contar o mesmo pagamento duas vezes
+     * ({@code AssinaturaService.pagamentosDaLojaNoDia}) procura o dia em <b>America/Sao_Paulo</b>:
+     * {@code [15/10 03:00Z, 16/10 03:00Z)}. As três primeiras horas do dia em UTC ficavam
+     * <b>fora da janela</b>.</p>
+     *
+     * <p>O estrago, achado pelo QA em 26/10/2026: o Asaas confirma a mensalidade pelo webhook, o
+     * dono registra "recebi fora do Asaas" no mesmo dia, e a guarda <b>não acha</b> o pagamento do
+     * webhook — não pergunta nada, grava o segundo, e o faturamento conta R$ 199 duas vezes para um
+     * pagamento só. Esse faturamento é a base da nota fiscal.</p>
+     *
+     * <p>Não havia distorção medida em produção: as duas linhas existentes vieram do caminho manual
+     * e o webhook nunca gravou nenhuma. Disparava no primeiro pagamento real por webhook.</p>
+     *
+     * <p>Os dois lados agora usam o mesmo fuso. É a mesma classe de defeito do
+     * {@link br.com.bora.OfusoNaoPodeSerOdoSistemaTest}, que proibia {@code LocalDate.now()} e
+     * <b>não pegava</b> {@code ZoneId.systemDefault()} — o teste foi ampliado junto com este
+     * conserto.</p>
+     */
+    private static final java.time.ZoneId ZONE = java.time.ZoneId.of("America/Sao_Paulo");
+
     private static java.time.OffsetDateTime dia(Object v) {
         if (v == null) return null;
         try {
             return java.time.LocalDate.parse(v.toString().substring(0, 10))
-                    .atStartOfDay(java.time.ZoneId.systemDefault()).toOffsetDateTime();
+                    .atStartOfDay(ZONE).toOffsetDateTime();
         } catch (RuntimeException e) {
             return null;
         }

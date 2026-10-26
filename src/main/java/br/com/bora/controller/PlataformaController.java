@@ -988,13 +988,26 @@ public class PlataformaController {
     @GetMapping("/faturamento")
     public Map<String, Object> faturamento(@RequestParam(required = false) String mes) {
         ctx.requirePapel("ADMINISTRADOR_BORA");
+        // FUSO DO NEGOCIO NOS DOIS LUGARES, e nao o do sistema (que no container e UTC).
+        //
+        // Achado pelo QA em 26/10/2026. Eram dois defeitos na mesma tela:
+        //
+        // 1. `YearMonth.now()` sem fuso: entre 21h e meia-noite de Brasilia do ULTIMO DIA DO MES,
+        //    abrir "Faturamento" sem parametro mostrava o mes SEGUINTE -- ou seja, zerado, no
+        //    momento exato em que o dono fecha o mes.
+        // 2. `ZoneId.systemDefault()` nas bordas: o mes ia de 01/10 00:00 UTC a 01/11 00:00 UTC,
+        //    que em Brasilia e 30/09 21:00 a 31/10 21:00. Pagamento das ultimas 3 horas do ultimo
+        //    dia do mes caia no mes errado, e as 3 primeiras horas do dia 1 tambem.
+        //
+        // Isto e a base da nota fiscal. Mesma classe do defeito do `dia()` no
+        // AsaasWebhookController, consertado no mesmo commit.
+        java.time.ZoneId z = java.time.ZoneId.of("America/Sao_Paulo");
         java.time.YearMonth ym;
         try {
-            ym = (mes == null || mes.isBlank()) ? java.time.YearMonth.now() : java.time.YearMonth.parse(mes);
+            ym = (mes == null || mes.isBlank()) ? java.time.YearMonth.now(z) : java.time.YearMonth.parse(mes);
         } catch (RuntimeException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mes invalido. Use AAAA-MM, por exemplo 2026-10.");
         }
-        java.time.ZoneId z = java.time.ZoneId.systemDefault();
         java.time.OffsetDateTime de = ym.atDay(1).atStartOfDay(z).toOffsetDateTime();
         java.time.OffsetDateTime ate = ym.plusMonths(1).atDay(1).atStartOfDay(z).toOffsetDateTime();
 
