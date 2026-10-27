@@ -2,6 +2,9 @@ package br.com.bora.service;
 
 import br.com.bora.entity.Pedido;
 import br.com.bora.entity.PedidoItem;
+import br.com.bora.entity.LogStatus;
+import br.com.bora.entity.StatusPedido;
+import br.com.bora.repository.LogStatusRepository;
 import br.com.bora.repository.PedidoItemRepository;
 import br.com.bora.repository.ProdutoRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,12 +41,25 @@ import static org.mockito.Mockito.*;
  * <p>Esta classe prova o {@code rebaixarDeNovo}: ele é o espelho exato do {@code devolver}, e mora no
  * mesmo serviço porque a regra "produto com ficha consome insumo, produto sem ficha baixa o próprio
  * estoque" existe num lugar só.</p>
+ *
+ * <h2>26/10/2026: o espelho NÃO era exato</h2>
+ * <p>Este arquivo afirmava a simetria, e não a media: o {@code devolver} tem duas guardas de
+ * estágio (insumo não volta depois do preparo, produto não volta depois de sair da loja) e o
+ * {@code rebaixarDeNovo} <b>não tinha nenhuma</b> -- consumia sempre. Pedido que entrou em preparo,
+ * foi cancelado e teve o PIX pago depois saía com o insumo baixado DUAS VEZES, e o CMV do mês
+ * contava o ingrediente em dobro.</p>
+ *
+ * <p>Por isso os casos abaixo agora montam o histórico de status: o método lê dele em que estágio o
+ * pedido foi cancelado. O padrão é o caso deste arquivo -- PIX que expirou com o pedido ainda em
+ * RECEBIDO. A simetria de verdade, status por status, está em
+ * {@code OpedidoReabertoNaoBaixaEstoqueDuasVezesTest}.</p>
  */
 class PedidoPagoDepoisDoCancelamentoReabreTest {
 
     private PedidoItemRepository itens;
     private ProdutoRepository produtos;
     private InsumoService insumos;
+    private LogStatusRepository logs;
     private EstornoDaVendaService servico;
 
     private static final Long LOJA = 18L;
@@ -53,7 +69,21 @@ class PedidoPagoDepoisDoCancelamentoReabreTest {
         itens = mock(PedidoItemRepository.class);
         produtos = mock(ProdutoRepository.class);
         insumos = mock(InsumoService.class);
-        servico = new EstornoDaVendaService(itens, produtos, insumos, mock(FidelidadeService.class));
+        logs = mock(LogStatusRepository.class);
+        servico = new EstornoDaVendaService(itens, produtos, insumos, mock(FidelidadeService.class), logs);
+        // O caso deste arquivo: o PIX expirou com o pedido ainda em RECEBIDO, antes de qualquer
+        // preparo. O cancelamento devolveu tudo, e a reabertura tira tudo de novo.
+        canceladoDe(StatusPedido.RECEBIDO);
+    }
+
+    /** Em que estágio o pedido foi cancelado -- é o que o serviço lê do {@code log_status}. */
+    private void canceladoDe(StatusPedido antes) {
+        LogStatus l = new LogStatus();
+        l.setLojaId(LOJA);
+        l.setPedidoId(500L);
+        l.setStatusAnterior(antes.name());
+        l.setStatusNovo(StatusPedido.CANCELADO.name());
+        when(logs.findByLojaIdAndPedidoIdOrderByDataHoraAsc(LOJA, 500L)).thenReturn(List.of(l));
     }
 
     private Pedido pedido() {
@@ -188,5 +218,14 @@ class PedidoPagoDepoisDoCancelamentoReabreTest {
         String rebaixar = fonte.substring(iRebaixar, fonte.indexOf("\n    }", iRebaixar));
         assertTrue(rebaixar.contains("getConsumiuFicha()"),
                 "o rebaixarDeNovo tem que ler a marca do item, nao adivinhar pela ficha de hoje");
+
+
+        // E as DUAS guardas de estagio, que era o que faltava: sem elas o metodo nao e espelho de
+        // nada, e foi assim que a baixa dupla nasceu.
+        for (String guarda : new String[] { "entrouEmPreparo(", "jaSaiuDaLoja(" }) {
+            assertTrue(rebaixar.contains(guarda),
+                    "o rebaixarDeNovo perdeu a guarda " + guarda + ": pedido cancelado depois do "
+                            + "preparo volta a baixar insumo que nunca foi devolvido");
+        }
     }
 }

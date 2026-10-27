@@ -37,6 +37,7 @@ class AdicionalVoltaNoCancelamentoTest {
 
     private PedidoItemRepository itens;
     private InsumoService insumos;
+    private br.com.bora.repository.LogStatusRepository logs;
     private EstornoDaVendaService servico;
 
     private static final Long LOJA = 4L;
@@ -45,8 +46,18 @@ class AdicionalVoltaNoCancelamentoTest {
     void montar() {
         itens = mock(PedidoItemRepository.class);
         insumos = mock(InsumoService.class);
+        logs = mock(br.com.bora.repository.LogStatusRepository.class);
         servico = new EstornoDaVendaService(itens, mock(ProdutoRepository.class), insumos,
-                mock(FidelidadeService.class));
+                mock(FidelidadeService.class), logs);
+        // Desde 26/10/2026 a reabertura le do historico em que estagio o pedido foi cancelado,
+        // porque ela so pode tirar o que o cancelamento devolveu. Aqui: cancelado em RECEBIDO,
+        // antes de qualquer preparo -- o cenario em que a granola volta e sai de novo.
+        br.com.bora.entity.LogStatus l = new br.com.bora.entity.LogStatus();
+        l.setLojaId(LOJA);
+        l.setPedidoId(900L);
+        l.setStatusAnterior(StatusPedido.RECEBIDO.name());
+        l.setStatusNovo(StatusPedido.CANCELADO.name());
+        when(logs.findByLojaIdAndPedidoIdOrderByDataHoraAsc(LOJA, 900L)).thenReturn(List.of(l));
     }
 
     private Pedido pedido() {

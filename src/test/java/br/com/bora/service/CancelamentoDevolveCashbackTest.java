@@ -67,7 +67,8 @@ class CancelamentoDevolveCashbackTest {
 
     private EstornoDaVendaService estorno() {
         return new EstornoDaVendaService(itens, mock(ProdutoRepository.class), mock(InsumoService.class),
-                new FidelidadeService(clientes, configs));
+                new FidelidadeService(clientes, configs),
+                mock(br.com.bora.repository.LogStatusRepository.class));
     }
 
     private Pedido pedido(String total, String cashbackUsado) {

@@ -49,12 +49,45 @@ public class EstornoDaVendaService {
     private final InsumoService insumos;
     private final FidelidadeService fidelidade;
 
+    private final br.com.bora.repository.LogStatusRepository logs;
+
     public EstornoDaVendaService(PedidoItemRepository itens, ProdutoRepository produtos,
-                                     InsumoService insumos, FidelidadeService fidelidade) {
+                                     InsumoService insumos, FidelidadeService fidelidade,
+                                     br.com.bora.repository.LogStatusRepository logs) {
         this.itens = itens;
         this.produtos = produtos;
         this.insumos = insumos;
         this.fidelidade = fidelidade;
+        this.logs = logs;
+    }
+
+    /**
+     * Em que status o pedido estava ANTES de ser cancelado — lido do historico.
+     *
+     * <p>E a informacao que o {@link #rebaixarDeNovo} precisa e nao tinha. Quem reabre o pedido e o
+     * webhook do PIX, muito depois do cancelamento: ele nao sabe, e nao tem como saber, se a cozinha
+     * ja havia usado o ingrediente quando o cancelamento aconteceu.</p>
+     *
+     * <p>O {@code log_status} guarda {@code status_anterior} em cada mudanca. Procurando a ultima
+     * linha que levou a CANCELADO, sai exatamente o estagio que o {@code devolver} usou para decidir
+     * o que devolver.</p>
+     *
+     * <p>Devolve {@code null} quando nao da para saber (historico apagado, pedido antigo). Quem
+     * chama trata nulo como "nao mexe", seguindo a regra que o {@code devolver} ja aplica ao item sem
+     * marca: <b>se nao se sabe como saiu, nao se sabe como tirar de novo</b>.</p>
+     */
+    private StatusPedido statusAntesDoCancelamento(Pedido p) {
+        var historico = logs.findByLojaIdAndPedidoIdOrderByDataHoraAsc(p.lojaId, p.id);
+        String anterior = null;
+        for (var l : historico) {
+            if (StatusPedido.CANCELADO.name().equals(l.getStatusNovo())) anterior = l.getStatusAnterior();
+        }
+        if (anterior == null || anterior.isBlank()) return null;
+        try {
+            return StatusPedido.valueOf(anterior);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /** O pedido ja tinha entrado em producao? Depois disso o ingrediente nao volta. */
@@ -179,6 +212,39 @@ public class EstornoDaVendaService {
     @Transactional
     public int rebaixarDeNovo(Pedido p) {
         if (p == null || p.id == null) return 0;
+
+        // AS MESMAS DUAS GUARDAS DO `devolver`, e isto era o defeito (achado pelo QA em 26/10/2026).
+        //
+        // O javadoc acima afirmava que este metodo e "o espelho exato do devolver". NAO ERA: o
+        // `devolver` tem `podeDevolverInsumo = !entrouEmPreparo` e
+        // `podeDevolverProduto = !jaSaiuDaLoja`, e aqui nao havia nenhuma das duas -- consumia
+        // sempre.
+        //
+        // O estrago, medido: pedido do cardapio com PIX, o lojista avanca para EM_PREPARO (nada
+        // bloqueia; o CobradorDePixService documenta que isso acontece), o pedido e cancelado, e o
+        // PIX cai depois. No cancelamento o `devolver` NAO devolveu o insumo -- certo, a cozinha
+        // usou a polpa. Na reabertura o `rebaixarDeNovo` consumia de novo: a polpa saia DUAS VEZES
+        // do estoque para um acai, e o CMV do mes contava o ingrediente em dobro.
+        //
+        // Espelhar e a correcao certa porque a simetria e o contrato: so se rebaixa o que foi
+        // devolvido. Rebaixar o que nunca voltou e inventar consumo.
+        StatusPedido statusAntes = statusAntesDoCancelamento(p);
+        if (statusAntes == null) {
+            // Mesma regra do item sem a marca `consumiuFicha`: se nao se sabe o que foi devolvido,
+            // nao se sabe o que rebaixar, e inventar baixa e tao ruim quanto inventar devolucao.
+            log.warn("Pedido {} da loja {} reaberto, mas o historico nao diz de que status ele foi "
+                            + "cancelado: NADA foi baixado de novo. Confira o estoque a mao.",
+                    p.id, p.lojaId);
+            return 0;
+        }
+        boolean rebaixaInsumo = !entrouEmPreparo(statusAntes);
+        boolean rebaixaProduto = !jaSaiuDaLoja(statusAntes);
+        if (!rebaixaInsumo && !rebaixaProduto) {
+            log.info("Pedido {} da loja {} reaberto: cancelado em {}, quando nada havia sido "
+                            + "devolvido -- nada a baixar de novo.", p.id, p.lojaId, statusAntes);
+            return 0;
+        }
+
         List<PedidoItem> lista = itens.findByLojaIdAndPedidoIdOrderById(p.lojaId, p.id);
         int baixados = 0;
         int semMarca = 0;
@@ -187,16 +253,21 @@ public class EstornoDaVendaService {
             if (qtd <= 0 || item.getProdutoId() == null) continue;
             Boolean porFicha = item.getConsumiuFicha();
 
-            // O adicional sai de novo junto, e com a lista gravada no item -- nao com o cadastro de
-            // hoje. `false` no ultimo argumento: nao recusa, a venda esta paga.
-            insumos.consumirAdicionais(p.lojaId, ComplementosDoItem.ler(item.getComplementos()), qtd, false);
+            // O adicional acompanha o insumo: ele e insumo, e foi devolvido (ou nao) pela mesma
+            // regra de estagio. Com a lista gravada no item -- nao com o cadastro de hoje. `false`
+            // no ultimo argumento: nao recusa, a venda esta paga.
+            if (rebaixaInsumo) {
+                insumos.consumirAdicionais(p.lojaId, ComplementosDoItem.ler(item.getComplementos()), qtd, false);
+            }
 
             if (Boolean.TRUE.equals(porFicha)) {
+                if (!rebaixaInsumo) continue;
                 // Modo que NAO recusa: a venda esta paga. Consome a ficha de HOJE -- mesma ressalva do
                 // devolver, e a melhor informacao que existe.
                 insumos.consumirFicha(p.lojaId, item.getProdutoId(), qtd);
                 baixados++;
             } else if (Boolean.FALSE.equals(porFicha)) {
+                if (!rebaixaProduto) continue;
                 if (produtos.baixarEstoque(item.getProdutoId(), p.lojaId, qtd) > 0) baixados++;
             } else {
                 semMarca++;
