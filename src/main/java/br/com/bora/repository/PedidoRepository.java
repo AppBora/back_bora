@@ -14,6 +14,25 @@ import java.util.Optional;
 public interface PedidoRepository extends JpaRepository<Pedido, Long> {
 
     /**
+     * Pedidos CANCELADOS de varias lojas no periodo, do mais novo para o mais velho.
+     *
+     * <p>Substitui a consulta-por-loja do {@code AgenteRedeService.cancelamentosRecentes}.</p>
+     *
+     * <p><b>O teto de 30 continua em Java, e isso nao e preguica.</b> O laco antigo percorria as
+     * lojas na ordem de {@code minhasLojas()} e parava ao juntar 30 — ou seja, enchia com os da
+     * primeira loja antes de olhar a segunda. Um {@code limit 30} no SQL devolveria os 30 mais
+     * recentes da REDE, que e um conjunto diferente. Aqui a consulta traz tudo do periodo e o
+     * servico reproduz a mesma travessia.</p>
+     */
+    @Query("select p from Pedido p where p.lojaId in :lojas "
+         + "and p.status = br.com.bora.entity.StatusPedido.CANCELADO "
+         + "and p.criadoEm >= :inicio and p.criadoEm < :fim "
+         + "order by p.criadoEm desc")
+    List<Pedido> canceladosDasLojas(@Param("lojas") java.util.Collection<Long> lojas,
+                                    @Param("inicio") OffsetDateTime inicio,
+                                    @Param("fim") OffsetDateTime fim);
+
+    /**
      * Quantos clientes desta loja tem o ULTIMO pedido dentro de uma janela — numa consulta so.
      *
      * <h2>O N+1 que isto substitui (achado pelo QA em 26/10/2026)</h2>

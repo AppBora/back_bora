@@ -7,6 +7,16 @@ import java.util.Optional;
 
 public interface ProdutoRepository extends JpaRepository<Produto, Long> {
     List<Produto> findByLojaIdOrderByNomeAsc(Long lojaId);
+
+    /**
+     * Produtos de VARIAS lojas de uma vez — para o quadro da rede nao consultar loja por loja.
+     *
+     * <p>A ordem e {@code lojaId, nome}: o laco antigo percorria loja a loja e, dentro de cada uma,
+     * por nome. Como o resultado final e ordenado por cobertura com {@code List.sort} (estavel),
+     * empate de cobertura preserva a ordem de insercao -- entao a ordem daqui decide o desempate, e
+     * mudar ela mudaria a tela.</p>
+     */
+    List<Produto> findByLojaIdInOrderByLojaIdAscNomeAsc(java.util.Collection<Long> lojaIds);
     List<Produto> findByLojaIdAndAtivoTrueOrderByCategoriaAscNomeAsc(Long lojaId);
     Optional<Produto> findByIdAndLojaId(Long id, Long lojaId);
 

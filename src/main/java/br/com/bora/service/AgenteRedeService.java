@@ -110,13 +110,26 @@ public class AgenteRedeService {
     }
 
     /** Lojas da rede do usuário (a plataforma enxerga todas as ativas). */
-    private List<Loja> minhasLojas() {
+    List<Loja> minhasLojas() {
         if (ctx.isAdminBora()) {
             return lojas.findAll().stream().filter(l -> !l.arquivada()).toList();
         }
+        // UMA consulta para as lojas, nao uma por vinculo (era `findById` dentro do laco).
+        //
+        // A ORDEM DOS VINCULOS E PRESERVADA de proposito: o `findAllById` devolve em ordem
+        // indefinida, e a ordem das lojas decide dois resultados visiveis -- o desempate do quadro de
+        // estoque (o `sort` final e estavel) e quais cancelamentos entram no teto de 30, que enche
+        // loja por loja. Por isso: busca todas de uma vez, indexa por id, e percorre os vinculos na
+        // ordem deles.
+        List<UsuarioLoja> meus = vinculos.findByUsuarioId(ctx.atual().userId());
+        if (meus.isEmpty()) return List.of();
+        Map<Long, Loja> porId = new HashMap<>();
+        lojas.findAllById(meus.stream().map(UsuarioLoja::getLojaId).toList())
+                .forEach(l -> porId.put(l.getId(), l));
         List<Loja> out = new ArrayList<>();
-        for (UsuarioLoja v : vinculos.findByUsuarioId(ctx.atual().userId())) {
-            lojas.findById(v.getLojaId()).ifPresent(out::add);
+        for (UsuarioLoja v : meus) {
+            Loja l = porId.get(v.getLojaId());
+            if (l != null) out.add(l);
         }
         return out;
     }
@@ -127,25 +140,45 @@ public class AgenteRedeService {
      * <p>Estoque parado não diz nada sozinho: 10 unidades é muito para quem vende 1 por semana e é
      * ruptura amanhã para quem vende 20 por dia. O que interessa é a cobertura em dias.</p>
      */
-    private List<Map<String, Object>> estoqueEmRisco(LocalDate inicio, LocalDate fim) {
+    // Visivel no pacote, e nao privado, para o IT de equivalencia chamar os dois metodos direto.
+    // Passar pelo `dossie` arrastaria balancete, canais, horario e tempos para um teste que mede
+    // outra coisa. Mesmo motivo do `SegredoGuardado.usarChave`, que e publico pelo teste.
+    List<Map<String, Object>> estoqueEmRisco(LocalDate inicio, LocalDate fim) {
         LocalDate ini = inicio == null ? LocalDate.now(ZONE).withDayOfMonth(1) : inicio;
         LocalDate f = fim == null ? LocalDate.now(ZONE) : fim;
         long dias = Math.max(1, ChronoUnit.DAYS.between(ini, f) + 1);
         OffsetDateTime corte = ini.atStartOfDay(ZONE).toOffsetDateTime();
         OffsetDateTime fimExc = f.plusDays(1).atStartOfDay(ZONE).toOffsetDateTime();
 
+        List<Loja> minhas = minhasLojas();
+        if (minhas.isEmpty()) return List.of();
+        List<Long> ids = minhas.stream().map(Loja::getId).toList();
+
+        // DUAS CONSULTAS PARA A REDE TODA, no lugar de tres POR LOJA (registrado na v131, atacado em
+        // 27/10/2026). Numa rede de 5 lojas eram 15 consultas; agora sao 2.
+        //
+        // A ARITMETICA NAO MUDOU, e isso e o ponto: a media por dia (2 casas) e a cobertura (1 casa),
+        // as duas HALF_UP, continuam no Java abaixo, sobre os mesmos numeros. Empurrar a divisao para
+        // o SQL mudaria valor na tela do dono. O defeito era a quantidade de consultas, nao o lugar
+        // da conta -- e e por isso que existe um IT comparando esta saida, campo por campo, com a do
+        // laco antigo.
+        Map<Long, Map<Long, Integer>> vendidoPorLoja = new HashMap<>();
+        for (Object[] r : itens.somaVendidaPorProduto(ids, corte, fimExc)) {
+            vendidoPorLoja.computeIfAbsent((Long) r[0], k -> new HashMap<>())
+                    .put((Long) r[1], ((Number) r[2]).intValue());
+        }
+        Map<Long, List<Produto>> produtosPorLoja = new HashMap<>();
+        for (Produto p : produtos.findByLojaIdInOrderByLojaIdAscNomeAsc(ids)) {
+            produtosPorLoja.computeIfAbsent(p.lojaId, k -> new ArrayList<>()).add(p);
+        }
+
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Loja l : minhasLojas()) {
-            List<Pedido> vendas = pedidos.findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(l.getId(), corte).stream()
-                    .filter(p -> p.criadoEm != null && p.criadoEm.isBefore(fimExc) && p.status != StatusPedido.CANCELADO)
-                    .toList();
-            if (vendas.isEmpty()) continue;
-            Map<Long, Integer> vendidoPorProduto = new HashMap<>();
-            for (PedidoItem it : itens.findByLojaIdAndPedidoIdIn(l.getId(), vendas.stream().map(p -> p.id).toList())) {
-                if (it.getProdutoId() == null) continue;
-                vendidoPorProduto.merge(it.getProdutoId(), it.getQuantidade() == null ? 1 : it.getQuantidade(), Integer::sum);
-            }
-            for (Produto p : produtos.findByLojaIdOrderByNomeAsc(l.getId())) {
+        for (Loja l : minhas) {
+            Map<Long, Integer> vendidoPorProduto = vendidoPorLoja.get(l.getId());
+            // Equivale ao `if (vendas.isEmpty()) continue` de antes: sem venda no periodo, nenhum
+            // produto passaria do `vendido == 0` de qualquer jeito.
+            if (vendidoPorProduto == null || vendidoPorProduto.isEmpty()) continue;
+            for (Produto p : produtosPorLoja.getOrDefault(l.getId(), List.of())) {
                 if (p.estoque == null || !Boolean.TRUE.equals(p.ativo)) continue; // sem controle de estoque, sem alerta
                 int vendido = vendidoPorProduto.getOrDefault(p.id, 0);
                 if (vendido == 0) continue;
@@ -171,16 +204,31 @@ public class AgenteRedeService {
     }
 
     /** Cancelados do período com motivo e canal — é onde mora a causa que dá para atacar. */
-    private List<Map<String, Object>> cancelamentosRecentes(LocalDate inicio, LocalDate fim) {
+    List<Map<String, Object>> cancelamentosRecentes(LocalDate inicio, LocalDate fim) {
         LocalDate ini = inicio == null ? LocalDate.now(ZONE).withDayOfMonth(1) : inicio;
         LocalDate f = fim == null ? LocalDate.now(ZONE) : fim;
         OffsetDateTime corte = ini.atStartOfDay(ZONE).toOffsetDateTime();
         OffsetDateTime fimExc = f.plusDays(1).atStartOfDay(ZONE).toOffsetDateTime();
 
+        List<Loja> minhas = minhasLojas();
+        if (minhas.isEmpty()) return List.of();
+
+        // UMA consulta para a rede, no lugar de uma por loja. Vem ordenada por criadoEm desc, e o
+        // agrupamento preserva essa ordem dentro de cada loja -- a mesma do
+        // `findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc` de antes.
+        //
+        // O TETO DE 30 CONTINUA AQUI, e nao no SQL: o laco antigo enchia com os da PRIMEIRA loja
+        // antes de olhar a segunda. Um `limit 30` na consulta devolveria os 30 mais recentes da REDE,
+        // que e outro conjunto -- e numa rede com uma loja movimentada, a loja pequena desapareceria
+        // da lista.
+        Map<Long, List<Pedido>> porLoja = new HashMap<>();
+        for (Pedido p : pedidos.canceladosDasLojas(minhas.stream().map(Loja::getId).toList(), corte, fimExc)) {
+            porLoja.computeIfAbsent(p.lojaId, k -> new ArrayList<>()).add(p);
+        }
+
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Loja l : minhasLojas()) {
-            for (Pedido p : pedidos.findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(l.getId(), corte)) {
-                if (p.criadoEm == null || !p.criadoEm.isBefore(fimExc) || p.status != StatusPedido.CANCELADO) continue;
+        for (Loja l : minhas) {
+            for (Pedido p : porLoja.getOrDefault(l.getId(), List.of())) {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("pedidoId", p.id);
                 m.put("loja", l.getNome());
