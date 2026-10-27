@@ -185,7 +185,59 @@ public class MarketplacePoller {
                 i.lojaId, i.canal, i.ultimoErro);
     }
 
+    /**
+     * Quantos minutos vale retentar um aceite.
+     *
+     * <p>O aceite importa em MINUTOS: passado o prazo do canal, o pedido ja foi cancelado do lado
+     * dele e mandar "confirmo" nao traz a venda de volta -- atrapalha. Duas horas e folga larga para
+     * cobrir API fora do ar e reinicio da nossa aplicacao, e curta o bastante para nunca tocar em
+     * pedido antigo.</p>
+     */
+    private static final int ACEITE_RETENTA_ATE_MIN = 120;
+
+    /** Teto por ciclo: fila grande nao pode virar rajada de chamadas ao canal. */
+    private static final int ACEITE_RETENTA_POR_CICLO = 10;
+
+    /**
+     * Retenta o aceite dos pedidos que entraram e nao foram confirmados no canal.
+     *
+     * <h2>O defeito (achado pelo QA em 26/10/2026, remedido em 27/10)</h2>
+     * <p>O {@code reenviarAceiteSeFaltou} era chamado de <b>um unico lugar</b>: de dentro do
+     * {@code criarPedido}, ou seja, so quando chegava outro evento daquele mesmo pedido. O proprio
+     * comentario dizia "o proximo evento do mesmo pedido tenta de novo" -- e se ele nao vier, nao
+     * tenta nunca. No iFood o segundo evento (CONFIRMED) so chega <b>depois</b> que o aceite da
+     * certo, entao o caso que precisava de retentativa era exatamente o que nao recebia nenhuma.</p>
+     *
+     * <p>O resultado: pedido RECEBIDO no painel, nao aceito no canal, e o cliente do marketplace
+     * esperando uma comida que a loja acha que aceitou.</p>
+     *
+     * <p><b>Nao esta acontecendo hoje:</b> medido na producao em 27/10/2026, os 8 pedidos de
+     * marketplace sao de julho e setembro, anteriores a V48 (14/10) que criou a coluna -- os nulos
+     * sao heranca, nao pedido preso. E a armadilha, nao o estrago.</p>
+     */
+    private void retentarAceites(MarketplaceClient client, IntegracaoCanal i) {
+        if (!Boolean.TRUE.equals(i.autoAceitar)) return;
+        var desde = java.time.OffsetDateTime.now().minusMinutes(ACEITE_RETENTA_ATE_MIN);
+        var presos = pedidos.semAceiteConfirmado(i.lojaId, i.canal, desde);
+        if (presos.isEmpty()) return;
+        int feitos = 0;
+        for (var p : presos) {
+            if (feitos++ >= ACEITE_RETENTA_POR_CICLO) {
+                log.warn("[{}] loja {}: {} pedido(s) ainda sem aceite; o resto vai no proximo ciclo",
+                        i.canal, i.lojaId, presos.size() - ACEITE_RETENTA_POR_CICLO);
+                break;
+            }
+            log.warn("[{}] loja {}: pedido {} (#{}) entrou sem aceite confirmado; retentando",
+                    i.canal, i.lojaId, p.idExterno, p.id);
+            marcarAceite(client, i, p.idExterno, p);
+        }
+    }
+
     private void processar(MarketplaceClient client, IntegracaoCanal i) {
+        // ANTES do polling: um aceite preso nao depende de haver evento novo, e era justamente disso
+        // que ele dependia.
+        retentarAceites(client, i);
+
         List<Map<String, Object>> eventos = client.polling(i);
         if (eventos.isEmpty()) return;
 
@@ -235,10 +287,20 @@ public class MarketplacePoller {
         } else if (client.ehPedidoDeCancelamento(tipo)) {
             responderPedidoDeCancelamento(client, i, orderId, ev);
         } else if (tipo != null && tipo.toUpperCase().contains("CANCELLATION_REQUEST_FAILED")) {
-            // O marketplace aceitou o pedido de cancelamento (202) e depois recusou. O pedido segue ativo lá
-            // e cancelado aqui: precisa de gente olhando.
+            // O marketplace aceitou o pedido de cancelamento (202) e depois recusou. O pedido segue
+            // ativo lá e cancelado aqui.
+            //
+            // ISTO SÓ IA PARA O LOG, e era o defeito (achado pelo QA em 26/10/2026, remedido em
+            // 27/10). O comentário antigo dizia "precisa de gente olhando" -- e ninguém olha log de
+            // container. O pedido fica cancelado no painel, o cliente do marketplace continua
+            // esperando a comida, e a loja só descobre quando ele reclama.
+            //
+            // Agora vai para a coluna PRÓPRIA de recado (V61), que a tela de Integrações mostra. Não
+            // reabre o pedido aqui de propósito: quem decide se vai preparar é a loja, e reabrir
+            // sozinho um pedido que o lojista cancelou seria pior que avisar.
             log.warn("[{}] loja {}: o marketplace RECUSOU o cancelamento do pedido externo {} depois de aceitar o pedido; "
                     + "confira no portal do marketplace", i.canal, i.lojaId, orderId);
+            avisarCancelamentoRecusado(i, orderId);
         } else if (client.statusQueOcanalAvancou(tipo) != null) {
             // ITEM 5.6 DA VARREDURA: o marketplace andou com o pedido e isso nunca chegava aqui.
             // Quando a entrega e do canal, quem sabe onde o motoboy esta e ele -- e o pedido ficava
@@ -392,6 +454,23 @@ public class MarketplacePoller {
         log.warn("[{}] loja {}: pedido {} (#{}) esta sem aceite confirmado; reenviando",
                 i.canal, i.lojaId, orderId, p.id);
         marcarAceite(client, i, orderId, p);
+    }
+
+    /**
+     * O marketplace recusou um cancelamento que ele havia aceitado como PEDIDO. O lojista tem de ver.
+     *
+     * <p>Mesma coluna e mesmo caminho do aceite recusado ({@code ultimo_aviso}, V61), de proposito: e
+     * recado, nao erro de conexao. Escrever em {@code ultimo_erro} faria o {@code marcarPollingOk}
+     * apaga-lo no ciclo seguinte, que foi o defeito da v146.</p>
+     */
+    private void avisarCancelamentoRecusado(IntegracaoCanal i, String orderId) {
+        i.ultimoAvisoEm = java.time.OffsetDateTime.now();
+        i.ultimoAviso = br.com.bora.entity.LarguraDeColuna.encurtar(
+                "O " + IntegracaoService.label(i.canal) + " RECUSOU o cancelamento do pedido "
+                        + orderId + ". Ele esta cancelado aqui e ATIVO la: confira no portal do canal.",
+                br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
+                "integracao_canal.ultimo_aviso da loja " + i.lojaId);
+        repo.marcarAviso(i.id, i.lojaId, i.ultimoAviso, i.ultimoAvisoEm);
     }
 
     /** Envia o aceite e, so se o marketplace aceitar, grava a marca. */

@@ -74,6 +74,24 @@ public class OpenDeliveryWebhookController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Assinatura invalida");
         }
 
+        // A INTEGRACAO PODE ESTAR DESLIGADA NO PAINEL, e isto era o defeito (achado pelo QA em
+        // 26/10/2026, remedido em 27/10).
+        //
+        // O lojista desliga o canal em Integracoes com `PUT /api/integracoes/{canal}` e
+        // `ativo: false`; a linha FICA no banco, com o `merchantId`. O poller respeita esse `ativo`
+        // (`conectadas` filtra por ele). Este webhook nao conferia: pedido continuava entrando pela
+        // porta de tras, com o canal desligado na tela, e o lojista nao tinha como entender por que.
+        //
+        // 503 e nao 2xx, pelo mesmo motivo da loja suspensa logo abaixo: 2xx diz "aceito" por uma
+        // loja que decidiu nao receber. Com 503 a 99 reenvia e depois expira do lado dela, que e o
+        // que acontece com restaurante fechado.
+        if (!Boolean.TRUE.equals(i.ativo)) {
+            log.warn("Open Delivery webhook: a loja {} esta com o canal {} DESLIGADO em Integracoes; "
+                    + "evento recusado", i.lojaId, i.canal);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Canal desligado pela loja");
+        }
+
         // A assinatura confere, mas a LOJA pode estar suspensa, arquivada ou com o prazo vencido.
         // Aceitar o pedido aqui significa confirmar para o cliente final uma venda que ninguem vai
         // preparar: o painel da loja esta fechado. Respondemos 503 para a 99 reenviar ou expirar, em
@@ -142,8 +160,9 @@ public class OpenDeliveryWebhookController {
             return ResponseEntity.ok().build();
         }
 
-        // Ao contrario do pedido novo, aqui NAO recusamos loja suspensa: este aviso so fecha um pedido
-        // que ja entrou antes. Travar isso deixaria o pedido pendurado para sempre no painel dela.
+        // Ao contrario do pedido novo, aqui NAO recusamos loja suspensa NEM canal desligado: este
+        // aviso so fecha um pedido que ja entrou antes. Travar isso deixaria o pedido pendurado para
+        // sempre no painel dela -- e desligar o canal hoje nao pode congelar o pedido de ontem.
         switch (tipo.toUpperCase()) {
             case "PICKED_UP" -> pedidos.avancarPorMarketplace(i.lojaId, client.canal(), pedido,
                     br.com.bora.entity.StatusPedido.SAIU_PARA_ENTREGA);

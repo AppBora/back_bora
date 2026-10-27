@@ -440,6 +440,21 @@ public class PedidoService {
         repo.marcarAceiteEnviado(lojaId, pedidoId);
     }
 
+    /**
+     * Pedidos de marketplace que entraram e NAO tiveram o aceite confirmado, dentro de uma janela.
+     *
+     * <p>Base da retentativa do aceite no poller. A janela vem de quem chama, e ela e o que impede a
+     * retentativa de alcancar pedido antigo: na producao existe um RECEBIDO de 30/09/2026 com
+     * {@code aceite_enviado_em} nulo so porque a coluna nasceu depois (V48, 14/10). Mandar aceite ao
+     * iFood para um pedido de um mes atras seria pior que o defeito.</p>
+     *
+     * <p>Sem login, como todo o caminho do poller.</p>
+     */
+    public List<Pedido> semAceiteConfirmado(Long lojaId, String canalCodigo, OffsetDateTime desde) {
+        if (canalCodigo == null || desde == null) return List.of();
+        return repo.semAceiteConfirmado(lojaId, canalCodigo, desde);
+    }
+
     /** Encontra o cliente pelo telefone (ou cria) — base do CRM com pedidos de marketplace. */
     /** Pedido que veio de marketplace, pelo id que o canal deu a ele. Nao depende de login. */
     public java.util.Optional<Pedido> buscarExterno(Long lojaId, String canalCodigo, String idExterno) {

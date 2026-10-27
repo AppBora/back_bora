@@ -293,6 +293,26 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
 
     /** Grava que o marketplace aceitou o aceite automatico. So a coluna da marca, nada mais. */
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    /**
+     * Pedido do marketplace que entrou e NAO teve o aceite confirmado — com janela de tempo.
+     *
+     * <p>Serve a retentativa do aceite no {@code MarketplacePoller}. Antes, a unica retentativa
+     * acontecia quando chegava OUTRO evento do mesmo pedido; se o marketplace nao mandasse mais
+     * nenhum, o aceite recusado nunca era tentado de novo (achado pelo QA em 26/10/2026).</p>
+     *
+     * <p><b>A janela nao e detalhe.</b> Sem ela, esta consulta devolveria tambem o pedido 110 da
+     * producao — RECEBIDO desde 30/09/2026, com {@code aceite_enviado_em} nulo porque a coluna so
+     * nasceu na V48, em 14/10. Mandar um aceite ao iFood para um pedido de um mes atras e pior que o
+     * defeito que estou consertando.</p>
+     */
+    @Query("select p from Pedido p where p.lojaId = :lojaId and p.canalExterno = :canal "
+         + "and p.idExterno is not null and p.aceiteEnviadoEm is null "
+         + "and p.status = br.com.bora.entity.StatusPedido.RECEBIDO "
+         + "and p.criadoEm >= :desde order by p.criadoEm")
+    List<Pedido> semAceiteConfirmado(@Param("lojaId") Long lojaId,
+                                     @Param("canal") String canal,
+                                     @Param("desde") OffsetDateTime desde);
+
     @Query("update Pedido p set p.aceiteEnviadoEm = :agora where p.id = :id and p.lojaId = :lojaId")
     int marcarAceiteEnviado(@Param("lojaId") Long lojaId, @Param("id") Long id,
                             @Param("agora") OffsetDateTime agora);
