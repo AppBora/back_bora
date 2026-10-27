@@ -14,6 +14,47 @@ import java.util.Optional;
 public interface PedidoRepository extends JpaRepository<Pedido, Long> {
 
     /**
+     * Quantos clientes desta loja tem o ULTIMO pedido dentro de uma janela — numa consulta so.
+     *
+     * <h2>O N+1 que isto substitui (achado pelo QA em 26/10/2026)</h2>
+     * <p>O {@code IaService.gerenteResumo} carregava TODOS os clientes da loja e, para cada um,
+     * rodava {@code findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc} — uma consulta por cliente —
+     * so para contar quantos estao "sumidos". Com 1 + N consultas, o custo cresce com a base de
+     * clientes, que e justamente o que cresce numa loja que da certo.</p>
+     *
+     * <p><b>Honestidade sobre o tamanho:</b> na producao de 27/10/2026 ha 7 clientes no total, entao
+     * hoje isso custa 7 consultas e nenhum milissegundo que se note. Os 2.232 ms que a varredura
+     * citou vieram de uma carga sintetica de agente, nao de la. E armadilha de escala, nao pagina
+     * lenta — e esta aqui porque o conserto e uma consulta, nao porque o painel esteja travando.</p>
+     *
+     * <p>O {@code having} compara o MAXIMO de {@code criadoEm} por cliente, que e exatamente o que o
+     * laco fazia lendo "o primeiro por criadoEm desc". Pedido cancelado conta, como contava antes: o
+     * que se quer saber e se o cliente apareceu, e um cancelamento tambem e sinal de vida.</p>
+     */
+    // `count(x.ultimo)` e nao `count(x)`: sobre tabela DERIVADA o Hibernate exige um caminho, e
+    // `count(x)` estoura com "a derived model part does not have identifying parts". Isso so
+    // apareceu quando a consulta rodou contra um Postgres de verdade -- com duble ela nunca seria
+    // executada, e o defeito chegaria na producao.
+    @Query("select count(x.ultimo) from (select max(p.criadoEm) as ultimo from Pedido p "
+         + "where p.lojaId = :lojaId and p.clienteId is not null "
+         + "group by p.clienteId having max(p.criadoEm) < :antesDe and max(p.criadoEm) > :depoisDe) x")
+    long contaClientesComUltimoPedidoEntre(@Param("lojaId") Long lojaId,
+                                           @Param("depoisDe") OffsetDateTime depoisDe,
+                                           @Param("antesDe") OffsetDateTime antesDe);
+
+    /**
+     * A data do ultimo pedido de cada cliente da loja — numa consulta so.
+     *
+     * <p>Mesmo N+1 do {@code contaClientesComUltimoPedidoEntre}, no outro laco do Modulo IA
+     * ({@code recuperarClientes}). Devolve pares {@code [clienteId, ultimoPedido]}; quem nunca pediu
+     * nao aparece, e quem chama trata ausencia como "sem pedido", que era o {@code orElse(null)} de
+     * antes.</p>
+     */
+    @Query("select p.clienteId, max(p.criadoEm) from Pedido p "
+         + "where p.lojaId = :lojaId and p.clienteId is not null group by p.clienteId")
+    java.util.List<Object[]> ultimoPedidoPorCliente(@Param("lojaId") Long lojaId);
+
+    /**
      * Quando esta loja vendeu pela primeira vez — ou {@code null} se nunca vendeu.
      *
      * <p>Serve ao termômetro de vendas para saber quantas semanas de historico a loja realmente tem.

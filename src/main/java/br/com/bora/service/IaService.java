@@ -105,13 +105,19 @@ public class IaService {
         long usadasNoMes = recuperacoes.countByLojaIdAndEnviadoEmAfter(lojaId, inicioMes);
         long saldo = Math.max(0, MAX_MSGS_MES - usadasNoMes);
         int enviados = 0, candidatos = 0, tentativas = 0;
+        // O MESMO N+1 do gerenteResumo, no outro laco: era uma consulta por cliente so para saber a
+        // data do ultimo pedido dele. Agora vem num mapa, de uma vez. As decisoes do laco nao
+        // mudaram -- ausencia no mapa e o mesmo que o `orElse(null)` de antes.
+        java.util.Map<Long, OffsetDateTime> ultimoPedido = new java.util.HashMap<>();
+        for (Object[] linha : pedidos.ultimoPedidoPorCliente(lojaId)) {
+            ultimoPedido.put((Long) linha[0], (OffsetDateTime) linha[1]);
+        }
         for (Cliente c : clientes.findByLojaIdOrderByNomeAsc(lojaId)) {
             // Item 9.3: o teto conta TENTATIVA, nao sucesso. Com `enviados`, WhatsApp fora do ar
             // deixava o contador em zero e o laco percorria a base inteira, um timeout por cliente.
             if (tentativas >= saldo) break; // teto mensal do plano do Módulo IA atingido
             if (c.telefone == null || c.telefone.replaceAll("\\D", "").length() < 10) continue;
-            OffsetDateTime ultimo = pedidos.findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(lojaId, c.id)
-                    .map(p -> p.criadoEm).orElse(null);
+            OffsetDateTime ultimo = ultimoPedido.get(c.id);
             if (ultimo == null || ultimo.isAfter(agora.minusDays(DIAS_SUMIDO)) || ultimo.isBefore(agora.minusDays(120))) continue;
             if (recuperacoes.existsByLojaIdAndClienteIdAndEnviadoEmAfter(lojaId, c.id, agora.minusDays(30))) continue;
             candidatos++;
@@ -244,11 +250,18 @@ public class IaService {
         BigDecimal fatOntem = pedidos.somaReceita(lojaId, hoje0.minusDays(1), hoje0);
         BigDecimal fatAnte = pedidos.somaReceita(lojaId, hoje0.minusDays(2), hoje0.minusDays(1));
         long pedOntem = pedidos.contaPedidosValidos(lojaId, hoje0.minusDays(1), hoje0);
-        long sumidos = clientes.findByLojaIdOrderByNomeAsc(lojaId).stream().filter(c -> {
-            OffsetDateTime u = pedidos.findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(lojaId, c.id)
-                    .map(p -> p.criadoEm).orElse(null);
-            return u != null && u.isBefore(hoje0.minusDays(DIAS_SUMIDO)) && u.isAfter(hoje0.minusDays(120));
-        }).count();
+        // UMA CONSULTA, e nao uma por cliente (achado pelo QA em 26/10/2026).
+        //
+        // Isto carregava TODOS os clientes da loja e, para cada um, buscava o ultimo pedido dele --
+        // 1 + N consultas para produzir um unico numero. O `having max(criadoEm)` faz exatamente a
+        // mesma conta que o laco fazia: "o primeiro por criadoEm desc" e o maximo.
+        //
+        // Sobre o tamanho, para nao inflar o motivo: na producao de 27/10/2026 existem 7 clientes no
+        // total, entao hoje isso eram 7 consultas e nenhum milissegundo que se note. O conserto esta
+        // aqui porque custa uma consulta, e porque a base de clientes e justamente o que cresce numa
+        // loja que da certo.
+        long sumidos = pedidos.contaClientesComUltimoPedidoEntre(
+                lojaId, hoje0.minusDays(120), hoje0.minusDays(DIAS_SUMIDO));
         String var = fatAnte.compareTo(BigDecimal.ZERO) > 0
                 ? String.format("%+.0f%%", fatOntem.subtract(fatAnte).multiply(BigDecimal.valueOf(100))
                         .divide(fatAnte, 0, java.math.RoundingMode.HALF_UP).doubleValue())
