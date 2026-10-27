@@ -119,6 +119,23 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     Optional<Pedido> findFirstByLojaIdAndClienteIdOrderByCriadoEmDesc(Long lojaId, Long clienteId);
     List<Pedido> findByLojaIdAndClienteIdAndCriadoEmAfter(Long lojaId, Long clienteId, OffsetDateTime corte);
     long countByLojaIdAndStatus(Long lojaId, StatusPedido status);
+
+    /**
+     * Pedido num destes status e criado ANTES de uma data — o pedido esquecido.
+     *
+     * <p>Serve ao resumo do Dashboard. Os contadores de "Em preparo" e "Saiu para entrega" eram
+     * {@code count} por status <b>sem janela nenhuma</b>: contavam desde que a loja abriu. Pedido que
+     * o lojista esqueceu de avancar fica somando no bloco de operacao para sempre, e o numero que
+     * deveria dizer "o que esta na cozinha agora" diz outra coisa (achado pelo QA em 26/10/2026).</p>
+     *
+     * <p><b>Medido na producao em 27/10/2026, somente leitura:</b> os QUATRO pedidos abertos do
+     * sistema sao de dias anteriores, e um deles esta em SAIU_PARA_ENTREGA desde 19/09 — 38 dias.</p>
+     */
+    long countByLojaIdAndStatusInAndCriadoEmBefore(Long lojaId,
+                                                   java.util.Collection<StatusPedido> status,
+                                                   OffsetDateTime antes);
+
+    long countByLojaIdAndStatusAndCriadoEmBefore(Long lojaId, StatusPedido status, OffsetDateTime antes);
     long countByLojaIdAndEntregueEmAfter(Long lojaId, OffsetDateTime dt);
     List<Pedido> findByLojaIdOrderByCriadoEmDesc(Long lojaId);
 

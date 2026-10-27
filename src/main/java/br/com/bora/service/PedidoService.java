@@ -903,12 +903,43 @@ public class PedidoService {
         return logs.findByLojaIdAndPedidoIdOrderByDataHoraAsc(ctx.lojaId(), pedidoId);
     }
 
+    /**
+     * O bloco de operacao do Dashboard: o que esta acontecendo agora.
+     *
+     * <h2>O contador contava desde a abertura da loja (achado pelo QA em 26/10/2026)</h2>
+     * <p>{@code emPreparo} e {@code saiuParaEntrega} eram {@code count} por status <b>sem janela
+     * nenhuma</b>. Pedido que o lojista esqueceu de avancar soma no bloco de operacao para sempre: o
+     * numero que deveria dizer "o que esta na cozinha agora" passa a dizer "o que ja passou pela
+     * cozinha e ninguem fechou".</p>
+     *
+     * <p><b>Medido na producao em 27/10/2026, somente leitura:</b> os QUATRO pedidos abertos do
+     * sistema inteiro sao de dias anteriores — a loja 1 tem um em SAIU_PARA_ENTREGA desde
+     * <b>19/09</b>, 38 dias. O painel dela diz "Saiu para entrega: 1" todo dia por causa dele.</p>
+     *
+     * <h2>Por que nao filtrar o antigo fora</h2>
+     * <p>Porque ele esta aberto de verdade e precisa de acao: esconder trocaria um numero inflado por
+     * um numero que mente para baixo, e o pedido esquecido deixaria de ter qualquer lugar onde
+     * aparecer. O contador continua contando tudo, e vem ao lado dele <b>quantos sao de dias
+     * anteriores</b> — a tela separa as duas coisas. E a mesma escolha do {@code itensSemCusto} no
+     * relatorio: o numero sai, e para de parecer o que nao e.</p>
+     */
     public Map<String, Object> resumo() {
         Long lojaId = ctx.lojaId();
+        java.time.ZoneId zona = java.time.ZoneId.of("America/Sao_Paulo");
+        OffsetDateTime inicioDeHoje = java.time.LocalDate.now(zona).atStartOfDay(zona).toOffsetDateTime();
+
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("emPreparo", repo.countByLojaIdAndStatus(lojaId, StatusPedido.EM_PREPARO));
+        m.put("emPreparoDeOutrosDias",
+                repo.countByLojaIdAndStatusAndCriadoEmBefore(lojaId, StatusPedido.EM_PREPARO, inicioDeHoje));
         m.put("saiuParaEntrega", repo.countByLojaIdAndStatus(lojaId, StatusPedido.SAIU_PARA_ENTREGA));
+        m.put("saiuParaEntregaDeOutrosDias", repo.countByLojaIdAndStatusAndCriadoEmBefore(
+                lojaId, StatusPedido.SAIU_PARA_ENTREGA, inicioDeHoje));
         m.put("entreguesUltimaHora", repo.countByLojaIdAndEntregueEmAfter(lojaId, OffsetDateTime.now().minusHours(1)));
+        // Todos os abertos de dias anteriores, inclusive RECEBIDO, CONFIRMADO e PRONTO -- que nao tem
+        // mosaico proprio e por isso ficariam sem nenhum lugar onde aparecer.
+        m.put("abertosDeOutrosDias",
+                repo.countByLojaIdAndStatusInAndCriadoEmBefore(lojaId, ABERTOS, inicioDeHoje));
         return m;
     }
 
