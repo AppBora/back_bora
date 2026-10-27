@@ -365,12 +365,31 @@ public class PublicController {
      * formaPagamento "PIX" cria a cobrança na conta Asaas do lojista e devolve o QR Code.
      */
     @PostMapping("/loja/{lojaId}/pedido")
-    // TRANSACAO, e nao e detalhe: este metodo grava o pedido, depois os itens num laco, e o laco pode
-    // recusar no meio ("Produto indisponivel", "Quantidade invalida" e agora "acabou o estoque"). Sem
-    // transacao, a recusa no terceiro item deixava o pedido gravado, os dois primeiros itens gravados,
-    // e o estoque dos dois ja baixado -- lixo no painel e estoque errado por um pedido que o cliente
-    // nunca recebeu. Com transacao, recusar nao deixa rastro.
-    @Transactional
+    // SEM @Transactional NO METODO, e isto e o conserto (achado pelo QA em 26/10/2026).
+    //
+    // A transacao que importa continua existindo: ela e o `tx.execute` do Passo 1, que envolve o
+    // pedido e o laco de itens. O laco pode recusar no meio ("Produto indisponivel", "Quantidade
+    // invalida", "acabou o estoque"), e sem transacao a recusa no terceiro item deixava o pedido
+    // gravado, os dois primeiros itens gravados e o estoque dos dois ja baixado -- lixo no painel e
+    // estoque errado por um pedido que o cliente nunca recebeu. Isso segue coberto.
+    //
+    // O QUE A ANOTACAO FAZIA DE ERRADO
+    // `@Transactional` aqui abre uma transacao para o metodo INTEIRO, e o TransactionTemplate tem
+    // propagacao REQUIRED: os tres passos ENTRAVAM nela em vez de serem curtos. O Passo 2 diz, no
+    // proprio comentario, que "o Asaas fica FORA da transacao, a conexao do banco ja voltou para o
+    // pool" -- e a anotacao desmentia o comentario. A chamada HTTP para o Asaas rodava com uma
+    // conexao do banco na mao.
+    //
+    // Por que isso derruba a loja toda, e nao so um pedido: o pool de conexoes e compartilhado por
+    // todo mundo. Asaas lento com varios clientes no cardapio ao mesmo tempo prende uma conexao por
+    // checkout, e quando o pool acaba param tambem o painel, o KDS e os outros marketplaces -- por
+    // causa de um servico de fora. O pedido que falha e aceitavel; a API inteira parar nao e.
+    //
+    // E a compensacao passa a ser necessaria de verdade: antes, o `desfazerPedidoSemPix` gravava o
+    // cancelamento e logo em seguida o ResponseStatusException desfazia esse mesmo cancelamento no
+    // rollback do metodo. O resultado final era certo por acidente (o pedido todo era desfeito), mas
+    // o codigo escrito para compensar nao compensava nada. Agora o Passo 1 commitou de verdade, e
+    // cancelar e devolver o cashback e o que precisa acontecer.
     public Map<String, Object> pedirOnline(@PathVariable Long lojaId, @RequestBody Map<String, Object> body,
                                            jakarta.servlet.http.HttpServletRequest http) {
         // Teto por origem, ANTES de qualquer efeito: este endpoint e publico e cada chamada cria
