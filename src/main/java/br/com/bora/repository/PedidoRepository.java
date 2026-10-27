@@ -13,6 +13,19 @@ import java.util.Optional;
 
 public interface PedidoRepository extends JpaRepository<Pedido, Long> {
 
+    /**
+     * Quando esta loja vendeu pela primeira vez — ou {@code null} se nunca vendeu.
+     *
+     * <p>Serve ao termômetro de vendas para saber quantas semanas de historico a loja realmente tem.
+     * Semana anterior ao primeiro pedido nao e "semana sem venda": e semana em que a loja nao
+     * existia, e dividir por ela deixava a base pela metade (achado pelo QA em 26/10/2026).</p>
+     *
+     * <p>Conta o pedido CANCELADO de proposito: o que se quer saber e desde quando a loja opera, e
+     * um cancelamento tambem prova que ela estava de pe.</p>
+     */
+    @Query("select min(p.criadoEm) from Pedido p where p.lojaId = :lojaId")
+    OffsetDateTime primeiroPedidoEm(@Param("lojaId") Long lojaId);
+
     /** Receita (não cancelada) da loja numa janela — base do termômetro de vendas. */
     // PIX gerado e nao pago nao e faturamento: entrava na conta do dia e ficava la para sempre,
     // porque nada expirava o pedido abandonado no checkout.

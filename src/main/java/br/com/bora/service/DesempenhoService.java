@@ -114,8 +114,16 @@ public class DesempenhoService {
         BigDecimal faturamento = zero(pedidos.somaReceita(l.id, ini, fim));
         long qtd = pedidos.contaPedidosValidos(l.id, ini, fim);
 
+        // A MESMA REGRA DA RECEITA, e isto era o defeito (achado pelo QA em 26/10/2026).
+        //
+        // O `somaReceita` e o `contaPedidosValidos` excluem o PIX gerado e nao pago -- checkout
+        // abandonado nao e venda. Esta lista excluia so o CANCELADO, e dela saem o CMV e a taxa de
+        // entrega. Resultado: o pedido abandonado no checkout entrava como CUSTO sem entrar como
+        // receita, e o lucro da loja saia MENOR do que e. Com o PIX expirando sozinho em 30 minutos,
+        // todo checkout abandonado cobrava um pedaco do lucro de uma venda que nunca existiu.
         List<Pedido> vendas = pedidos.findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(l.id, ini).stream()
                 .filter(p -> p.criadoEm != null && p.criadoEm.isBefore(fim) && p.status != StatusPedido.CANCELADO)
+                .filter(p -> !p.pagamentoPendente())
                 .toList();
 
         BigDecimal entrega = vendas.stream().map(p -> zero(p.taxaEntrega)).reduce(BigDecimal.ZERO, BigDecimal::add);

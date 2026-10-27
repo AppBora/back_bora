@@ -12,6 +12,18 @@ import java.util.Map;
 /**
  * Termômetro de vendas: compara a receita das últimas 24h com a média das
  * mesmas janelas (mesmo dia da semana) nas últimas 4 semanas.
+ *
+ * <h2>A média é das semanas que EXISTIRAM (achado pelo QA em 26/10/2026)</h2>
+ * <p>A soma das janelas era dividida por 4 sempre, mesmo quando a loja só tinha 2 semanas de vida. A
+ * base saía pela <b>metade</b>, o índice (hoje ÷ base) saía pelo <b>dobro</b>, e o termômetro dizia
+ * "vendas saudáveis" para uma loja em queda de verdade. Loja nova é exatamente a que mais precisa do
+ * aviso.</p>
+ *
+ * <p>O divisor passou a ser o número de semanas que <b>já existiam</b> — contadas do primeiro pedido
+ * da loja, não das que tiveram venda. A diferença importa nos dois sentidos: dividir pelas que
+ * tiveram venda inflaria a base de quem legitimamente vendeu zero numa quarta-feira, o índice sairia
+ * baixo, e o sistema abriria sozinho uma promoção relâmpago de 15% — desconto de verdade, em cima de
+ * um número errado.</p>
  */
 @Service
 public class VendasSaudeService {
@@ -32,11 +44,18 @@ public class VendasSaudeService {
         OffsetDateTime inicio = fim.minusHours(24);
         BigDecimal atual = pedidos.somaReceita(lojaId, inicio, fim);
 
+        // Quando a loja comecou a vender. Semana anterior a isso nao e "semana sem venda": e semana
+        // em que a loja nao existia, e nao pode entrar no divisor.
+        OffsetDateTime primeiroPedido = pedidos.primeiroPedidoEm(lojaId);
+
         BigDecimal somaBase = BigDecimal.ZERO;
         int semanasComDados = 0;
+        int semanasQueExistiram = 0;
         for (int s = 1; s <= SEMANAS_BASE; s++) {
             OffsetDateTime f = fim.minusDays(7L * s);
             OffsetDateTime i = f.minusHours(24);
+            if (primeiroPedido == null || primeiroPedido.isAfter(f)) continue;
+            semanasQueExistiram++;
             BigDecimal r = pedidos.somaReceita(lojaId, i, f);
             somaBase = somaBase.add(r);
             if (r.compareTo(BigDecimal.ZERO) > 0) semanasComDados++;
@@ -44,7 +63,9 @@ public class VendasSaudeService {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("atual", atual);
-        boolean temDados = semanasComDados >= MIN_SEMANAS_COM_DADOS;
+        // O `semanasQueExistiram == 0` ja estaria coberto pelo `semanasComDados`, que nunca e maior
+        // que ele -- mas escrito, porque e ele que vira divisor logo abaixo.
+        boolean temDados = semanasComDados >= MIN_SEMANAS_COM_DADOS && semanasQueExistiram > 0;
 
         if (!temDados) {
             out.put("faixa", "SEM_DADOS");
@@ -54,7 +75,9 @@ public class VendasSaudeService {
             return out;
         }
 
-        BigDecimal baseline = somaBase.divide(BigDecimal.valueOf(SEMANAS_BASE), 2, RoundingMode.HALF_UP);
+        // Divide pelas semanas que existiram, nao por 4 fixo.
+        BigDecimal baseline = somaBase.divide(BigDecimal.valueOf(semanasQueExistiram), 2, RoundingMode.HALF_UP);
+        out.put("semanasNaBase", semanasQueExistiram);
         out.put("baseline", baseline);
 
         double indice = baseline.compareTo(BigDecimal.ZERO) > 0
