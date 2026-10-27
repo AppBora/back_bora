@@ -1,0 +1,29 @@
+-- O valor da config da plataforma deixa de ter teto, como TODA coluna cifrada deste sistema.
+--
+-- O DEFEITO (achado pelo QA em 26/10/2026, remedido em 27/10)
+-- `config_plataforma.valor` era `varchar(255)`. Ela guarda o `client_secret` do iFood e da 99 DA
+-- PLATAFORMA -- as credenciais que autorizam pedidos em nome de todas as lojas -- e passa pelo
+-- cifrador `SegredoGuardado`, que grava `enc:v1:` + base64(nonce 12B || cifra || tag 16B).
+--
+-- O cifrado CRESCE. A conta, para um texto puro de L caracteres ASCII:
+--     7 + ceil((L + 28) / 3) * 4
+-- Entao em `varchar(255)` o maior texto puro que ainda cabe cifrado e de **158 caracteres**. Acima
+-- disso o INSERT e recusado pelo Postgres e a cifragem falha.
+--
+-- O QUE EU MEDI, E O QUE EU CORRIGI NO QUE EU TINHA DITO
+-- Na producao, em 27/10/2026 (somente leitura), os cinco valores desta tabela tem 5, 13, 19, 36 e
+-- 99 caracteres. O maior -- o client-secret do iFood, 99 -- cifra para 179 e CABE. Ou seja: ligar o
+-- `BORA_SEGREDO_COLUNAS` hoje **nao falharia**. Eu havia repassado ao dono que isso bloqueava a
+-- tarefa de cifragem dele, e era alarme mais forte que o fato. A armadilha e real e nao esta armada:
+-- 99 de teto 158 e dois tercos do caminho, e o proximo token de provedor derruba.
+--
+-- POR QUE `text`, E NAO UM NUMERO MAIOR
+-- Porque e a regra que este sistema ja segue, e eu conferi todas: `integracao_canal.client_secret`,
+-- `integracao_canal.webhook_token`, `integracao_canal.access_token`,
+-- `integracao_canal.refresh_token` e `loja.asaas_api_key` -- as cinco outras colunas que passam pelo
+-- `SegredoGuardado` -- sao `text`. Esta era a unica com limite, e por isso a unica que podia falhar.
+-- Escolher 1024 ou 2048 seria trocar um teto que estoura por um teto que estoura mais tarde.
+--
+-- Em Postgres, tirar o limite de um varchar e mudanca de catalogo: NAO reescreve a tabela e nao
+-- trava escrita. Conferido no banco de teste comparando o `relfilenode` antes e depois.
+ALTER TABLE config_plataforma ALTER COLUMN valor TYPE text;
