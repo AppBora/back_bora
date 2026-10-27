@@ -20,6 +20,12 @@ public class InsumoService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(InsumoService.class);
 
+    /**
+     * Mesmo logger do aviso de estoque negativo de produto ({@code PedidoService}), de proposito: o
+     * dono procura "AUDITORIA" e tem de achar os dois.
+     */
+    private static final org.slf4j.Logger AUDITORIA = org.slf4j.LoggerFactory.getLogger("AUDITORIA");
+
     private final InsumoRepository insumos;
     private final ProdutoInsumoRepository fichas;
     private final ProdutoRepository produtos;
@@ -325,7 +331,10 @@ public class InsumoService {
                 // como alerta de contagem errada, que e o que o lojista precisa saber -- e sem ele o
                 // numero ia a negativo calado, que foi o defeito do balcao no item 2.2.
                 if (in.estoque != null && in.estoque.compareTo(precisa) < 0) {
-                    log.warn("Loja {}: a venda levou {} de \"{}\" pelo adicional \"{}\", e o saldo "
+                    // AUDITORIA, nao `log`: os tres avisos de saldo negativo (produto, ficha e
+                    // adicional) tem de aparecer na MESMA busca. Com loggers diferentes, procurar
+                    // "AUDITORIA" achava um e perdia dois.
+                    AUDITORIA.warn("Loja {}: a venda levou {} de \"{}\" pelo adicional \"{}\", e o saldo "
                                     + "era {}. O estoque vai ficar NEGATIVO -- a contagem desse insumo "
                                     + "esta errada. A venda passou de proposito.",
                             lojaId, precisa, in.nome, e.nome(), in.estoque);
@@ -434,6 +443,7 @@ public class InsumoService {
             if (exigirEstoque) {
                 if (insumos.consumirSeTiver(in.id, lojaId, precisa) == 0) throw new SemInsumo(in.nome);
             } else {
+                avisarSeOINSUMOvaiFicarNegativo(lojaId, in, precisa);
                 insumos.mexerNoEstoque(in.id, lojaId, precisa.negate());
             }
         }
@@ -474,6 +484,41 @@ public class InsumoService {
             return null;
         }
         return custoUnit;
+    }
+
+    /**
+     * O saldo deste insumo vai ficar negativo nesta venda? Entao fica escrito (achado pelo QA em
+     * 26/10/2026).
+     *
+     * <h2>O que faltava</h2>
+     * <p>O produto ja avisava — {@code PedidoService.avisarSeVaiFicarNegativo}. O insumo nao: o
+     * {@code mexerNoEstoque} soma o delta sem piso nenhum e <b>o saldo ia a negativo calado</b>. E o
+     * insumo e justamente o que o lojista NAO confere olhando a prateleira: ele se mede em quilos,
+     * dentro de um pote, e so aparece na contagem do mes.</p>
+     *
+     * <p><b>Medido na producao em 26/10/2026:</b> existe hoje 1 insumo com saldo negativo, e nada
+     * avisou.</p>
+     *
+     * <h2>Avisar, nao recusar</h2>
+     * <p>Este caminho e o do balcao e do marketplace: o operador esta com o copo na mao, ou o pedido
+     * ja foi aceito do outro lado. Travar a venda com o cliente na frente e pior que o saldo
+     * negativo, que pelo menos denuncia que a contagem esta errada — e essa escolha ja esta
+     * documentada em {@link #consumirFicha(Long, Long, int, boolean)}. O que nao serve e ela ser
+     * silenciosa.</p>
+     *
+     * <p>O saldo lido aqui e o de ANTES da baixa, e e so para o aviso: a conta de verdade e do banco.
+     * Entre a leitura e a baixa alguem pode vender, entao o numero pode estar um ou dois fora. Nao
+     * decida nada com ele.</p>
+     *
+     * <p>Insumo que nao controla estoque (saldo nulo) nao gera aviso: foi o lojista que escolheu nao
+     * controlar.</p>
+     */
+    private void avisarSeOINSUMOvaiFicarNegativo(Long lojaId, Insumo in, BigDecimal precisa) {
+        if (in.estoque == null || in.estoque.compareTo(precisa) >= 0) return;
+        AUDITORIA.warn("Loja {}: venda consumiu {} {} de \"{}\" com apenas {} em estoque -- o saldo "
+                        + "vai ficar negativo. A venda PASSOU de proposito (quem vendeu esta com o "
+                        + "produto na mao); confira a contagem em Insumos.",
+                lojaId, precisa, in.unidade == null ? "un" : in.unidade, in.nome, in.estoque);
     }
 
     /**
