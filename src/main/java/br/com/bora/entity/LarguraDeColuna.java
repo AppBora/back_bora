@@ -108,4 +108,28 @@ public final class LarguraDeColuna {
      * acontecido — o pior lugar possivel para um estouro.</p>
      */
     public static final int INTEGRACAO_ULTIMO_ERRO = 500;
+
+    /**
+     * Numero da nota fiscal da mensalidade — e por que aqui NAO se corta.
+     *
+     * <p>Achado pelo QA em 26/10/2026: o {@code PUT /plataforma/faturamento/{id}/nota} gravava
+     * {@code nota_numero} (40) e {@code nota_url} (300) direto do corpo da requisicao, so com
+     * {@code trim()}. Como o metodo e {@code @Transactional}, texto longo nao truncava: o Postgres
+     * recusava e o registro INTEIRO do pagamento era desfeito, com 500 na cara de quem registrou. E
+     * o mesmo defeito do item 4.4 da varredura, no mesmo lugar.</p>
+     *
+     * <p><b>A diferenca: estas duas constantes nao servem para {@code encurtar}, e sim para
+     * RECUSAR.</b> O {@code encurtar} e certo para texto descritivo — recado de integracao, descricao
+     * de pagamento —, onde perder o fim e melhor que perder tudo. Numero de nota e IDENTIFICADOR e
+     * url e LINK: numero cortado aponta para nota que nao existe, e link cortado nao abre. Nos dois
+     * casos o corte silencioso entrega um dado que parece bom e nao e, dentro do fechamento do mes.
+     * Entao o endpoint devolve 400 dizendo o limite, e quem digitou conserta.</p>
+     *
+     * <p>Numero de NFS-e de prefeitura nao chega perto de 40 caracteres: quem passar disso colou
+     * outra coisa no campo, e e exatamente isso que o 400 vai dizer.</p>
+     */
+    public static final int PAGAMENTO_NOTA_NUMERO = 40;
+
+    /** Ver {@link #PAGAMENTO_NOTA_NUMERO}: tambem recusa, nao corta. */
+    public static final int PAGAMENTO_NOTA_URL = 300;
 }

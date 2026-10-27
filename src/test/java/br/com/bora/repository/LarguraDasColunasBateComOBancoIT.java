@@ -73,6 +73,12 @@ class LarguraDasColunasBateComOBancoIT {
         // falha, escrito de dentro do tratamento de erro.
         m.put("pagamento_assinatura.descricao", LarguraDeColuna.PAGAMENTO_DESCRICAO);
         m.put("integracao_canal.ultimo_erro", LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO);
+        // 27/10/2026: as duas colunas da nota da mensalidade. Elas nao sao cortadas e sim RECUSADAS
+        // (numero de nota e identificador, url e link), mas a constante tem de bater com o banco do
+        // mesmo jeito: um limite errado no codigo recusaria o que cabe, ou deixaria passar o que nao
+        // cabe e voltaria a desfazer o registro do pagamento.
+        m.put("pagamento_assinatura.nota_numero", LarguraDeColuna.PAGAMENTO_NOTA_NUMERO);
+        m.put("pagamento_assinatura.nota_url", LarguraDeColuna.PAGAMENTO_NOTA_URL);
         return m;
     }
 

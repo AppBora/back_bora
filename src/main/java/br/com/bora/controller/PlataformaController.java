@@ -1080,8 +1080,32 @@ public class PlataformaController {
         if (numero == null || numero.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o numero da nota");
         }
-        p.notaNumero = numero.trim();
-        p.notaUrl = body.get("url") == null || body.get("url").isBlank() ? null : body.get("url").trim();
+        // RECUSA, e nao corta (achado pelo QA em 26/10/2026). As duas colunas tem limite -- 40 e 300
+        // -- e isto ia direto do corpo da requisicao para elas, so com trim(). Como o metodo e
+        // @Transactional, texto longo nao truncava: o Postgres recusava e o registro INTEIRO do
+        // pagamento era desfeito, com 500 na cara de quem registrou.
+        //
+        // Por que recusar em vez de usar o `encurtar`, que e o padrao da casa para texto longo:
+        // numero de nota e IDENTIFICADOR e url e LINK. Numero cortado aponta para nota que nao
+        // existe; link cortado nao abre. O corte silencioso entregaria um dado que parece bom e nao
+        // e, dentro do fechamento do mes -- pior que o erro.
+        String nota = numero.trim();
+        if (nota.length() > br.com.bora.entity.LarguraDeColuna.PAGAMENTO_NOTA_NUMERO) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "O numero da nota tem " + nota.length() + " caracteres e o limite e "
+                            + br.com.bora.entity.LarguraDeColuna.PAGAMENTO_NOTA_NUMERO
+                            + ". Confira se nao colou o link ou o XML no lugar do numero.");
+        }
+        String url = body.get("url") == null || body.get("url").isBlank() ? null : body.get("url").trim();
+        if (url != null && url.length() > br.com.bora.entity.LarguraDeColuna.PAGAMENTO_NOTA_URL) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "O link da nota tem " + url.length() + " caracteres e o limite e "
+                            + br.com.bora.entity.LarguraDeColuna.PAGAMENTO_NOTA_URL
+                            + ". Um link cortado nao abre, entao eu prefiro nao gravar: use um "
+                            + "encurtador ou guarde o PDF.");
+        }
+        p.notaNumero = nota;
+        p.notaUrl = url;
         p.notaEmitidaEm = java.time.OffsetDateTime.now();
         pagamentos.save(p);
         return Map.of("id", p.id, "notaNumero", p.notaNumero, "notaEmitidaEm", p.notaEmitidaEm);
