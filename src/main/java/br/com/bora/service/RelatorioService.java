@@ -59,7 +59,19 @@ public class RelatorioService {
         ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
         Long lojaId = lojaDoRelatorio(lojaPedida);
         int janela = dias <= 0 ? 30 : Math.min(dias, 365);
-        OffsetDateTime corte = OffsetDateTime.now().minusDays(janela);
+        // A JANELA E DE DIAS INTEIROS, no fuso da loja -- e isto era metade do defeito do grafico
+        // (achado pelo QA em 26/10/2026).
+        //
+        // Era `now().minusDays(janela)`, um corte no INSTANTE: as 14h de hoje, a janela de 30 dias
+        // comecava as 14h de 30 dias atras. O grafico, por outro lado, monta as barras por DATA do
+        // calendario de Sao Paulo. As vendas entre o corte e a meia-noite seguinte entravam no
+        // faturamento do cabecalho e nao tinham barra nenhuma para cair: a soma das barras dava
+        // menos que o numero grande, e o lojista nao tinha como saber de onde vinha a diferenca.
+        //
+        // "Ultimos 30 dias" para quem le a tela sao 30 dias do calendario, nao 30 vezes 24 horas.
+        LocalDate hoje = LocalDate.now(ZONE);
+        LocalDate primeiroDia = hoje.minusDays(janela - 1L);
+        OffsetDateTime corte = primeiroDia.atStartOfDay(ZONE).toOffsetDateTime();
 
         List<Pedido> todos = pedidos.findByLojaIdAndCriadoEmAfterOrderByCriadoEmDesc(lojaId, corte);
         // Venda e o que foi vendido de verdade: pedido com PIX gerado e nao pago inflava o
@@ -99,14 +111,25 @@ public class RelatorioService {
                 .filter(p -> Boolean.TRUE.equals(p.entregaPeloCanal))
                 .map(p -> p.taxaEntrega));
 
-        // por dia (faturamento) — série dos últimos `janela` dias
+        // POR DIA: uma barra para CADA dia da janela, e era a outra metade do defeito.
+        //
+        // A serie era cortada em 30 dias (`min(janela, 30)`) enquanto o faturamento somava a janela
+        // inteira. A tela oferece o botao de 90 dias: o cabecalho dizia "ultimos 90 dias" e o
+        // grafico mostrava, calado, so os ultimos 30. Dois numeros da mesma tela que nao fechavam.
+        //
+        // Agora a soma das barras e, por construcao, igual ao faturamento. Quem agrupa para caber na
+        // tela e o grafico (por semana, quando sao muitos dias) -- decisao de desenho, feita com
+        // todos os dados na mao, e nao um pedaco do periodo jogado fora aqui.
         Map<String, BigDecimal> porDia = new LinkedHashMap<>();
-        LocalDate hoje = LocalDate.now(ZONE);
-        int serie = Math.min(janela, 30);
-        for (int i = serie - 1; i >= 0; i--) porDia.put(hoje.minusDays(i).toString(), BigDecimal.ZERO);
+        for (int i = janela - 1; i >= 0; i--) porDia.put(hoje.minusDays(i).toString(), BigDecimal.ZERO);
+        BigDecimal somaDasBarras = BigDecimal.ZERO;
         for (Pedido p : vendas) {
             String d = p.criadoEm.atZoneSameInstant(ZONE).toLocalDate().toString();
-            if (porDia.containsKey(d)) porDia.merge(d, p.valorTotal == null ? BigDecimal.ZERO : p.valorTotal, BigDecimal::add);
+            BigDecimal v = p.valorTotal == null ? BigDecimal.ZERO : p.valorTotal;
+            if (porDia.containsKey(d)) {
+                porDia.merge(d, v, BigDecimal::add);
+                somaDasBarras = somaDasBarras.add(v);
+            }
         }
 
         // por canal
@@ -122,8 +145,17 @@ public class RelatorioService {
         Map<String, Map<String, Object>> porProduto = new LinkedHashMap<>();
         List<PedidoItem> itensVenda = idsVenda.isEmpty() ? List.of()
                 : itens.findByLojaIdAndPedidoIdIn(lojaId, idsVenda);
+        int itensSemCusto = 0;
         for (PedidoItem it : itensVenda) {
             int q = it.getQuantidade() == null ? 1 : it.getQuantidade();
+            // Custo nulo e "nao cadastrado", nao "de graca" -- e aqui ele entra como ZERO, porque nao
+            // ha nada melhor a fazer com ele. O que faltava era CONTAR, para a tela poder dizer que o
+            // CMV sai menor do que e e a margem maior (achado pelo QA em 26/10/2026).
+            //
+            // MEDIDO NA PRODUCAO em 26/10/2026, somente leitura: 26 dos 48 itens de pedido estao sem
+            // custo unitario. A margem que o lojista le hoje esta maior do que a real, e nada na tela
+            // diz isso.
+            if (it.getCustoUnitario() == null) itensSemCusto++;
             BigDecimal custo = it.getCustoUnitario() == null ? BigDecimal.ZERO : it.getCustoUnitario().multiply(BigDecimal.valueOf(q));
             cmv = cmv.add(custo);
             var m = porProduto.computeIfAbsent(it.getDescricao() == null ? "—" : it.getDescricao(), x -> novo());
@@ -158,7 +190,20 @@ public class RelatorioService {
         out.put("cmv", cmv);
         out.put("margem", margem);
         out.put("margemPct", margemPct);
+        // Quantos itens vendidos no periodo nao tem custo cadastrado. Com qualquer um deles, o CMV
+        // sai MENOR do que e e a margem MAIOR -- a tela avisa, igual ao `custosIncompletos` do
+        // Desempenho, que ja faz isso para imposto e custo fixo.
+        out.put("itensSemCusto", itensSemCusto);
+        out.put("itensVendidos", itensVenda.size());
+        out.put("custosIncompletos", itensSemCusto > 0);
         out.put("porDia", porDia);
+        // O periodo exato, em datas: a tela dizia so "ultimos N dias", e N dias contados de quando
+        // era justamente a duvida de quem comparava os dois numeros.
+        out.put("de", primeiroDia.toString());
+        out.put("ate", hoje.toString());
+        // A soma das barras. Igual ao faturamento por construcao -- esta aqui para a tela poder
+        // conferir em vez de confiar, e para o teste nao depender de eu somar certo.
+        out.put("porDiaSoma", somaDasBarras);
         out.put("porCanal", porCanal);
         out.put("porProduto", porProduto);
         out.put("porEntregador", porEntregador);
