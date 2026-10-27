@@ -249,7 +249,7 @@ public class PedidoService {
             // nele. Mas so quando ha custo de adicional: `custoUnitario` nulo quer dizer "custo nao
             // cadastrado", e nao "de graca". Transformar nulo em zero aqui mudaria o significado de
             // todo item de produto sem custo cadastrado, que nao tem nada a ver com adicional.
-            BigDecimal custoBase = custoFicha != null ? custoFicha : prod.custo;
+            BigDecimal custoBase = custoDaFichaOuDoProduto(custoFicha, prod.custo);
             it.setCustoUnitario(somarCustoDoAdicional(custoBase, custoAdicional));
             it.setConsumiuFicha(custoFicha != null); // ver PedidoItem.consumiuFicha: a devolucao le isto
             it.setSubtotal(subtotal);
@@ -388,7 +388,7 @@ public class PedidoService {
                 // Mesma regra do balcao e do cardapio: com ficha tecnica consome os insumos e usa o
                 // custo da ficha; sem ficha, baixa o proprio produto e usa o custo dele.
                 BigDecimal custoFicha = insumos.consumirFicha(lojaId, prod.id, qtd);
-                pi.setCustoUnitario(custoFicha != null ? custoFicha : prod.custo);
+                pi.setCustoUnitario(custoDaFichaOuDoProduto(custoFicha, prod.custo));
                 pi.setConsumiuFicha(custoFicha != null);   // o cancelamento le isto para devolver certo
                 if (custoFicha == null) {
                     // Nunca recusa: o pedido ja foi aceito no iFood e o cliente vai receber a comida.
@@ -936,6 +936,32 @@ public class PedidoService {
      * ha um numero de verdade para somar, e a base desconhecida entra como zero porque e o melhor
      * que existe -- e o custo do adicional e informacao real que nao pode ser jogada fora.</p>
      */
+    /**
+     * Qual custo vale para o item: o da ficha tecnica ou o do proprio produto.
+     *
+     * <h2>Por que isto nao e so um {@code != null} (achado pelo QA em 26/10/2026)</h2>
+     * <p>Os tres canais faziam {@code custoFicha != null ? custoFicha : prod.custo}. O
+     * {@code consumirFicha} comeca a soma em {@code ZERO} e trata insumo sem custo como zero, entao
+     * uma ficha cujos insumos nao tem custo cadastrado devolve <b>{@code 0,00}, e nao nulo</b> — e
+     * {@code 0,00} nao e nulo, logo o custo do produto era <b>jogado fora</b> e o item era gravado
+     * custando nada. No relatorio o produto aparece com margem de 100%.</p>
+     *
+     * <p>Zero e nulo dizem coisas diferentes neste sistema, e o codigo ja respeita isso em outro
+     * lugar ({@link #somarCustoDoAdicional}): nulo e "custo nao cadastrado", nao "de graca". Aqui a
+     * ficha sem custo cai no custo do produto, que e a melhor informacao que existe; se o produto
+     * tambem nao tiver, o item fica com nulo — que o relatorio ja sabe tratar como "nao cadastrado",
+     * em vez de um zero que parece medido.</p>
+     *
+     * <p><b>Nao esta acontecendo hoje:</b> medido na producao em 26/10/2026, nenhuma linha de ficha
+     * aponta para insumo sem custo (42 dos 47 insumos nao tem custo, mas nenhum deles em ficha). E a
+     * armadilha, nao o estrago.</p>
+     */
+    public static BigDecimal custoDaFichaOuDoProduto(BigDecimal custoFicha, BigDecimal custoDoProduto) {
+        if (custoFicha == null) return custoDoProduto;          // produto sem ficha tecnica
+        if (custoFicha.signum() > 0) return custoFicha;         // a ficha sabe o custo
+        return custoDoProduto;                                  // ficha sem custo cadastrado
+    }
+
     public static BigDecimal somarCustoDoAdicional(BigDecimal custoBase, BigDecimal custoAdicional) {
         if (custoAdicional == null || custoAdicional.signum() == 0) return custoBase;
         return (custoBase == null ? BigDecimal.ZERO : custoBase).add(custoAdicional);

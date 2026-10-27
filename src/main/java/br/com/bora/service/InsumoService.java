@@ -395,6 +395,7 @@ public class InsumoService {
         BigDecimal custoUnit = BigDecimal.ZERO;
         int consumidos = 0;
         int fantasmas = 0;
+        int semCusto = 0;
         for (ProdutoInsumo pi : ficha) {
             Insumo in = insumos.findByIdAndLojaId(pi.insumoId, lojaId).orElse(null);
             if (in == null) {
@@ -425,6 +426,7 @@ public class InsumoService {
             // linha de -0,5 kg de polpa a R$ 20 tirava R$ 10 do custo do item.
             if (qtdUnit.signum() <= 0) continue;
 
+            if (in.custo == null || in.custo.signum() == 0) semCusto++;
             custoUnit = custoUnit.add((in.custo == null ? BigDecimal.ZERO : in.custo).multiply(qtdUnit));
             BigDecimal precisa = qtdUnit.multiply(BigDecimal.valueOf(qtdPedido));
             // Baixa no banco, nao em Java: duas vendas simultaneas do mesmo produto liam o mesmo
@@ -441,6 +443,19 @@ public class InsumoService {
                             + "existe mais. O custo deste item sai MENOR do que e. Conserte a ficha em "
                             + "Produtos; o insumo apagado aparece como \"?\".",
                     produtoId, lojaId, fantasmas);
+        }
+
+        if (semCusto > 0) {
+            // Insumo sem custo cadastrado entra na conta como ZERO, e o CMV do item sai menor do que
+            // e -- a margem do relatorio sai melhor do que a real. Medido na producao em 26/10/2026:
+            // 42 dos 47 insumos nao tem custo cadastrado (nenhum deles em ficha, por sorte).
+            //
+            // Nao da para recusar a venda por isso, e nem seria certo: o lojista vende primeiro e
+            // organiza o cadastro depois. O que da e nao deixar o numero errado passar calado.
+            log.warn("Produto {} da loja {}: {} de {} insumo(s) da ficha nao tem custo cadastrado. O "
+                            + "custo deste item sai MENOR do que e, e a margem do relatorio sai maior. "
+                            + "Cadastre o custo em Insumos.",
+                    produtoId, lojaId, semCusto, consumidos);
         }
 
         if (consumidos == 0) {

@@ -555,7 +555,8 @@ public class PublicController {
                 // sem custo de adicional o custo do item fica como estava, inclusive nulo (que quer
                 // dizer "custo nao cadastrado", nao "de graca").
                 item.setCustoUnitario(br.com.bora.service.PedidoService.somarCustoDoAdicional(
-                        custoFicha != null ? custoFicha : prod.custo, custoAdicional));
+                        br.com.bora.service.PedidoService.custoDaFichaOuDoProduto(custoFicha, prod.custo),
+                        custoAdicional));
                 // Fica gravado no item qual dos dois caminhos rodou. Quem cancelar o pedido devolve
                 // exatamente isso, sem depender da ficha que o lojista tiver no dia do cancelamento.
                 item.setConsumiuFicha(custoFicha != null);
