@@ -157,10 +157,50 @@ public class InsumoService {
             ProdutoInsumo pi = new ProdutoInsumo();
             pi.lojaId = loja; pi.produtoId = produtoId;
             pi.insumoId = insumoId;
-            pi.quantidade = new BigDecimal(String.valueOf(it.getOrDefault("quantidade", "0")));
+            pi.quantidade = quantidadeDaFicha(it.getOrDefault("quantidade", "0"));
             fichas.save(pi);
         }
         return ficha(produtoId);
+    }
+
+    /**
+     * Quanto deste insumo cada unidade do produto consome — e por que isto nao aceita numero
+     * negativo (achado pelo QA em 26/10/2026).
+     *
+     * <h2>O estrago</h2>
+     * <p>A quantidade vinha do corpo do PUT direto para o {@code BigDecimal}, sem olhar o sinal. Com
+     * {@code -0.5} na ficha, cada venda <b>SOMAVA</b> meio quilo ao estoque do insumo, nas duas
+     * pontas: no balcao o {@code mexerNoEstoque} soma {@code precisa.negate()}, que vira positivo; no
+     * cardapio o {@code consumirSeTiver} faz {@code estoque - (-0,5)}, e a condicao
+     * {@code estoque >= -0,5} nunca barra nada. Vender virava entrada de mercadoria.</p>
+     *
+     * <p>E o custo ia junto: o CMV soma {@code custo x quantidade}, entao a linha negativa
+     * <b>abatia</b> o custo do produto — podia zerar o CMV de um lanche inteiro e inflar a margem no
+     * relatorio que o dono usa para decidir preco.</p>
+     *
+     * <p>Texto que nao e numero tambem passava reto e explodia em {@code NumberFormatException}:
+     * HTTP 500 com rastro de pilha, em vez de dizer o que esta errado no campo.</p>
+     *
+     * <p><b>Zero continua valendo</b>, de proposito: e o que vem de uma linha que o lojista adicionou
+     * e nao preencheu, e desde este commit o consumo pula a linha que nao consome nada. Recusar
+     * zero transformaria um rascunho em erro de tela.</p>
+     */
+    private BigDecimal quantidadeDaFicha(Object valor) {
+        BigDecimal q;
+        try {
+            q = new BigDecimal(String.valueOf(valor).trim().replace(",", "."));
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Quantidade invalida na ficha tecnica: \"" + valor + "\". Use um numero, "
+                            + "por exemplo 0,030 para 30 gramas.");
+        }
+        if (q.signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A quantidade na ficha tecnica nao pode ser negativa. Ela e o quanto cada unidade "
+                            + "do produto CONSOME; com numero negativo, cada venda somaria ao estoque "
+                            + "e abateria o custo do produto.");
+        }
+        return q;
     }
 
     /**
@@ -366,6 +406,25 @@ public class InsumoService {
             }
             consumidos++;
             BigDecimal qtdUnit = pi.quantidade == null ? BigDecimal.ZERO : pi.quantidade;
+
+            // Linha que nao consome nada nao mexe em estoque, e espelha o `fichaDaParaFazer`, que ja
+            // pulava a linha com quantidade <= 0 (achado pelo QA em 26/10/2026).
+            //
+            // Sem isto, o cardapio OFERECIA o produto e o checkout RECUSAVA: com `qtd = 0` a condicao
+            // do banco e `estoque >= 0`, e um insumo que o balcao deixou negativo (o balcao deixa, de
+            // proposito) reprovava a condicao e levantava SemInsumo por causa de uma linha que nao
+            // tira nada. A linha continua contando como `consumidos`: ela aponta para um insumo que
+            // existe, logo a ficha existe -- o que muda e so nao mexer no saldo.
+            //
+            // A quantidade negativa passou a ser recusada na gravacao; aqui a guarda fica tambem
+            // porque a base ja tem ficha gravada antes dessa regra.
+            //
+            // O CUSTO fica depois da guarda de proposito, e nao antes: o CMV e `custo x quantidade`,
+            // entao a linha negativa ABATIA o custo do produto -- dava para zerar o CMV de um lanche
+            // inteiro e inflar a margem no relatorio que o dono usa para decidir preco. Medido: uma
+            // linha de -0,5 kg de polpa a R$ 20 tirava R$ 10 do custo do item.
+            if (qtdUnit.signum() <= 0) continue;
+
             custoUnit = custoUnit.add((in.custo == null ? BigDecimal.ZERO : in.custo).multiply(qtdUnit));
             BigDecimal precisa = qtdUnit.multiply(BigDecimal.valueOf(qtdPedido));
             // Baixa no banco, nao em Java: duas vendas simultaneas do mesmo produto liam o mesmo
@@ -448,6 +507,10 @@ public class InsumoService {
             Insumo in = insumos.findByIdAndLojaId(pi.insumoId, lojaId).orElse(null);
             if (in == null) continue;
             BigDecimal qtdUnit = pi.quantidade == null ? BigDecimal.ZERO : pi.quantidade;
+            // Espelho do consumo, e por isso a mesma guarda: linha que nao consumiu nada nao tem nada
+            // para devolver. Com quantidade negativa gravada antes da regra de 26/10/2026, devolver
+            // TIRARIA do estoque -- cancelar viraria baixa.
+            if (qtdUnit.signum() <= 0) continue;
             insumos.mexerNoEstoque(in.id, lojaId, qtdUnit.multiply(BigDecimal.valueOf(qtdPedido)));
         }
         return true;
