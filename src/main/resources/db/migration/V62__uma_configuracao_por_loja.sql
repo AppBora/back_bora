@@ -1,0 +1,45 @@
+-- Uma configuracao por loja, garantida pelo BANCO.
+--
+-- O DEFEITO (achado pelo QA em 26/10/2026)
+-- A tabela tinha PRIMARY KEY so em `id` e um indice NAO-UNICO em `loja_id`. Nada impedia duas linhas
+-- para a mesma loja.
+--
+-- O que a segunda linha derruba: `ConfiguracaoLojaRepository.findByLojaId` devolve
+-- `Optional<ConfiguracaoLoja>`. Com duas linhas o Spring Data levanta
+-- IncorrectResultSizeDataAccessException ANTES do `.orElse(null)` -- e um dos chamadores e o
+-- `PublicController` do CARDAPIO (linha 117). O cardapio publico da loja sai do ar com 500, e com ele
+-- a unica porta por onde o cliente final faz pedido.
+--
+-- DE ONDE A SEGUNDA LINHA PODE VIR -- e de onde NAO vem
+-- O `ProvisionamentoService.semearConfig` se protege com
+-- `if (configs.findByLojaId(lojaId).isPresent()) return;`: ler e decidir em Java, que normalmente e
+-- o padrao que da corrida.
+--
+-- Aqui NAO da, e eu conferi os dois unicos chamadores (PlataformaController:713 e
+-- SignupController:168): os dois criam a loja na linha de cima e chamam o semear com um `lojaId` que
+-- acabou de nascer. Nao existe loja que dois pedidos simultaneos possam semear ao mesmo tempo. Entao
+-- esta trava nao esta consertando uma corrida que existe hoje -- e eu nao vou escrever aqui que
+-- esta.
+--
+-- O que ela faz e escrever "uma configuracao por loja" no unico lugar que ninguem pula: um chamador
+-- novo que esqueca a guarda, um pedido repetido, um INSERT feito a mao no banco. O estrago que ela
+-- evita e grande e permanente (o cardapio da loja fora do ar); o custo dela e uma linha.
+--
+-- MEDIDO NA PRODUCAO em 27/10/2026, somente leitura: 5 linhas para 5 lojas distintas, ZERO
+-- duplicata. Isto e a armadilha, nao o estrago -- e por isso da para fechar a porta sem decidir nada
+-- sobre dado de ninguem.
+--
+-- SE ALGUMA BASE TIVER DUPLICATA, esta migracao FALHA, de proposito: o Postgres recusa e nomeia a
+-- chave repetida. Escolher qual das duas configuracoes e a verdadeira (cores, cashback, aliquota,
+-- custo fixo da loja) nao e decisao de script -- apagar a errada em silencio seria pior que a falha.
+-- A aplicacao nao sobe, o health nao fica sadio e o deploy faz rollback sozinho.
+ALTER TABLE configuracao_loja
+    ADD CONSTRAINT uk_configuracao_loja_loja_id UNIQUE (loja_id);
+
+-- O indice antigo virou DUPLICADO DE DEFINICAO: o UNIQUE acima cria o seu proprio indice btree em
+-- (loja_id), que atende toda consulta que o antigo atendia.
+--
+-- Pela regra que ficou da V56: indice sai quando NENHUMA FORMA DE CONSULTA do codigo pode usar ele,
+-- e nao quando o contador de uso esta em zero. Aqui nao e o contador -- e um indice identico ao que
+-- acabou de nascer.
+DROP INDEX IF EXISTS idx_configuracao_loja;
