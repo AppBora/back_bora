@@ -28,9 +28,43 @@ public class PromocaoService {
         return repo.findByLojaIdOrderByInicioDesc(lojaId);
     }
 
+    /**
+     * O que vale como codigo de promocao: letras, numeros, ponto, hifen e sublinhado.
+     *
+     * <h2>Por que isto existe (achado pelo QA em 26/10/2026)</h2>
+     * <p>O {@code codigo} era texto livre, gravado sem nenhuma validacao. A tela de Promocoes o
+     * desenha dentro de uma string JS: {@code onclick="__encerrar(id, '...')"}. Um codigo como
+     * {@code X'+alert(1)+'} — 13 caracteres numa coluna de 40 — escapava da string e rodava na
+     * sessao de quem abrisse a tela.</p>
+     *
+     * <p>Quem grava e um GERENTE. As vitimas naturais sao o ADMINISTRADOR_LOJA e o <b>suporte da
+     * plataforma</b> operando dentro da loja por "Entrar na loja" — e nesse caso o atacante leva um
+     * token de ADMINISTRADOR_BORA.</p>
+     *
+     * <p>O {@code esc} da tela foi corrigido no mesmo commit (nao escapava apostrofe). As duas
+     * pontas, de proposito: escapar na tela protege o render de hoje, e recusar aqui protege o
+     * proximo lugar que for mostrar esse valor — relatorio, WhatsApp, nota, qualquer um.</p>
+     *
+     * <p>Codigo de cupom e de promocao e digitado por cliente ao telefone e lido em voz alta. O
+     * conjunto permitido e o que serve para isso; nao e restricao arbitraria.</p>
+     */
+    private static final java.util.regex.Pattern CODIGO_VALIDO =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9._-]{1,40}$");
+
     public Promocao criarManual(Long lojaId, Promocao dados) {
         if (dados.getDescricao() == null || dados.getDescricao().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Descrição da promoção é obrigatória");
+        }
+        String codigo = dados.getCodigo();
+        if (codigo != null && !codigo.isBlank()) {
+            codigo = codigo.trim();
+            if (!CODIGO_VALIDO.matcher(codigo).matches()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Código de promoção inválido. Use letras, números, ponto, hífen ou "
+                                + "sublinhado, até 40 caracteres — é um código que o cliente digita "
+                                + "e lê em voz alta.");
+            }
+            dados.setCodigo(codigo);
         }
         // Guarda: não permite duas promoções ativas ao mesmo tempo na loja.
         if (repo.existsByLojaIdAndAtivaTrue(lojaId)) {
