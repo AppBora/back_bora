@@ -38,6 +38,15 @@ import java.util.Map;
  * Nenhum deles é movimentação: são o cadastro que faz a loja funcionar. Apagar o cardápio junto
  * deixaria a loja sem nada para vender — e é o erro que esta classe foi escrita para não permitir.</p>
  *
+ * <h2>O estoque VOLTA (26/10/2026)</h2>
+ * <p>Pedido de teste baixou estoque: produto sem ficha tirou do proprio saldo, produto com ficha
+ * consumiu insumo. Apagar o pedido nao desfazia nada disso — o lojista ficava com o estoque curto
+ * <b>e sem o historico que explicaria</b>, porque a contagem some junto com a prova. Agora a limpeza
+ * devolve, pelo mesmo caminho do cancelamento ({@link EstornoDaVendaService}).</p>
+ *
+ * <p>Pedido que ja estava CANCELADO fica de fora: o cancelamento dele ja devolveu o que havia. A
+ * previa e o resultado dizem quantos ficaram de fora, para quem limpa saber o que conferir.</p>
+ *
  * <h2>Quem pode</h2>
  * <p>Só o ADMINISTRADOR_BORA. O administrador da loja NÃO tem este botão de propósito: é um gatilho
  * sem volta, e o estrago de um clique errado é o histórico de vendas do próprio negócio dele.</p>
@@ -60,12 +69,13 @@ public class LimpezaDeTestesService {
     private final ClienteRepository clientes;
     private final AcertoEntregadorRepository acertos;
     private final ProdutoRepository produtos;
+    private final EstornoDaVendaService estorno;
     private final AuthContext ctx;
 
     public LimpezaDeTestesService(LojaRepository lojas, PedidoRepository pedidos, PedidoItemRepository itens,
                                   LogStatusRepository logs, ClienteRepository clientes,
                                   AcertoEntregadorRepository acertos, ProdutoRepository produtos,
-                                  AuthContext ctx) {
+                                  EstornoDaVendaService estorno, AuthContext ctx) {
         this.lojas = lojas;
         this.pedidos = pedidos;
         this.itens = itens;
@@ -73,6 +83,7 @@ public class LimpezaDeTestesService {
         this.clientes = clientes;
         this.acertos = acertos;
         this.produtos = produtos;
+        this.estorno = estorno;
         this.ctx = ctx;
     }
 
@@ -92,6 +103,13 @@ public class LimpezaDeTestesService {
         m.put("clientesComCashback", clientes.countByLojaIdAndCashbackGreaterThan(lojaId, BigDecimal.ZERO));
         // O que fica. Está aqui para a tela poder MOSTRAR o que sobrevive, em vez de só prometer.
         m.put("produtosQueFicam", produtosDaLoja(lojaId));
+        // Quantos pedidos terao o estoque devolvido, e quantos ficam de fora por ja estarem
+        // cancelados. A tela mostra isto ANTES da confirmacao: estoque e contagem fisica, e quem
+        // limpa precisa saber o que vai mudar na prateleira.
+        long cancelados = pedidos.findByLojaIdOrderByCriadoEmDesc(lojaId).stream()
+                .filter(x -> x.status == br.com.bora.entity.StatusPedido.CANCELADO).count();
+        m.put("pedidosQueDevolvemEstoque", pedidos.countByLojaId(lojaId) - cancelados);
+        m.put("pedidosJaCanceladosQueNaoDevolvem", cancelados);
         return m;
     }
 
@@ -124,6 +142,26 @@ public class LimpezaDeTestesService {
         long qtdLogs = logs.countByLojaId(lojaId);
         long qtdAcertos = acertos.countByLojaId(lojaId);
 
+        // O ESTOQUE VOLTA ANTES DE APAGAR, porque depois nao ha mais item para saber o que devolver.
+        //
+        // Pedido ja CANCELADO fica de fora: o cancelamento dele ja devolveu o que havia para
+        // devolver. Devolver de novo somaria estoque que nunca saiu -- e estoque inventado e
+        // silencioso, o lojista nunca descobre de onde veio.
+        int itensDevolvidos = 0;
+        int pedidosDevolvidos = 0;
+        int canceladosDeFora = 0;
+        for (br.com.bora.entity.Pedido pedidoDeTeste : pedidos.findByLojaIdOrderByCriadoEmDesc(lojaId)) {
+            if (pedidoDeTeste.status == br.com.bora.entity.StatusPedido.CANCELADO) {
+                canceladosDeFora++;
+                continue;
+            }
+            int devolvidos = estorno.devolverSoOestoque(pedidoDeTeste);
+            if (devolvidos > 0) {
+                itensDevolvidos += devolvidos;
+                pedidosDevolvidos++;
+            }
+        }
+
         // Ordem importa: filho antes do pai. O pedido é o pai de item e de histórico, e o acerto
         // referencia pedido pelo `acerto_id` que está DENTRO do pedido -- some junto.
         itens.deleteByLojaId(lojaId);
@@ -146,9 +184,12 @@ public class LimpezaDeTestesService {
 
         AUDITORIA.warn("AUDITORIA limpeza: {} ({}) apagou a movimentacao da loja {} \"{}\" -- "
                         + "{} pedidos, {} itens, {} linhas de historico, {} acertos; clientes zerados: {}. "
+                        + "Estoque devolvido em {} item(ns) de {} pedido(s); {} pedido(s) ja cancelado(s) "
+                        + "ficaram de fora porque o cancelamento deles ja devolveu. "
                         + "Cardapio, integracoes, assinatura e usuarios NAO foram tocados.",
                 ctx.atual().userId(), ctx.atual().email(), lojaId, nome,
-                qtdPedidos, qtdItens, qtdLogs, qtdAcertos, clientesZerados);
+                qtdPedidos, qtdItens, qtdLogs, qtdAcertos, clientesZerados,
+                itensDevolvidos, pedidosDevolvidos, canceladosDeFora);
 
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("loja", nome);
@@ -157,6 +198,9 @@ public class LimpezaDeTestesService {
         r.put("historico", qtdLogs);
         r.put("acertos", qtdAcertos);
         r.put("clientesZerados", clientesZerados);
+        r.put("estoqueDevolvidoEmItens", itensDevolvidos);
+        r.put("estoqueDevolvidoEmPedidos", pedidosDevolvidos);
+        r.put("pedidosJaCanceladosSemDevolucao", canceladosDeFora);
         r.put("produtosQueFicaram", produtosDaLoja(lojaId));
         return r;
     }

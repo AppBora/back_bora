@@ -46,6 +46,7 @@ class LimpezaDeTestesTest {
     private ClienteRepository clientes;
     private AcertoEntregadorRepository acertos;
     private ProdutoRepository produtos;
+    private EstornoDaVendaService estorno;
     private AuthContext ctx;
     private LimpezaDeTestesService service;
 
@@ -73,7 +74,12 @@ class LimpezaDeTestesTest {
         when(clientes.findByLojaId(LOJA)).thenReturn(List.of());
         when(ctx.atual()).thenReturn(new BoraPrincipal(1L, null, "ADMINISTRADOR_BORA", "dono@bora.com"));
 
-        service = new LimpezaDeTestesService(lojas, pedidos, itens, logs, clientes, acertos, produtos, ctx);
+        // Desde 26/10/2026 a limpeza devolve o estoque dos pedidos de teste antes de apagar: pedido
+        // de mentira baixou produto ou insumo, e apagar o pedido nao desfazia isso.
+        estorno = mock(EstornoDaVendaService.class);
+        when(pedidos.findByLojaIdOrderByCriadoEmDesc(LOJA)).thenReturn(List.of());
+        service = new LimpezaDeTestesService(lojas, pedidos, itens, logs, clientes, acertos, produtos,
+                estorno, ctx);
     }
 
     // ---------------------------------------------------------------- quem pode

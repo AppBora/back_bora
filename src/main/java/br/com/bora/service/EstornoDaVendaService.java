@@ -123,7 +123,20 @@ public class EstornoDaVendaService {
         boolean podeDevolverInsumo = !entrouEmPreparo(statusAntes);
         boolean podeDevolverProduto = !jaSaiuDaLoja(statusAntes);
         if (!podeDevolverInsumo && !podeDevolverProduto) return 0;
+        return devolverEstoqueDosItens(p, podeDevolverInsumo, podeDevolverProduto, statusAntes);
+    }
 
+    /**
+     * Devolve o estoque dos itens de um pedido que nao vai acontecer — num lugar so.
+     *
+     * <p>Serve o {@link #devolver} (cancelamento, com as guardas de estagio) e o
+     * {@link #devolverSoOestoque} (limpeza de teste, que devolve tudo porque nada aconteceu de
+     * verdade). A regra de "produto com ficha devolve insumo, produto sem ficha devolve o proprio
+     * estoque" mora aqui porque foi a divergencia entre copias dela que criou os defeitos de estoque
+     * deste mes.</p>
+     */
+    private int devolverEstoqueDosItens(Pedido p, boolean podeDevolverInsumo, boolean podeDevolverProduto,
+                                        StatusPedido statusAntes) {
         List<PedidoItem> lista = itens.findByLojaIdAndPedidoIdOrderById(p.lojaId, p.id);
         int devolvidos = 0;
         int adicionaisDevolvidos = 0;
@@ -184,6 +197,34 @@ public class EstornoDaVendaService {
                     p.id, p.lojaId, naoDevolvidosPorFaltaDeMarca);
         }
         return devolvidos;
+    }
+
+    /**
+     * Devolve o estoque de um pedido de TESTE, que nunca existiu — sem mexer em cashback.
+     *
+     * <h2>Por que isto existe (achado pelo QA em 26/10/2026)</h2>
+     * <p>A limpeza de movimentacao de teste ({@link LimpezaDeTestesService}) apagava os pedidos e
+     * <b>nao devolvia o estoque que eles baixaram</b>. Quem vende o sistema lanca pedido de mentira
+     * dentro da conta do cliente; cada um desses pedidos tirou produto ou insumo do estoque. Depois
+     * da limpeza o lojista ficava com o estoque curto <b>e sem o historico que explicaria</b> — a
+     * contagem some junto com a prova.</p>
+     *
+     * <h2>Sem guarda de estagio, e de proposito</h2>
+     * <p>O cancelamento tem guardas porque a comida pode ter sido feita de verdade. Num pedido de
+     * teste nada foi feito: nenhuma polpa saiu do pote. Entao devolve insumo e produto, em qualquer
+     * estagio.</p>
+     *
+     * <p><b>Pedido CANCELADO nao passa por aqui</b>, e quem chama e que filtra: o cancelamento dele
+     * ja devolveu o que havia para devolver. Devolver de novo somaria estoque que nunca saiu, e
+     * estoque inventado e silencioso — o lojista nunca descobre de onde veio. Entre errar somando e
+     * nao mexer, este codigo escolhe nao mexer, igual ao item sem a marca da V45.</p>
+     *
+     * @return quantos itens tiveram algo devolvido
+     */
+    @Transactional
+    public int devolverSoOestoque(Pedido p) {
+        if (p == null || p.id == null) return 0;
+        return devolverEstoqueDosItens(p, true, true, p.status);
     }
 
     /**
