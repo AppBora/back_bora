@@ -64,6 +64,7 @@ class LojaSuspensaSaiDoArInteiraTest {
                 // corte por assinatura LIGADO: e o estado que faz o prazo vencido valer
                 new RegraDeAcesso(true), configuracoes,
                 mock(br.com.bora.service.RepetirPedidoService.class),
+                mock(br.com.bora.service.CategoriaOrdemService.class),
                 mock(PlatformTransactionManager.class), false);
 
         // uma foto de verdade, para o unico motivo de 404 ser a loja

@@ -72,7 +72,8 @@ class PedidoDoCardapioTest {
                 fidelidade, operacao, taxas, insumos,
                 devolucaoDeEstoque,
                 new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class),
-                mock(br.com.bora.service.RepetirPedidoService.class), gerenciadorFalso(), false);
+                mock(br.com.bora.service.RepetirPedidoService.class), mock(br.com.bora.service.CategoriaOrdemService.class),
+                gerenciadorFalso(), false);
 
         Loja l = new Loja();
         l.id = 1L;
@@ -315,7 +316,8 @@ class PedidoDoCardapioTest {
                 fidelidade, operacao, taxas, insumos,
                 devolucaoDeEstoque,
                 new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class),
-                mock(br.com.bora.service.RepetirPedidoService.class), gerenciadorFalso(), false);
+                mock(br.com.bora.service.RepetirPedidoService.class), mock(br.com.bora.service.CategoriaOrdemService.class),
+                gerenciadorFalso(), false);
     }
 
     @Test

@@ -61,6 +61,8 @@ public class PublicController {
     /** Transação explícita: o pedido grava em passos curtos, com a chamada ao Asaas FORA deles. */
     private final org.springframework.transaction.support.TransactionTemplate tx;
     private final br.com.bora.service.RepetirPedidoService repetir;
+    /** A ordem das secoes escolhida pela loja. Ver V64 e {@code CategoriaOrdemService}. */
+    private final br.com.bora.service.CategoriaOrdemService ordemDasCategorias;
 
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
@@ -78,10 +80,12 @@ public class PublicController {
                             br.com.bora.security.RegraDeAcesso regra,
                             br.com.bora.repository.ConfiguracaoLojaRepository configuracoes,
                             br.com.bora.service.RepetirPedidoService repetir,
+                            br.com.bora.service.CategoriaOrdemService ordemDasCategorias,
                             org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                             @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
         this.respeitarHorario = respeitarHorario;
         this.repetir = repetir;
+        this.ordemDasCategorias = ordemDasCategorias;
         this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
         this.taxas = taxas;
         this.insumos = insumos;
@@ -194,7 +198,20 @@ public class PublicController {
     @GetMapping("/loja/{lojaId}/cardapio")
     public Map<String, Object> cardapio(@PathVariable Long lojaId) {
         Loja loja = lojaAtiva(lojaId);
-        List<Produto> lista = produtos.findByLojaIdAndAtivoTrueOrderByCategoriaAscNomeAsc(lojaId);
+        // A ordem das SECOES e escolha da loja, nao do alfabeto (V64). A consulta continua trazendo
+        // os produtos em categoria A-Z e nome A-Z, e depois a lista e reordenada SO pela secao:
+        // `List.sort` e estavel, entao a ordem dos nomes dentro de cada secao -- que veio do banco,
+        // com a colacao dele -- fica exatamente como estava. Reordenar por nome aqui em Java trocaria
+        // essa colacao pela do `compareTo`, e "Acai" e "Agua" sairiam em ordem diferente da de antes.
+        //
+        // Quem nao tem posicao gravada vai para o fim, em A-Z: e o comportamento que toda loja tinha
+        // antes desta mudanca, e continua sendo o de quem nunca abriu a tela de ordem.
+        java.util.Map<String, Integer> posicaoDaSecao = ordemDasCategorias.posicoesDaLoja(lojaId);
+        List<Produto> lista = new java.util.ArrayList<>(
+                produtos.findByLojaIdAndAtivoTrueOrderByCategoriaAscNomeAsc(lojaId));
+        lista.sort(java.util.Comparator.comparing(
+                (Produto p) -> br.com.bora.service.CategoriaOrdemService.rotulo(p.categoria),
+                br.com.bora.service.CategoriaOrdemService.comparador(posicaoDaSecao)));
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("loja", Map.of("id", loja.id, "nome", loja.nome == null ? "Cardápio" : loja.nome));
         resp.put("marca", marcaDaLoja(loja));
@@ -233,7 +250,7 @@ public class PublicController {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.id);
             m.put("nome", p.nome);
-            m.put("categoria", p.categoria == null || p.categoria.isBlank() ? "Outros" : p.categoria);
+            m.put("categoria", br.com.bora.service.CategoriaOrdemService.rotulo(p.categoria));
             m.put("preco", p.preco);
             m.put("imagem", enderecoDaImagem(lojaId, p.id, p.imagemUrl));
             m.put("complementos", gruposPorProduto.getOrDefault(p.id, List.of()));

@@ -89,6 +89,7 @@ class PedidoReabreNoWebhookDoPixTest {
                 mock(br.com.bora.service.InsumoService.class), devolucaoDeEstoque,
                 mock(br.com.bora.security.RegraDeAcesso.class),
                 mock(br.com.bora.repository.ConfiguracaoLojaRepository.class), repetir,
+                mock(br.com.bora.service.CategoriaOrdemService.class),
                 gerenciador, false);
     }
 
