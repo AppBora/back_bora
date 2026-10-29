@@ -150,6 +150,51 @@ public interface ProdutoRepository extends JpaRepository<Produto, Long> {
               from Produto p where p.lojaId = :lojaId order by p.nome""")
     java.util.List<Object[]> resumoDaLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 
+    /**
+     * O cardapio PUBLICO, sem a coluna da foto e sem o custo.
+     *
+     * <h2>O que isto tira do caminho (pente fino de 29/10/2026)</h2>
+     * <p>O cardapio publico era o unico caminho que ainda lia a entidade inteira pelo
+     * {@code findByLojaIdAndAtivoTrueOrderByCategoriaAscNomeAsc} -- e {@code imagem_url} guarda a
+     * foto como data URL dentro de uma coluna TEXT. Medido nas lojas da Zira: <b>451.183 bytes</b>
+     * de imagem por loja, ou seja cerca de <b>601 kB</b> em base64, saindo do Postgres, hidratados
+     * em String no heap e <b>descartados</b> -- porque na montagem do JSON a foto e trocada pelo
+     * endereco {@code /public/loja/N/produto/N/imagem}. A resposta sai com
+     * {@code Cache-Control: no-store}, entao toda abertura pagava o preco inteiro: 126 ms na loja
+     * com 40 fotos contra 78 ms na loja sem foto nenhuma.</p>
+     *
+     * <p>E a tela mais aberta do sistema (todo cliente, toda visita), e o custo cresce com o tamanho
+     * das fotos que o lojista subir, nao com o numero de pedidos.</p>
+     *
+     * <h2>Por que DUAS colunas para a foto, e nao so "tem foto"</h2>
+     * <p>{@code imagem_url} guarda duas coisas diferentes: a foto que o lojista subiu (data URL,
+     * enorme) ou um endereco que ele colou (http, curto). O {@code enderecoDaImagem} devolve o
+     * endereco COMO ESTA no segundo caso -- trocar isso por "/public/.../imagem" quebraria a foto
+     * desses produtos, porque quem serve aquele endereco espera base64. Entao:</p>
+     * <ul>
+     *   <li>{@code urlExterna}: o valor da coluna <b>somente</b> quando ele nao e data URL. Para
+     *       a foto subida vem {@code null}, e o base64 nunca atravessa o cabo;</li>
+     *   <li>{@code temImagem}: se existe foto, para montar o endereco que o navegador cacheia.</li>
+     * </ul>
+     *
+     * <p>O {@code case} e avaliado no Postgres. O banco ainda LE a coluna para decidir o prefixo --
+     * isso nao da para evitar enquanto a foto mora na mesma tabela -- mas nada disso vai para a
+     * aplicacao, que e onde estavam o trafego e o heap.</p>
+     *
+     * <p>A ordem e a MESMA de antes ({@code categoria}, {@code nome}, pela colacao do banco), porque
+     * a ordem das secoes e reordenada depois com {@code List.sort}, que e estavel: trocar a colacao
+     * aqui mudaria a ordem dos nomes dentro de cada secao.</p>
+     */
+    @org.springframework.data.jpa.repository.Query("""
+            select p.id, p.nome, p.categoria, p.preco, p.estoque,
+                   case when p.imagemUrl is null or p.imagemUrl = '' then null
+                        when p.imagemUrl like 'data:%' then null
+                        else p.imagemUrl end,
+                   case when p.imagemUrl is null or p.imagemUrl = '' then false else true end
+              from Produto p where p.lojaId = :lojaId and p.ativo = true
+             order by p.categoria, p.nome""")
+    java.util.List<Object[]> cardapioPublico(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
     /** Quem na loja ja usa este codigo do marketplace. Para avisar ANTES do banco recusar. */
     Optional<Produto> findFirstByLojaIdAndCodigoExterno(Long lojaId, String codigoExterno);
 

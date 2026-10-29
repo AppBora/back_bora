@@ -153,8 +153,18 @@ public interface MarketplaceClient {
         return null;
     }
 
-    /** Responde ao pedido de cancelamento feito pelo cliente. */
-    default void responderPedidoDeCancelamento(IntegracaoCanal i, String orderId, boolean aceitar, String statusInterno) {
+    /**
+     * Responde ao pedido de cancelamento feito pelo cliente.
+     *
+     * @return {@code true} se o canal recebeu a resposta. <b>O retorno nao e enfeite:</b> quem
+     *         chama so cancela o pedido aqui se o canal aceitou o cancelamento la. Com
+     *         {@code void}, a falha do {@code acceptCancellation} era engolida e o pedido ficava
+     *         cancelado no Bora e ATIVO na 99, com o cliente esperando e cobrado.
+     *         O padrao devolve {@code true} porque canal que nao implementa isto nao tem nada a
+     *         enviar — o iFood trata cancelamento por outros eventos.
+     */
+    default boolean responderPedidoDeCancelamento(IntegracaoCanal i, String orderId, boolean aceitar, String statusInterno) {
+        return true;
     }
 
     private static String texto(Object o) {

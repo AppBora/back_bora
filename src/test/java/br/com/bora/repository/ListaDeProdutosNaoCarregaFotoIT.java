@@ -152,4 +152,88 @@ class ListaDeProdutosNaoCarregaFotoIT {
         assertEquals(List.of("Da loja"), lista().stream().map(ProdutoResumo::nome).toList());
         produtos.delete(outra);
     }
+
+    // ======================================================== o CARDAPIO PUBLICO, que faltava
+
+    /**
+     * O cardapio publico era o ultimo caminho que lia a entidade inteira (pente fino de 29/10/2026).
+     *
+     * <p>Medido na producao: 451.183 bytes de imagem por loja da Zira, ou ~601 kB em base64, saindo
+     * do Postgres e <b>descartados</b> na montagem do JSON, em toda abertura -- e a resposta sai com
+     * {@code no-store}, entao nao havia cache para amortecer. E a tela mais aberta do sistema.</p>
+     */
+    @Test
+    void oCARDAPIOpublicoNAOtrazOBASE64() {
+        novo("Copo 500ml", FOTO);
+
+        List<Object[]> r = produtos.cardapioPublico(LOJA);
+
+        assertEquals(1, r.size());
+        String tudo = java.util.Arrays.deepToString(r.toArray());
+        assertFalse(tudo.contains("base64"), "a foto veio junto: " + tudo.length() + " caracteres");
+        assertTrue(tudo.length() < 500, "a linha veio com " + tudo.length()
+                + " caracteres; a foto tem " + FOTO.length());
+    }
+
+    @Test
+    void aFOTOsubidaVIRAendereco_eOendereçoCOLADOcontinuaCOMOesta() {
+        novo("Subida", FOTO);
+        novo("Colada", "https://cdn.exemplo.com/acai.jpg");
+        novo("Nenhuma", null);
+
+        var porNome = new java.util.HashMap<String, Object[]>();
+        for (Object[] c : produtos.cardapioPublico(LOJA)) porNome.put((String) c[1], c);
+
+        // [5] = urlExterna (nulo para data URL), [6] = temImagem
+        assertNull(porNome.get("Subida")[5], "o base64 atravessou o cabo");
+        assertEquals(Boolean.TRUE, porNome.get("Subida")[6]);
+
+        // Este e o caso que uma projecao de "tem foto: sim/nao" quebraria: quem serve
+        // /public/.../imagem espera base64, e a foto desse produto nao esta no banco.
+        assertEquals("https://cdn.exemplo.com/acai.jpg", porNome.get("Colada")[5]);
+
+        assertNull(porNome.get("Nenhuma")[5]);
+        assertEquals(Boolean.FALSE, porNome.get("Nenhuma")[6]);
+    }
+
+    @Test
+    void oCARDAPIOpublicoNAOtrazOCUSTO_eSOtrazOqueESTAativo() {
+        Produto desligado = novo("Fora do ar", null);
+        desligado.ativo = false;
+        produtos.save(desligado);
+        novo("No ar", null);
+
+        List<Object[]> r = produtos.cardapioPublico(LOJA);
+
+        assertEquals(1, r.size(), "produto desativado apareceu no cardapio do cliente");
+        assertEquals("No ar", r.get(0)[1]);
+        // 7 colunas: id, nome, categoria, preco, estoque, urlExterna, temImagem. O custo e a margem
+        // da loja -- numero de dono, que nao tem o que fazer numa tela aberta na internet.
+        assertEquals(7, r.get(0).length);
+        assertFalse(java.util.Arrays.deepToString(r.toArray()).contains("6.00"), "o custo foi junto");
+    }
+
+    @Test
+    void aORDEMdoCARDAPIOpublicoEHporCATEGORIAeDEPOISporNOME() {
+        // A ordem das SECOES e reordenada depois, em Java, com List.sort -- que e estavel. Entao esta
+        // ordem decide a ordem dos nomes DENTRO de cada secao, e e a colacao do banco que vale.
+        Produto bebida = novo("Agua", null);
+        bebida.categoria = "Bebidas";
+        produtos.save(bebida);
+        novo("Zabaione", null);
+        novo("Banana", null);
+
+        assertEquals(List.of("Banana", "Zabaione", "Agua"),
+                produtos.cardapioPublico(LOJA).stream().map(c -> (String) c[1]).toList());
+    }
+
+    @Test
+    void aFOTOcontinuaNObancoDEPOISdoCARDAPIO() {
+        Produto salvo = novo("Copo 500ml", FOTO);
+
+        produtos.cardapioPublico(LOJA);
+
+        assertEquals(FOTO, produtos.findByIdAndLojaId(salvo.id, LOJA).orElseThrow().imagemUrl,
+                "o cardapio publico nao pode ter virado um apagador de foto");
+    }
 }

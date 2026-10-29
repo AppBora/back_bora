@@ -330,13 +330,27 @@ public class MarketplacePoller {
     /**
      * O cliente pediu para cancelar. Aceita enquanto a cozinha ainda pode parar; depois de pronto
      * ou despachado, nega com o motivo da lista do canal.
+     *
+     * <p><b>A ordem importa e e deliberada:</b> primeiro a resposta ao canal; so se ela chegar la
+     * e que o pedido e cancelado aqui. Antes a falha do {@code acceptCancellation} era engolida
+     * (o metodo era {@code void}) e o pedido era cancelado no Bora de qualquer jeito -- com
+     * devolucao de estoque e de cashback -- enquanto na 99 ele seguia ATIVO, com o cliente
+     * esperando a comida e cobrado. Nao havia aviso na tela nem retentativa, porque o evento ja
+     * tinha sido confirmado.</p>
+     *
+     * <p>Falhando, isto ESTOURA. Quem chama ({@code processar}) nao poe o evento em
+     * {@code paraConfirmar}, o canal reenvia no ciclo seguinte e a resposta e tentada de novo. E
+     * a mesma politica que o resto do poller usa para falha transitoria.</p>
      */
     private void responderPedidoDeCancelamento(MarketplaceClient client, IntegracaoCanal i, String orderId,
                                                Map<String, Object> ev) {
         String status = pedidos.buscarExterno(i.lojaId, i.canal, orderId)
                 .map(p -> p.status == null ? null : p.status.name()).orElse(null);
         boolean aceitar = status == null || List.of("RECEBIDO", "CONFIRMADO", "EM_PREPARO", "CANCELADO").contains(status);
-        client.responderPedidoDeCancelamento(i, orderId, aceitar, status);
+        if (!client.responderPedidoDeCancelamento(i, orderId, aceitar, status)) {
+            throw new IllegalStateException("o canal nao recebeu a resposta ao pedido de cancelamento do pedido "
+                    + orderId + " (" + (aceitar ? "aceite" : "recusa") + "); nada foi mudado aqui");
+        }
         if (aceitar) pedidos.cancelarPorMarketplace(i.lojaId, i.canal, orderId, client.motivoDoCancelamento(ev));
         log.info("[{}] loja {}: pedido de cancelamento do cliente {} para o pedido {} (status {})",
                 i.canal, i.lojaId, aceitar ? "ACEITO" : "NEGADO", orderId, status);

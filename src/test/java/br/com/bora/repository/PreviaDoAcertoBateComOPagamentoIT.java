@@ -132,4 +132,69 @@ class PreviaDoAcertoBateComOPagamentoIT {
 
         assertTrue(previa().isEmpty(), "entregador em branco nao e entregador");
     }
+
+    // =================================================== a linha "sem motoboy escolhido"
+
+    /** Pedido terminado em ENTREGUE SEM entregador — e e o `tipoEntrega` que decide se e balcao. */
+    private void concluidoSemMotoboy(String tipoEntrega, String observacao, String total) {
+        Pedido p = new Pedido();
+        p.lojaId = LOJA;
+        p.status = StatusPedido.ENTREGUE;
+        p.entregador = null;
+        p.tipoEntrega = tipoEntrega;
+        p.observacao = observacao;
+        p.taxaEntrega = new BigDecimal("0.00");
+        p.valorTotal = new BigDecimal(total);
+        p.formaPagamento = "Dinheiro";
+        p.criadoEm = ONTEM;
+        p.entregueEm = ONTEM;
+        pedidos.save(p);
+    }
+
+    private Object[] semMotoboy() {
+        return pedidos.entregasSemMotoboy(LOJA, ONTEM.minusDays(1), ONTEM.plusDays(1)).get(0);
+    }
+
+    @Test
+    void aVENDAdeBALCAOnaoENTRAemENTREGASsemMOTOBOY() {
+        // Isto e o que a Frente de Caixa grava: tipoEntrega RETIRADA e, logo depois, ENTREGUE.
+        // Sem o filtro, o faturamento do caixa inteiro aparecia como "dinheiro de entrega sem
+        // responsavel" e saia no recibo impresso do acerto.
+        concluidoSemMotoboy("RETIRADA", null, "80.00");
+        concluidoSemMotoboy("RETIRADA", null, "25.00");
+
+        Object[] linha = semMotoboy();
+
+        assertEquals(0L, ((Number) linha[0]).longValue(),
+                "venda de balcao entrou na linha de entrega sem motoboy");
+        assertEquals(0, ((BigDecimal) linha[2]).compareTo(BigDecimal.ZERO),
+                "o dinheiro do balcao foi somado em Total entregue");
+    }
+
+    @Test
+    void aENTREGAsemMOTOBOYcontinuaAPARECENDO() {
+        // O alarme precisa continuar acendendo: era para isto que a linha foi criada.
+        concluidoSemMotoboy("ENTREGA", null, "60.00");
+
+        Object[] linha = semMotoboy();
+
+        assertEquals(1L, ((Number) linha[0]).longValue(),
+                "o filtro de retirada engoliu a entrega de verdade");
+        assertEquals(0, ((BigDecimal) linha[2]).compareTo(new BigDecimal("60.00")));
+    }
+
+    @Test
+    void oPEDIDOantigoSEMtipoENTREGAusaOtextoDAobservacao() {
+        // Pedido anterior a V48 nao tem a coluna preenchida. O `Pedido.ehRetirada()` cai na
+        // deducao pelo texto, e a consulta tem de usar a MESMA regra -- senao a loja que ja tinha
+        // movimento antes da V48 continua vendo o balcao nesta linha.
+        concluidoSemMotoboy(null, "RETIRADA NO BALCAO - cliente Ana", "40.00");
+        concluidoSemMotoboy(null, "Entregar no portao azul", "70.00");
+
+        Object[] linha = semMotoboy();
+
+        assertEquals(1L, ((Number) linha[0]).longValue(),
+                "o pedido antigo de balcao ficou na linha, ou a entrega antiga saiu dela");
+        assertEquals(0, ((BigDecimal) linha[2]).compareTo(new BigDecimal("70.00")));
+    }
 }

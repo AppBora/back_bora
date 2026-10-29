@@ -211,6 +211,11 @@ public class CobradorDePixService {
             // nunca foi para a cozinha. As duas coisas moram no EstornoDaVendaService.
             // false: este PIX nunca foi pago, entao a venda nao entrou no historico nem gerou cashback.
             devolucao.devolver(p, anterior, false);
+            // RN07, e NAO e so auditoria: esta linha e a unica fonte de "de que status o pedido
+            // foi cancelado", e e dela que o `rebaixarDeNovo` depende quando o PIX cai DEPOIS do
+            // cancelamento -- o caso para o qual ele foi escrito. Sem ela o estoque devolvido aqui
+            // nunca sai outra vez, a comida sai, e um segundo cancelamento devolve em dobro.
+            devolucao.registrarCancelamentoNoHistorico(p, anterior);
             cancelados.add(p);
         }
         return cancelados;

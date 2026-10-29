@@ -90,6 +90,38 @@ public class EstornoDaVendaService {
         }
     }
 
+    /**
+     * Grava no historico que o pedido foi cancelado, e DE QUE status.
+     *
+     * <h2>Por que isto mora aqui, ao lado de quem le</h2>
+     * <p>O {@link #rebaixarDeNovo} decide o que baixar de novo lendo o {@code log_status} pelo
+     * {@code statusAntesDoCancelamento}. Quem cancela sem gravar essa linha deixa o estoque
+     * parado: o metodo nao acha de que status o pedido veio, loga "NADA foi baixado de novo" e
+     * devolve 0.</p>
+     *
+     * <p><b>Era exatamente o caso para o qual o rebaixarDeNovo foi escrito</b> (pente fino de
+     * 29/10/2026): o {@code CobradorDePixService} cancela o PIX de 30 minutos gravando o pedido
+     * direto, sem nenhuma linha de historico. Entao o PIX caia depois, o pedido reabria, e o
+     * insumo que o cancelamento devolveu NUNCA saia outra vez -- com a comida saindo. E se o
+     * lojista seguisse a instrucao da propria observacao do pedido e cancelasse de novo, o estoque
+     * era devolvido uma SEGUNDA vez.</p>
+     *
+     * <p>O {@code PedidoService} NAO usa este metodo: ele tem o {@code registrarLog} proprio, que
+     * grava tambem o usuario do painel que clicou. Aqui o usuario e nulo de proposito -- quem
+     * cancelou foi o sistema.</p>
+     */
+    @Transactional
+    public void registrarCancelamentoNoHistorico(Pedido p, StatusPedido anterior) {
+        if (p == null || p.id == null) return;
+        br.com.bora.entity.LogStatus registro = new br.com.bora.entity.LogStatus();
+        registro.setLojaId(p.lojaId);
+        registro.setPedidoId(p.id);
+        registro.setStatusAnterior(anterior == null ? null : anterior.name());
+        registro.setStatusNovo(StatusPedido.CANCELADO.name());
+        registro.setUsuarioId(null);
+        logs.save(registro);
+    }
+
     /** O pedido ja tinha entrado em producao? Depois disso o ingrediente nao volta. */
     private static boolean entrouEmPreparo(StatusPedido statusAntes) {
         return statusAntes == StatusPedido.EM_PREPARO || statusAntes == StatusPedido.PRONTO

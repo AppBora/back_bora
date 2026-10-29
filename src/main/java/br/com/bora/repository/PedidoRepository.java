@@ -340,19 +340,34 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
      * <p>Devolve quantidade, soma das taxas e soma dos valores, no mesmo formato das linhas da previa,
      * para a tela de acerto mostrar isso como uma linha a mais. Quem faz o acerto e justamente quem
      * precisa saber que esse dinheiro esta fora da conta.</p>
+     *
+     * <p><b>Venda de balcao NAO entra</b> (pente fino de 29/10/2026). A retirada tambem termina em
+     * ENTREGUE sem entregador nenhum, entao ela casava com todos os filtros: numa loja com PDV, a
+     * tela de acerto mostrava o faturamento do caixa inteiro nesta linha, e o recibo impresso saia
+     * com esse valor em "Total entregue". O lojista ou ignorava a linha -- e ai ela nao servia para
+     * nada -- ou ia cobrar de alguem um dinheiro que estava na gaveta dele.</p>
      */
     @Query("select count(p), coalesce(sum(p.taxaEntrega), 0), coalesce(sum(p.valorTotal), 0) "
          + "from Pedido p where p.lojaId = :lojaId "
          + "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null "
          + "and (p.entregador is null or trim(p.entregador) = '') "
          + "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) "
+         // RETIRADA FICA FORA. Isto nao e refinamento: sem esta condicao, TODA venda de balcao
+         // entrava aqui. A Frente de Caixa grava tipoEntrega=RETIRADA e avanca o pedido direto
+         // para ENTREGUE, sem entregador -- ou seja, satisfazia as quatro condicoes acima e o
+         // faturamento do balcao aparecia todo dia como "dinheiro de entrega sem responsavel".
+         // O alarme criado para achar entrega perdida afogava no movimento do caixa.
+         //
+         // As duas linhas copiam o `Pedido.ehRetirada()`: a coluna manda, e so quando ela e nula
+         // (pedido anterior a V48) vale a deducao pelo texto da observacao.
+         + "and (p.tipoEntrega is null or upper(p.tipoEntrega) <> 'RETIRADA') "
+         + "and (p.tipoEntrega is not null or p.observacao is null "
+         + "     or upper(p.observacao) not like '%RETIRADA NO BALC%') "
          + "and p.entregueEm >= :inicio and p.entregueEm < :fim")
     java.util.List<Object[]> entregasSemMotoboy(@Param("lojaId") Long lojaId,
                                                 @Param("inicio") OffsetDateTime inicio,
                                                 @Param("fim") OffsetDateTime fim);
 
-    /** Grava que o marketplace aceitou o aceite automatico. So a coluna da marca, nada mais. */
-    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     /**
      * Pedido do marketplace que entrou e NAO teve o aceite confirmado — com janela de tempo.
      *
@@ -373,6 +388,25 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                                      @Param("canal") String canal,
                                      @Param("desde") OffsetDateTime desde);
 
+    /**
+     * Grava que o marketplace aceitou o aceite automatico. So a coluna da marca, nada mais.
+     *
+     * <p><b>O {@code @Modifying} fica AQUI, colado nesta assinatura.</b> Em 27/10/2026 o
+     * {@code semAceiteConfirmado} foi inserido ENTRE a anotacao e este UPDATE (commit 45e20d2).
+     * Em Java a anotacao cola na proxima declaracao: ela foi para o SELECT, e este metodo ficou
+     * sem ela.</p>
+     *
+     * <p>Sem {@code @Modifying}, o Spring Data nao reconhece isto como escrita: cai em
+     * {@code SingleEntityExecution}, chama {@code getSingleResult()}, e o Hibernate estoura em
+     * {@code verifySelect()} — em TODA chamada. O estrago medido era o pior possivel: o
+     * {@code confirm} IA para o iFood/99, isto estourava logo depois, o evento nunca era
+     * confirmado no canal e o aceite voltava a ser enviado a cada 30 segundos por 2 horas. E
+     * exatamente o "confirm em dobro" que o projeto nomeia como risco de bloqueio de conta.</p>
+     *
+     * <p><b>Nao insira metodo entre a anotacao e esta linha.</b> O
+     * {@code OmodifyingNaoDesgarraTest} guarda isso para todo repositorio do projeto.</p>
+     */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update Pedido p set p.aceiteEnviadoEm = :agora where p.id = :id and p.lojaId = :lojaId")
     int marcarAceiteEnviado(@Param("lojaId") Long lojaId, @Param("id") Long id,
                             @Param("agora") OffsetDateTime agora);

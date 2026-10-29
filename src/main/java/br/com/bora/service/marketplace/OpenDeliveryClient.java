@@ -474,16 +474,20 @@ public class OpenDeliveryClient implements MarketplaceClient {
      * certo em mandar sem corpo, agora com a fonte.
      */
     @Override
-    public void responderPedidoDeCancelamento(IntegracaoCanal i, String orderId, boolean aceitar, String statusInterno) {
+    public boolean responderPedidoDeCancelamento(IntegracaoCanal i, String orderId, boolean aceitar, String statusInterno) {
         if (aceitar) {
-            post(i, orderId, "acceptCancellation", null);
-            return;
+            // O retorno do `post` DEVE subir. Ele ficava descartado aqui, e o proprio javadoc do
+            // `post` diz "false na falha, para o chamador saber que ha o que reenviar" -- e o
+            // chamador nao olhava. Resultado medido: cancelamento aceito so no Bora, pedido ativo
+            // na 99. E o mesmo estrago que o `enviarCancelamento` (logo acima) relanca de
+            // proposito no caminho em que a LOJA pede o cancelamento.
+            return post(i, orderId, "acceptCancellation", null);
         }
         Map<String, Object> corpo = new LinkedHashMap<>();
         boolean saiu = "SAIU_PARA_ENTREGA".equals(statusInterno) || "ENTREGUE".equals(statusInterno);
         corpo.put("reason", saiu ? "O pedido ja saiu para entrega" : "O pedido ja foi preparado");
         corpo.put("code", saiu ? "OUT_FOR_DELIVERY" : "DISH_ALREADY_DONE");
-        post(i, orderId, "denyCancellation", corpo);
+        return post(i, orderId, "denyCancellation", corpo);
     }
 
     /** @return true se a 99 aceitou; false na falha, para o chamador saber que ha o que reenviar. */

@@ -37,7 +37,6 @@ public class PublicController {
     private static final org.slf4j.Logger AUDITORIA =
             org.slf4j.LoggerFactory.getLogger("AUDITORIA");
 
-
     private final LojaRepository lojas;
     private final ProdutoRepository produtos;
     private final PedidoRepository pedidos;
@@ -107,7 +106,6 @@ public class PublicController {
         this.descontos = descontos;
         this.freio = freio;
     }
-
 
     /**
      * A marca que o cliente final enxerga: nome, logo e cores DA LOJA.
@@ -207,10 +205,13 @@ public class PublicController {
         // Quem nao tem posicao gravada vai para o fim, em A-Z: e o comportamento que toda loja tinha
         // antes desta mudanca, e continua sendo o de quem nunca abriu a tela de ordem.
         java.util.Map<String, Integer> posicaoDaSecao = ordemDasCategorias.posicoesDaLoja(lojaId);
-        List<Produto> lista = new java.util.ArrayList<>(
-                produtos.findByLojaIdAndAtivoTrueOrderByCategoriaAscNomeAsc(lojaId));
+        // A consulta NAO traz a coluna da foto: ver ProdutoRepository.cardapioPublico. Eram ~601 kB
+        // de base64 por loja lidos do banco e descartados na montagem do JSON, em TODA abertura do
+        // cardapio -- a tela mais aberta do sistema, e a unica sem cache.
+        List<ItemDoCardapio> lista = new java.util.ArrayList<>(
+                produtos.cardapioPublico(lojaId).stream().map(ItemDoCardapio::de).toList());
         lista.sort(java.util.Comparator.comparing(
-                (Produto p) -> br.com.bora.service.CategoriaOrdemService.rotulo(p.categoria),
+                (ItemDoCardapio p) -> br.com.bora.service.CategoriaOrdemService.rotulo(p.categoria()),
                 br.com.bora.service.CategoriaOrdemService.comparador(posicaoDaSecao)));
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("loja", Map.of("id", loja.id, "nome", loja.nome == null ? "Cardápio" : loja.nome));
@@ -230,7 +231,7 @@ public class PublicController {
         }).toList());
         // complementos por produto (1 consulta para grupos + 1 para itens)
         List<br.com.bora.entity.ComplementoGrupo> gs = lista.isEmpty() ? List.of()
-                : compGrupos.findByLojaIdAndProdutoIdInOrderById(lojaId, lista.stream().map(p -> p.id).toList());
+                : compGrupos.findByLojaIdAndProdutoIdInOrderById(lojaId, lista.stream().map(ItemDoCardapio::id).toList());
         Map<Long, List<Map<String, Object>>> itensPorGrupo = new java.util.HashMap<>();
         if (!gs.isEmpty()) {
             compItens.findByLojaIdAndGrupoIdInOrderById(lojaId, gs.stream().map(g -> g.id).toList()).forEach(i -> {
@@ -248,12 +249,12 @@ public class PublicController {
         }
         resp.put("produtos", lista.stream().map(p -> {
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", p.id);
-            m.put("nome", p.nome);
-            m.put("categoria", br.com.bora.service.CategoriaOrdemService.rotulo(p.categoria));
-            m.put("preco", p.preco);
-            m.put("imagem", enderecoDaImagem(lojaId, p.id, p.imagemUrl));
-            m.put("complementos", gruposPorProduto.getOrDefault(p.id, List.of()));
+            m.put("id", p.id());
+            m.put("nome", p.nome());
+            m.put("categoria", br.com.bora.service.CategoriaOrdemService.rotulo(p.categoria()));
+            m.put("preco", p.preco());
+            m.put("imagem", p.endereco(lojaId));
+            m.put("complementos", gruposPorProduto.getOrDefault(p.id(), List.of()));
             // Esgotado JA NO MENU. Sem isto o cliente montava o carrinho inteiro e so descobria no
             // "confirmar pedido" -- a pior forma de contar isso a ele, e a mesma razao pela qual o
             // cardapio ja avisa antes que a loja esta fechada.
@@ -262,12 +263,46 @@ public class PublicController {
             // ultimo. Quem garante de verdade e a baixa no banco, na hora de gravar o pedido. Produto
             // que nao controla estoque (estoque nulo) nunca aparece esgotado -- e o caso de todos os
             // 123 produtos da producao hoje.
-            boolean esgotado = (p.estoque != null && p.estoque < 1)
-                    || !insumos.fichaDaParaFazer(lojaId, p.id, 1);
+            boolean esgotado = (p.estoque() != null && p.estoque() < 1)
+                    || !insumos.fichaDaParaFazer(lojaId, p.id(), 1);
             m.put("esgotado", esgotado);
             return m;
         }).toList());
         return resp;
+    }
+
+    /**
+     * O produto como o cardapio publico precisa dele: <b>sem a foto e sem o custo</b>.
+     *
+     * <p>Nao e a entidade {@code Produto} de proposito. A entidade carrega {@code imagemUrl} (a
+     * foto inteira em base64) e {@code custo} -- um e peso que ninguem le, o outro e numero de dono
+     * que nao tem o que fazer numa tela publica. Ver {@code ProdutoRepository.cardapioPublico}.</p>
+     *
+     * <p>{@code urlExterna} e o endereco que o lojista COLOU, quando foi isso que ele fez; para a
+     * foto que ele subiu vem nulo e quem serve a imagem e o proprio Bora, com cache no navegador.</p>
+     */
+    private record ItemDoCardapio(Long id, String nome, String categoria, BigDecimal preco,
+                                  Integer estoque, String urlExterna, boolean temImagem) {
+
+        static ItemDoCardapio de(Object[] c) {
+            return new ItemDoCardapio((Long) c[0], (String) c[1], (String) c[2], (BigDecimal) c[3],
+                    (Integer) c[4], (String) c[5], Boolean.TRUE.equals(c[6]));
+        }
+
+        /**
+         * Foto do produto: ENDERECO, nao a foto inteira dentro do JSON.
+         *
+         * <p>As fotos vinham embutidas no cardapio em base64. Na Zira isso era <b>89% do peso</b>:
+         * 452 kB de foto num cardapio de 510 kB, baixados de novo a cada abertura, no 4G do
+         * cliente -- inclusive a foto do produto que ele nunca vai rolar ate ver. Como endereco, o
+         * navegador baixa so o que aparece, guarda em cache e nao repete.</p>
+         *
+         * <p>Quem tiver um endereco de verdade gravado (http...) continua como esta.</p>
+         */
+        String endereco(Long lojaId) {
+            if (urlExterna != null && !urlExterna.isBlank()) return urlExterna;
+            return temImagem ? "/public/loja/" + lojaId + "/produto/" + id + "/imagem" : null;
+        }
     }
 
     /**
@@ -304,22 +339,6 @@ public class PublicController {
         var cfg = configuracoes.findByLojaId(lojaId).orElse(null);
         String dado = cfg == null ? null : ("logo".equals(qual) ? cfg.logoUrl : cfg.bannerUrl);
         return servirImagem(dado, etagRecebida);
-    }
-
-    /**
-     * Foto do produto: endereço, não a foto inteira dentro do JSON.
-     *
-     * <p>As fotos vinham embutidas no cardápio em base64. Na Zirá isso era <b>89% do peso</b>: 452 KB
-     * de foto num cardápio de 510 KB, baixados de novo a cada abertura, no 4G do cliente — inclusive
-     * as fotos de produtos que ele nunca vai rolar até ver. Como endereço, o navegador baixa só o que
-     * aparece, guarda em cache e não repete.</p>
-     *
-     * <p>Quem já tiver um endereço de verdade gravado (http...) continua como está.</p>
-     */
-    private String enderecoDaImagem(Long lojaId, Long produtoId, String valor) {
-        if (valor == null || valor.isBlank()) return null;
-        if (!valor.startsWith("data:")) return valor;
-        return "/public/loja/" + lojaId + "/produto/" + produtoId + "/imagem";
     }
 
     /** Serve a foto do produto a partir do que está gravado, com cache no navegador. Ver 8.7. */
@@ -735,6 +754,10 @@ public class PublicController {
             // uma chamada solta aqui, e os outros caminhos de cancelamento esqueciam dela.
             // false: este PIX nunca foi pago, entao a venda nao entrou no historico nem gerou cashback.
             devolucaoDeEstoque.devolver(p, anterior, false);
+            // RN07: toda mudanca de status tem linha no historico. Aqui o pedido nem chegou a ter
+            // PIX, entao nao ha reabertura possivel -- mas deixar um cancelamento sem linha e o
+            // mesmo descuido que custou o estoque no caminho do PIX expirado.
+            devolucaoDeEstoque.registrarCancelamentoNoHistorico(p, anterior);
         }));
     }
     /**
