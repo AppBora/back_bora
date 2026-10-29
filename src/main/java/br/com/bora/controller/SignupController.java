@@ -35,13 +35,17 @@ public class SignupController {
     private final br.com.bora.service.ProvisionamentoService provisionamento;
     private final br.com.bora.service.EmpresaService empresas;
     private final br.com.bora.security.FreioDeTentativas freio;
+    /** Teto de lojas criadas por origem. Ver TetoDeCadastros. */
+    private final br.com.bora.security.TetoDeCadastros teto;
 
     public SignupController(LojaRepository lojas, UsuarioRepository usuarios,
                             UsuarioLojaRepository vinculos, PasswordEncoder encoder,
                             br.com.bora.service.ProvisionamentoService provisionamento,
                             br.com.bora.service.EmpresaService empresas,
-                            br.com.bora.security.FreioDeTentativas freio) {
+                            br.com.bora.security.FreioDeTentativas freio,
+                            br.com.bora.security.TetoDeCadastros teto) {
         this.freio = freio;
+        this.teto = teto;
         this.empresas = empresas;
         this.lojas = lojas;
         this.usuarios = usuarios;
@@ -72,8 +76,14 @@ public class SignupController {
         String email = req.adminEmail().trim().toLowerCase();
         // Este cadastro responde diferente para senha certa e errada de uma conta que existe, o que o
         // torna um adivinhador de senha. Enquanto o fluxo for esse, o freio é o que impede a varredura.
-        String chave = br.com.bora.security.FreioDeTentativas.chave(email, br.com.bora.security.FreioDeTentativas.origem(http));
+        String origem = br.com.bora.security.FreioDeTentativas.origem(http);
+        String chave = br.com.bora.security.FreioDeTentativas.chave(email, origem);
         freio.conferir(chave);
+        // E o teto de LOJAS CRIADAS, que e outra coisa do freio acima: aquele conta tentativa
+        // ERRADA, e o caminho que cria loja nova (e-mail que ainda nao existe) nunca erra. Sem este
+        // teto, qualquer um na internet criava lojas em sequencia, sem limite nenhum. Conferido
+        // ANTES de criar: a criacao e transacional e semeia dados da loja.
+        teto.conferir(origem);
 
         Usuario existente = usuarios.findByEmail(email).orElse(null);
         if (existente != null) {
@@ -90,8 +100,8 @@ public class SignupController {
             // recadastrava com a MESMA conta informando o CNPJ de um cliente, e a loja nova nascia dentro
             // da empresa dele; dali, pelos vínculos da rede, o painel do cliente ficava a dois cliques.
             // CNPJ está na nota fiscal e na fachada: não é segredo, não prova posse.
-            Loja loja = novaLoja(req, jaPertenceAEmpresaDoDocumento(existente, req.documento()),
-                    br.com.bora.security.FreioDeTentativas.origem(http));
+            Loja loja = novaLoja(req, jaPertenceAEmpresaDoDocumento(existente, req.documento()), origem);
+            teto.criou(origem);
             UsuarioLoja v = new UsuarioLoja();
             v.setUsuarioId(existente.getId());
             v.setLojaId(loja.getId());
@@ -104,7 +114,8 @@ public class SignupController {
                     "mensagem", "Nova loja vinculada à sua conta! Entre e use o seletor de loja para alternar.");
         }
 
-        Loja loja = novaLoja(req, false, br.com.bora.security.FreioDeTentativas.origem(http));
+        Loja loja = novaLoja(req, false, origem);
+        teto.criou(origem);
 
         Usuario admin = new Usuario();
         admin.setLojaId(loja.getId());

@@ -56,7 +56,8 @@ class SignupEmpresaTest {
 
         EmpresaService empresas = new EmpresaService(empresasRepo, lojas);
         controller = new SignupController(lojas, usuarios, vinculos, encoder,
-                mock(ProvisionamentoService.class), empresas, new FreioDeTentativas());
+                mock(ProvisionamentoService.class), empresas, new FreioDeTentativas(),
+                new br.com.bora.security.TetoDeCadastros());
 
         // A empresa da vítima já existe com esse CNPJ.
         Empresa daVitima = new Empresa();
@@ -198,5 +199,63 @@ class SignupEmpresaTest {
 
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
         assertTrue(e.getReason() != null && e.getReason().contains("8"), e.getReason());
+    }
+
+    // --------------------------------------------- o teto de lojas criadas por origem
+
+    /**
+     * O endpoint nao tinha teto nenhum por origem (pente fino de 29/10/2026).
+     *
+     * <p>A unica trava era o {@code FreioDeTentativas}, que conta tentativa ERRADA -- e o caminho
+     * que cria loja nova (e-mail que ainda nao existe) nunca erra, entao o {@code errou} nunca era
+     * chamado. E a chave do freio inclui o e-mail: mudar o e-mail a cada chamada ja gerava chave
+     * nova de qualquer jeito. Qualquer um criava lojas em sequencia, sem limite.</p>
+     */
+    @Test
+    void aSEXTAlojaDAmesmaORIGEMnaHORAeBARRADA() {
+        br.com.bora.security.TetoDeCadastros teto = new br.com.bora.security.TetoDeCadastros();
+        final String daMesmaMaquina = "203.0.113.7";
+
+        for (int i = 1; i <= 5; i++) {
+            teto.conferir(daMesmaMaquina);   // as cinco primeiras passam
+            teto.criou(daMesmaMaquina);
+        }
+
+        var e = assertThrows(ResponseStatusException.class, () -> teto.conferir(daMesmaMaquina));
+        assertEquals(429, e.getStatusCode().value());
+    }
+
+    @Test
+    void oDONOdeREDEcriaAScincoLOJASdeleNUMAsentada() {
+        // O caso legitimo mais pesado que existe. Barrar a terceira tiraria do ar um cliente de
+        // verdade para conter um abuso que ninguem viu.
+        br.com.bora.security.TetoDeCadastros teto = new br.com.bora.security.TetoDeCadastros();
+
+        for (int i = 1; i <= 5; i++) {
+            teto.conferir("198.51.100.4");
+            teto.criou("198.51.100.4");
+        }
+        // nenhuma excecao ate aqui
+    }
+
+    @Test
+    void oCADASTROrecusadoNAOconta() {
+        // So `criou` incrementa. Quem tentou e levou 409 (CNPJ ja usado) nao gastou a cota: senao
+        // bastaria errar cinco vezes para o lojista de verdade ficar sem conseguir cadastrar.
+        br.com.bora.security.TetoDeCadastros teto = new br.com.bora.security.TetoDeCadastros();
+
+        for (int i = 1; i <= 20; i++) teto.conferir("192.0.2.9");
+        teto.conferir("192.0.2.9");
+        // nenhuma excecao: conferir sozinho nao conta nada
+    }
+
+    @Test
+    void origensDIFERENTEStemCOTASseparadas() {
+        br.com.bora.security.TetoDeCadastros teto = new br.com.bora.security.TetoDeCadastros();
+        for (int i = 1; i <= 5; i++) { teto.conferir("203.0.113.1"); teto.criou("203.0.113.1"); }
+
+        teto.conferir("203.0.113.2");   // outro lugar, outra cota
+
+        assertThrows(ResponseStatusException.class, () -> teto.conferir("203.0.113.1"));
     }
 }
