@@ -77,9 +77,18 @@ public class IaController {
         return ia.recuperarClientes(ctx.lojaId());
     }
 
-    /** ROI do Recuperador nos últimos 30 dias. */
+    /**
+     * ROI do Recuperador nos últimos 30 dias.
+     *
+     * <p>Exige papel: o {@code valorRecuperado} e a soma do {@code valorTotal} dos clientes que
+     * voltaram a comprar -- <b>numero de dono</b>. A unica trava daqui era {@code exigirModulo},
+     * que confere se a loja PAGOU o add-on, e nao quem esta perguntando. O endpoint irmao
+     * ({@code POST /recuperar}), que so dispara a rotina, ja exigia papel; este, que entrega
+     * faturamento, nao exigia nenhum (pente fino de 29/10/2026).</p>
+     */
     @GetMapping("/recuperacao/resumo")
     public Map<String, Object> resumoRecuperacao() {
+        ctx.requirePapel("ADMINISTRADOR_LOJA", "GERENTE");
         return ia.resumoRecuperacao(ctx.lojaId());
     }
 

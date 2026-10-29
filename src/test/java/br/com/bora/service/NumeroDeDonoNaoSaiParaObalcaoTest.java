@@ -202,4 +202,39 @@ class NumeroDeDonoNaoSaiParaObalcaoTest {
     void oGERENTEabreAfICHA() {
         assertNull(fichaCom("GERENTE"));
     }
+
+    // ------------------------------------------------ o faturamento recuperado pelo Modulo IA
+
+    private ResponseStatusException resumoDaIAcom(String papel) {
+        br.com.bora.controller.IaController c = new br.com.bora.controller.IaController(
+                mock(IaService.class), mock(AgenteRedeService.class),
+                mock(br.com.bora.repository.LojaRepository.class), ctx(papel));
+        try {
+            c.resumoRecuperacao();
+            return null;
+        } catch (ResponseStatusException e) {
+            return e;
+        }
+    }
+
+    /**
+     * O {@code valorRecuperado} e a soma do {@code valorTotal} dos clientes que voltaram a comprar.
+     *
+     * <p>A unica trava deste endpoint era o {@code exigirModulo}, que confere se a loja PAGOU o
+     * add-on -- nao quem esta perguntando. O endpoint irmao ({@code POST /api/ia/recuperar}), que so
+     * dispara a rotina, ja exigia papel; este, que entrega faturamento, nao exigia nenhum (pente
+     * fino de 29/10/2026).</p>
+     */
+    @Test
+    void oOPERADORnaoLEoFATURAMENTOrecuperadoPELAia() {
+        ResponseStatusException erro = resumoDaIAcom("OPERADOR");
+
+        assertNotNull(erro, "o balconista leu faturamento da loja");
+        assertEquals(403, erro.getStatusCode().value());
+    }
+
+    @Test
+    void oGERENTEleOresumoDAia() {
+        assertNull(resumoDaIAcom("GERENTE"));
+    }
 }

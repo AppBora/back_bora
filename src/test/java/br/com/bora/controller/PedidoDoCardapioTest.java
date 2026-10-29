@@ -175,6 +175,66 @@ class PedidoDoCardapioTest {
         verify(pedidos, never()).save(any(Pedido.class));
     }
 
+    // ------------------------------------------------ corpo mal formado e 400, nao 500
+
+    /**
+     * Isto e porta ABERTA na internet: chega corpo torto sem ninguem querer.
+     *
+     * <p>As tres leituras eram diretas -- o cast de {@code itens} para List, o
+     * {@code Long.valueOf(produtoId)} e o {@code Integer.parseInt(quantidade)} -- e nao existe
+     * tratador global de excecao no projeto. Qualquer uma delas virava 500 com rastro de pilha: a
+     * mensagem nao ajuda quem chamou, e o 500 manda quem le o log procurar defeito no servidor
+     * (pente fino de 29/10/2026).</p>
+     */
+    @Test
+    void itensQUEnaoSAOlistaDA400_eNAO500() {
+        Map<String, Object> m = corpo();
+        m.put("itens", "dois acai");
+
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, m, requisicao()));
+
+        assertEquals(400, e.getStatusCode().value(),
+                "corpo torto virou erro do servidor: " + e.getStatusCode());
+    }
+
+    @Test
+    void produtoIdQUEnaoEHnumeroDA400() {
+        Map<String, Object> m = corpo();
+        m.put("itens", List.of(Map.of("produtoId", "dez", "quantidade", 1)));
+
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, m, requisicao()));
+
+        assertEquals(400, e.getStatusCode().value());
+        assertTrue(String.valueOf(e.getReason()).contains("produtoId"),
+                "o 400 tem de dizer QUAL campo veio errado: " + e.getReason());
+    }
+
+    @Test
+    void quantidadeQUEnaoEHnumeroDA400() {
+        Map<String, Object> m = corpo();
+        m.put("itens", List.of(Map.of("produtoId", 10, "quantidade", "dois")));
+
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, m, requisicao()));
+
+        assertEquals(400, e.getStatusCode().value());
+        assertTrue(String.valueOf(e.getReason()).contains("quantidade"), e.getReason());
+    }
+
+    @Test
+    void itemSEMquantidadeCONTINUAvalendoUM() {
+        // O `getOrDefault(..., 1)` tem de continuar valendo: a tela nao manda quantidade 1.
+        Map<String, Object> m = corpo();
+        m.put("itens", List.of(Map.of("produtoId", 10)));
+
+        controller.pedirOnline(1L, m, requisicao());
+
+        assertEquals(0, new BigDecimal("20.00").compareTo(salvo().valorTotal),
+                "1 x R$ 20; o padrao de quantidade se perdeu");
+    }
+
     @Test
     void semNome_naoPassa() {
         Map<String, Object> m = corpo();

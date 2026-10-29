@@ -83,6 +83,21 @@ public final class LarguraDeColuna {
     /** {@code cliente.id_externo}. */
     public static final int CLIENTE_ID_EXTERNO = 160;
 
+    // ---- produto (o lojista digita, e aqui o estouro e RECUSADO em vez de cortado)
+    /**
+     * {@code produto.nome}, varchar(160) desde a V1.
+     *
+     * <p>Diferente das colunas de marketplace, este valor vem de um formulario que o lojista esta
+     * olhando: cortar calado faria o produto aparecer com o nome pela metade no cardapio do cliente,
+     * sem ninguem entender por que. Entao o servico RECUSA com 400 e diz o limite -- quem digitou
+     * esta na tela e conserta. Sem limite nenhum, o Postgres recusava o INSERT e a tela mostrava um
+     * 500 sem explicacao (pente fino de 29/10/2026).</p>
+     */
+    public static final int PRODUTO_NOME = 160;
+
+    /** {@code produto.categoria}, varchar(80) desde a V1. Mesma regra do nome. */
+    public static final int PRODUTO_CATEGORIA = 80;
+
     // ---- cobranca da plataforma
     /**
      * {@code pagamento_assinatura.descricao} — nasce com o nome da loja e recebe a observacao do

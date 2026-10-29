@@ -167,12 +167,22 @@ public class RelatorioService {
         BigDecimal margemPct = fat.signum() == 0 ? BigDecimal.ZERO
                 : margem.multiply(BigDecimal.valueOf(100)).divide(fat, 1, RoundingMode.HALF_UP);
 
-        // por entregador (entregas concluídas)
+        // POR ENTREGADOR, e os DOIS numeros do MESMO conjunto.
+        //
+        // A contagem somava 1 so para ENTREGUE e o valor somava TODO pedido nao cancelado daquele
+        // entregador, em qualquer status. A tela imprime os dois juntos ("N entregas · R$ X"),
+        // entao um pedido com motoboy escolhido e ainda em rota aparecia como "0 entregas" com
+        // dinheiro ao lado -- e quem le o relatorio nao tem como saber de onde veio aquele valor
+        // (pente fino de 29/10/2026).
+        //
+        // A linha e "entregas concluidas", como o titulo sempre disse: pedido em rota entra no
+        // relatorio do dia em que for entregue.
         Map<String, Map<String, Object>> porEntregador = new LinkedHashMap<>();
         for (Pedido p : vendas) {
             if (p.entregador == null || p.entregador.isBlank()) continue;
+            if (p.status != StatusPedido.ENTREGUE) continue;
             var m = porEntregador.computeIfAbsent(p.entregador, x -> novo());
-            inc(m, "entregas", p.status == StatusPedido.ENTREGUE ? 1 : 0);
+            inc(m, "entregas", 1);
             add(m, "valor", p.valorTotal);
         }
 

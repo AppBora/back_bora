@@ -316,6 +316,23 @@ public class PublicController {
      * <p>Diz o PRODUTO e diz o que fazer. Nao diz "insumo", nao diz "estoque negativo" e nao diz
      * quanto ainda tem -- saldo da loja nao e assunto de quem esta comprando.</p>
      */
+    /**
+     * Um numero do corpo do pedido, ou 400 dizendo qual campo veio errado.
+     *
+     * <p>{@code Long.valueOf} e {@code Integer.parseInt} estouram {@code NumberFormatException},
+     * que sem tratador global virava 500 com rastro de pilha. Num endpoint publico isso e duas
+     * coisas ruins de uma vez: a mensagem nao ajuda quem chamou, e o 500 manda quem le o log
+     * procurar defeito no servidor.</p>
+     */
+    private static Long numeroDoPedido(Object valor, String campo) {
+        try {
+            return Long.valueOf(String.valueOf(valor).trim());
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "O campo " + campo + " do item veio invalido.");
+        }
+    }
+
     private static String esgotou(String produto) {
         return "Acabou o estoque de \"" + (produto == null ? "um item" : produto)
                 + "\". Tire do carrinho para continuar, ou diminua a quantidade.";
@@ -448,8 +465,21 @@ public class PublicController {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "A loja esta fechada agora. Confira o horario de funcionamento e volte depois.");
         }
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> pedidoItens = (List<Map<String, Object>>) body.get("itens");
+        // CORPO MAL FORMADO E 400, NAO 500 (pente fino de 29/10/2026).
+        //
+        // O cast era direto: `itens` vindo como texto estourava ClassCastException, e nao existe
+        // tratador global de excecao no projeto -- entao saia um 500 com rastro de pilha. 500 diz
+        // "o servidor quebrou" e manda quem le o log procurar defeito aqui; o certo e dizer que o
+        // pedido veio errado. E isto e porta ABERTA na internet: chega corpo torto sem ninguem
+        // querer.
+        List<Map<String, Object>> pedidoItens;
+        try {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> lido = (List<Map<String, Object>>) body.get("itens");
+            pedidoItens = lido;
+        } catch (ClassCastException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Itens do pedido inválidos");
+        }
         if (pedidoItens == null || pedidoItens.isEmpty() || pedidoItens.size() > 50) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Itens do pedido inválidos");
         }
@@ -543,8 +573,9 @@ public class PublicController {
             p.valorTotal = BigDecimal.ZERO;
             p = pedidos.save(p);
             for (Map<String, Object> it : pedidoItens) {
-                Long produtoId = Long.valueOf(String.valueOf(it.get("produtoId")));
-                int qtd = Integer.parseInt(String.valueOf(it.getOrDefault("quantidade", 1)));
+                // Mesma razao do cast acima: numero mal escrito e 400, e o 400 DIZ qual campo.
+                Long produtoId = numeroDoPedido(it.get("produtoId"), "produtoId");
+                int qtd = numeroDoPedido(it.getOrDefault("quantidade", 1), "quantidade").intValue();
                 if (qtd < 1 || qtd > 99) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantidade inválida");
                 Produto prod = produtos.findById(produtoId)
                         .filter(x -> lojaId.equals(x.lojaId) && Boolean.TRUE.equals(x.ativo))
@@ -854,9 +885,11 @@ public class PublicController {
         Loja loja = lojas.findById(lojaId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Loja não encontrada"));
         IntegracaoCanal integ = integracoes.findByLojaIdAndCanal(lojaId, "PIX").orElse(null);
-        boolean viaSubconta = token != null && loja.asaasWebhookToken != null
-                && token.equals(loja.asaasWebhookToken);
-        // Item 8.8: comparacao em tempo constante. O `equals` parava no primeiro caractere diferente.
+        // Item 8.8: comparacao em tempo constante nos DOIS caminhos. O comentario abaixo dizia que
+        // isso valia, e valia so para o legado: este caminho -- o da subconta, que e o das lojas
+        // novas -- continuava com `equals`, que para no primeiro caractere diferente (pente fino de
+        // 29/10/2026). O `Segredos.iguais` tambem trata nulo, entao as guardas de nulo saem.
+        boolean viaSubconta = br.com.bora.security.Segredos.iguais(token, loja.asaasWebhookToken);
         boolean viaLegado = integ != null
                 && br.com.bora.security.Segredos.iguais(token, integ.webhookToken);
         if (!viaSubconta && !viaLegado) {

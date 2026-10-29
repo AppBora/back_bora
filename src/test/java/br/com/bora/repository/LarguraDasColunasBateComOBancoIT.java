@@ -79,6 +79,11 @@ class LarguraDasColunasBateComOBancoIT {
         // cabe e voltaria a desfazer o registro do pagamento.
         m.put("pagamento_assinatura.nota_numero", LarguraDeColuna.PAGAMENTO_NOTA_NUMERO);
         m.put("pagamento_assinatura.nota_url", LarguraDeColuna.PAGAMENTO_NOTA_URL);
+        // 29/10/2026: o nome e a categoria do produto nao tinham teto em lugar nenhum -- nem no
+        // servico, nem no `maxlength` do formulario. Aqui elas sao RECUSADAS, nao cortadas (quem
+        // digita esta na tela), mas a constante tem de bater com o banco do mesmo jeito.
+        m.put("produto.nome", LarguraDeColuna.PRODUTO_NOME);
+        m.put("produto.categoria", LarguraDeColuna.PRODUTO_CATEGORIA);
         return m;
     }
 

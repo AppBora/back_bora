@@ -55,6 +55,7 @@ public class ProdutoService {
     public Produto criar(Produto p) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         validarNome(p.nome);
+        validarCategoria(p.categoria);
         p.lojaId = ctx.lojaId();
         p.id = null;
         p.codigoExterno = codigoLimpo(p.codigoExterno);
@@ -65,6 +66,7 @@ public class ProdutoService {
     public Produto atualizar(Long id, Produto dados) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         validarNome(dados.nome);
+        validarCategoria(dados.categoria);
         Produto p = buscar(id);
         p.nome = dados.nome;
         p.categoria = dados.categoria;
@@ -217,6 +219,27 @@ public class ProdutoService {
     private void validarNome(String nome) {
         if (nome == null || nome.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nome do produto é obrigatório");
+        }
+        if (nome.trim().length() > br.com.bora.entity.LarguraDeColuna.PRODUTO_NOME) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "O nome do produto pode ter até " + br.com.bora.entity.LarguraDeColuna.PRODUTO_NOME
+                            + " caracteres (o seu tem " + nome.trim().length() + ").");
+        }
+    }
+
+    /**
+     * A categoria cabe na coluna?
+     *
+     * <p>Nao havia teto em lugar nenhum -- nem aqui, nem no {@code maxlength} do formulario
+     * (pente fino de 29/10/2026). A coluna e varchar(80) e o Postgres RECUSA o que nao cabe, com
+     * {@code value too long for type character varying(80)}: o lojista colava um texto longo e
+     * levava um 500 sem explicacao, com o cadastro perdido. Recusar aqui diz o que fazer.</p>
+     */
+    private void validarCategoria(String categoria) {
+        if (categoria != null && categoria.trim().length() > br.com.bora.entity.LarguraDeColuna.PRODUTO_CATEGORIA) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A categoria pode ter até " + br.com.bora.entity.LarguraDeColuna.PRODUTO_CATEGORIA
+                            + " caracteres (a sua tem " + categoria.trim().length() + ").");
         }
     }
 
