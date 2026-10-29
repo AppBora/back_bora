@@ -868,6 +868,12 @@ public class PublicController {
         // cancelamento, porque ai o texto e "PIX (pago APOS o cancelamento)". O dinheiro entrou, o
         // pedido reabriu e foi para a cozinha, e so o cliente nao sabia.
         m.put("pago", p.pagoEm != null);
+        // RETIRADA: a tela do cliente mostrava SEMPRE o passo "Saiu para entrega -- a caminho de
+        // voce", mesmo para quem escolheu buscar no balcao. Quem vai buscar fica esperando em casa
+        // um motoboy que nao existe (pente fino de 29/10/2026). A tela nao tinha como saber: este
+        // endpoint nao mandava o tipo de entrega. So o booleano, que e o que ela precisa -- endereco
+        // e telefone nao tem o que fazer numa resposta publica.
+        m.put("retirada", p.ehRetirada());
         m.put("loja", lojas.findById(lojaId).map(l -> l.nome).orElse(""));
         m.put("criadoEm", p.criadoEm);
         m.put("motivoCancelamento", p.motivoCancelamento);
