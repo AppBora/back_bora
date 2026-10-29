@@ -696,7 +696,13 @@ public class PedidoService {
         // PIX gerado e nao pago nunca entrou no historico do cliente nem gerou cashback: houve apenas o
         // debito do resgate. Lido ANTES da gravacao, porque e o estado em que a venda nasceu que decide
         // o que existe para desfazer.
-        final boolean vendaJaContabilizada = !p.pagamentoPendente();
+        //
+        // O `foiReabertoDepoisDeCancelado` entrou aqui no pente fino de 29/10/2026: o pedido que
+        // volta a valer pelo PIX pago tarde tambem nunca registrou nada na fidelidade (ver o metodo).
+        // So e consultado quando o status novo e CANCELADO -- em qualquer outro avanco o valor nao e
+        // lido, e o curto-circuito evita a consulta.
+        final boolean vendaJaContabilizada = status == StatusPedido.CANCELADO
+                && !p.pagamentoPendente() && !foiReabertoDepoisDeCancelado(p);
         Pedido salvo = tx.execute(st -> {
             // Toma o avanco no banco, condicionado ao status que foi LIDO la em cima. Sem isto, duas
             // telas da mesma loja leem o mesmo RECEBIDO, as duas passam pelo exigirQueAvance e as
@@ -890,8 +896,9 @@ public class PedidoService {
 
         // Lido ANTES de qualquer coisa: e o estado em que a venda nasceu que decide o que existe para
         // desfazer. PIX gerado e nao pago nunca entrou no historico do cliente nem gerou cashback --
-        // houve apenas o debito do resgate.
-        boolean vendaJaContabilizada = !p.pagamentoPendente();
+        // houve apenas o debito do resgate. O mesmo vale para o pedido REABERTO: ver
+        // `foiReabertoDepoisDeCancelado`.
+        boolean vendaJaContabilizada = !p.pagamentoPendente() && !foiReabertoDepoisDeCancelado(p);
         boolean jaEstornado = p.status == StatusPedido.CANCELADO;
 
         int devolvidos = jaEstornado ? 0 : devolucao.devolver(p, p.status, vendaJaContabilizada);
@@ -956,6 +963,34 @@ public class PedidoService {
         m.put("abertosDeOutrosDias",
                 repo.countByLojaIdAndStatusInAndCriadoEmBefore(lojaId, ABERTOS, inicioDeHoje));
         return m;
+    }
+
+    /**
+     * Este pedido foi CANCELADO e voltou a valer?
+     *
+     * <h2>Por que a resposta muda dinheiro (pente fino de 29/10/2026)</h2>
+     * <p>Quando o PIX cai DEPOIS do cancelamento, o webhook reabre o pedido e so RE-CONSOME o
+     * resgate de cashback -- ele <b>nao chama {@code registrar}</b>, de proposito (ver
+     * {@code PublicController}, no trecho do {@code pixWebhook}). Logo esse pedido nunca gerou
+     * cashback novo, nem somou {@code total_gasto}, nem contou como pedido no historico do
+     * cliente.</p>
+     *
+     * <p>Mas, ao cancelar de novo, {@code aguardandoPagamento} ja esta limpo e {@code pagoEm}
+     * preenchido -- entao {@code !pagamentoPendente()} dizia "a venda foi contabilizada" e o estorno
+     * tirava do cliente um cashback que ele <b>nunca ganhou</b>, mais uma compra que nunca entrou no
+     * historico dele. Saldo que veio de OUTRO pedido ia junto.</p>
+     *
+     * <h2>Por que o historico e a fonte certa</h2>
+     * <p>CANCELADO e estado final: o {@code alterarStatus} recusa sair dele. O unico caminho de
+     * volta e o webhook do PIX, e e ele que nao registra fidelidade. Entao "tem linha de CANCELADO
+     * no historico E nao esta cancelado agora" identifica exatamente o pedido reaberto -- sem coluna
+     * nova e sem depender do texto da observacao. E a mesma fonte que o
+     * {@code EstornoDaVendaService.rebaixarDeNovo} usa para saber o que baixar de novo.</p>
+     */
+    private boolean foiReabertoDepoisDeCancelado(Pedido p) {
+        if (p == null || p.id == null || p.status == StatusPedido.CANCELADO) return false;
+        return logs.findByLojaIdAndPedidoIdOrderByDataHoraAsc(p.lojaId, p.id).stream()
+                .anyMatch(l -> StatusPedido.CANCELADO.name().equals(l.getStatusNovo()));
     }
 
     private void registrarLog(Pedido p, StatusPedido anterior, StatusPedido novo) {

@@ -196,4 +196,67 @@ class QuemPagouNaoPerdeAcessoTest {
         assertNull(l.acessoAte, "pagando, o acesso volta a nao ter data de fim");
         assertEquals(MotivoDoAcesso.ASSINATURA, l.acessoMotivo);
     }
+
+    // ---------------------------------------------- a terceira porta: o PAGAMENTO apagava a protecao
+
+    /**
+     * O caso mais enganoso dos tres, porque entra por um evento de SUCESSO.
+     *
+     * <p>O ramo de PAYMENT_CONFIRMED gravava {@code (null, ASSINATURA)} por cima de
+     * {@code LIBERACAO}/{@code PAGAMENTO_MANUAL}. Dali em diante a loja nao tinha mais nem o motivo
+     * intocavel nem a data, e o aviso seguinte do Asaas encurtava o acesso normalmente. A loja paga,
+     * e o proprio pagamento e o que apaga a protecao dela.</p>
+     */
+    @Test
+    void oPAGAMENTOconfirmadoNAOapagaOPAGAMENTOMANUAL() {
+        assinatura(StatusAssinatura.ATIVA);
+        Loja l = loja(OffsetDateTime.now().plusMonths(3), MotivoDoAcesso.PAGAMENTO_MANUAL);
+
+        service.processarWebhook("PAYMENT_CONFIRMED", "sub_0001");
+
+        assertEquals(MotivoDoAcesso.PAGAMENTO_MANUAL, l.acessoMotivo,
+                "o pagamento no Asaas apagou o motivo que protege quem pagou na mao");
+        assertNotNull(l.acessoAte, "a data do pagamento manual foi apagada");
+    }
+
+    @Test
+    void aLIBERACAOsobreviveAOpagamento_eCONTINUAprotegendoNOcancelamentoSEGUINTE() {
+        // E este o estrago de verdade: nao o estado logo apos o pagamento, mas o que acontece no
+        // aviso DEPOIS dele. Com o motivo apagado, a loja liberada ate 2027 passava a vencer em
+        // "hoje + carencia".
+        assinatura(StatusAssinatura.ATIVA);
+        OffsetDateTime liberadaAte = OffsetDateTime.now().plusYears(1);
+        Loja l = loja(liberadaAte, MotivoDoAcesso.LIBERACAO);
+
+        service.processarWebhook("PAYMENT_CONFIRMED", "sub_0001");
+        service.processarWebhook("SUBSCRIPTION_DELETED", "sub_0001");
+
+        assertEquals(liberadaAte, l.acessoAte,
+                "a liberacao foi encurtada depois de um pagamento confirmado");
+        assertEquals(MotivoDoAcesso.LIBERACAO, l.acessoMotivo);
+    }
+
+    @Test
+    void aLIBERACAOjaVENCIDAnaoSEGURAoPAGAMENTO() {
+        // A excecao da excecao: liberacao vencida nao protege nada. Se o pagamento nao valesse aqui,
+        // a loja pagaria e continuaria bloqueada -- o oposto do que esta guarda existe para evitar.
+        assinatura(StatusAssinatura.ATIVA);
+        Loja l = loja(OffsetDateTime.now().minusDays(5), MotivoDoAcesso.LIBERACAO);
+
+        service.processarWebhook("PAYMENT_CONFIRMED", "sub_0001");
+
+        assertNull(l.acessoAte, "quem pagou pelo Asaas tem acesso sem data de fim");
+        assertEquals(MotivoDoAcesso.ASSINATURA, l.acessoMotivo);
+    }
+
+    @Test
+    void quemPAGApeloASAASsegueCOMoASAASmandandoNOprazo() {
+        assinatura(StatusAssinatura.ATIVA);
+        Loja l = loja(OffsetDateTime.now().plusDays(2), MotivoDoAcesso.INADIMPLENCIA);
+
+        service.processarWebhook("PAYMENT_CONFIRMED", "sub_0001");
+
+        assertNull(l.acessoAte, "pagou e continuou com data de vencimento de inadimplente");
+        assertEquals(MotivoDoAcesso.ASSINATURA, l.acessoMotivo);
+    }
 }

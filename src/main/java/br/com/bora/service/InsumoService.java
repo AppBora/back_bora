@@ -533,6 +533,56 @@ public class InsumoService {
      *
      * <p>Produto sem ficha devolve true: nao ha insumo para faltar.</p>
      */
+    /**
+     * Dos produtos desta lista, quais NAO dao para fazer com o insumo que existe hoje?
+     *
+     * <h2>O N+1 que isto fecha (pente fino de 29/10/2026)</h2>
+     * <p>O cardapio publico chamava {@link #fichaDaParaFazer} dentro do laco que monta cada produto.
+     * Cada chamada e uma consulta de ficha mais UMA consulta por linha de ficha: numa loja com 44
+     * produtos, 45 ou mais idas ao banco so para desenhar a tela -- e e a tela mais aberta do sistema
+     * (todo cliente, toda visita) e a unica sem cache.</p>
+     *
+     * <p>Aqui sao <b>duas</b> consultas, sempre: todas as fichas dos produtos pedidos, e os insumos
+     * que essas fichas citam. A regra de decisao e a MESMA do {@code fichaDaParaFazer}, de proposito
+     * -- inclusive os tres "continue" dele, que nao sao detalhe:</p>
+     * <ul>
+     *   <li>produto sem ficha nenhuma da para fazer: nao ha insumo para faltar;</li>
+     *   <li>insumo apagado, ou que nao controla estoque, nao bloqueia venda (o consumo tambem pula
+     *       essa linha);</li>
+     *   <li>linha de ficha com quantidade zero ou negativa nao consome nada.</li>
+     * </ul>
+     *
+     * <p>Se as duas regras divergirem, o cardapio vai dizer "esgotado" para um produto que o pedido
+     * aceita, ou o contrario. Mexer em uma e mexer na outra.</p>
+     */
+    public java.util.Set<Long> produtosQueNaoDaoParaFazer(Long lojaId, java.util.Collection<Long> produtoIds,
+                                                          int quantas) {
+        java.util.Set<Long> faltando = new java.util.HashSet<>();
+        if (produtoIds == null || produtoIds.isEmpty()) return faltando;
+
+        List<ProdutoInsumo> todasAsFichas = fichas.findByLojaIdAndProdutoIdIn(lojaId, produtoIds);
+        if (todasAsFichas.isEmpty()) return faltando;
+
+        java.util.Set<Long> idsDeInsumo = todasAsFichas.stream().map(f -> f.insumoId)
+                .filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        java.util.Map<Long, Insumo> porId = new java.util.HashMap<>();
+        if (!idsDeInsumo.isEmpty()) {
+            for (Insumo in : insumos.findByLojaIdAndIdIn(lojaId, idsDeInsumo)) porId.put(in.id, in);
+        }
+
+        for (ProdutoInsumo pi : todasAsFichas) {
+            if (faltando.contains(pi.produtoId)) continue;      // ja decidido por outra linha
+            Insumo in = porId.get(pi.insumoId);
+            if (in == null || in.estoque == null) continue;
+            BigDecimal qtdUnit = pi.quantidade == null ? BigDecimal.ZERO : pi.quantidade;
+            if (qtdUnit.signum() <= 0) continue;
+            if (in.estoque.compareTo(qtdUnit.multiply(BigDecimal.valueOf(quantas))) < 0) {
+                faltando.add(pi.produtoId);
+            }
+        }
+        return faltando;
+    }
+
     public boolean fichaDaParaFazer(Long lojaId, Long produtoId, int quantas) {
         if (produtoId == null) return true;
         List<ProdutoInsumo> ficha = fichas.findByLojaIdAndProdutoId(lojaId, produtoId);

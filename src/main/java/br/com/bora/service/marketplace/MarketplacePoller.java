@@ -464,7 +464,13 @@ public class MarketplacePoller {
     private void reenviarAceiteSeFaltou(MarketplaceClient client, IntegracaoCanal i, String orderId, Pedido p) {
         if (!Boolean.TRUE.equals(i.autoAceitar)) return;
         if (p.aceiteEnviadoEm != null) return;                 // o marketplace ja aceitou
-        if (p.status != br.com.bora.entity.StatusPedido.RECEBIDO) return;          // alguem ja mexeu no pedido na mao
+        // RECEBIDO ou CONFIRMADO: a mesma regra da @Query do `semAceiteConfirmado`. Com aceite
+        // automatico ligado, o "Confirmar" do painel nao envia nada ao canal e so muda o status
+        // aqui -- parar neste ponto deixava o pedido sem aceite para sempre. Dali para frente
+        // (EM_PREPARO em diante) o lojista ja esta tocando o pedido na mao, e ai o aceite
+        // automatico nao e mais o assunto.
+        if (p.status != br.com.bora.entity.StatusPedido.RECEBIDO
+                && p.status != br.com.bora.entity.StatusPedido.CONFIRMADO) return;
         log.warn("[{}] loja {}: pedido {} (#{}) esta sem aceite confirmado; reenviando",
                 i.canal, i.lojaId, orderId, p.id);
         marcarAceite(client, i, orderId, p);

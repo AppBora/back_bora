@@ -99,10 +99,38 @@ class AceiteQueFalhaNaoSePerdeTest {
 
     @Test
     void pedidoQueALojaJaTocouNaMao_naoEhReconfirmado() {
-        // Saiu de RECEBIDO: alguem aceitou pelo painel, e o painel ja empurra o status.
+        // EM_PREPARO em diante o lojista esta tocando o pedido na mao, e o painel empurra o status.
         eventoDoMesmoPedido(pedido(null, StatusPedido.EM_PREPARO));
 
         verify(client, never()).enviarStatus(any(), anyString(), anyString());
+    }
+
+    /**
+     * O "Confirmar" do painel com aceite automatico ligado (pente fino de 29/10/2026).
+     *
+     * <p>Nesse caso o {@code verbo()} do CONFIRMADO e <b>nulo</b> e o {@code enviarStatus} devolve
+     * true sem enviar nada -- mas o status MUDA aqui. Com a retentativa parando em RECEBIDO, esse
+     * clique tirava o pedido da fila para sempre: aceite nunca confirmado no canal, e nenhuma
+     * tentativa a mais. O pedido fica no painel da loja e o iFood o cancela sozinho por falta de
+     * aceite, depois de a cozinha ter preparado.</p>
+     */
+    @Test
+    void oCONFIRMARdoPAINELnaoTIRAoPEDIDOdaFILAdoACEITE() {
+        when(client.enviarStatus(any(), eq(ORDEM), eq(MarketplaceClient.ACEITE_INICIAL))).thenReturn(true);
+
+        eventoDoMesmoPedido(pedido(null, StatusPedido.CONFIRMADO));
+
+        verify(client).enviarStatus(integ, ORDEM, MarketplaceClient.ACEITE_INICIAL);
+        verify(pedidos).marcarAceiteEnviado(LOJA, 900L);
+    }
+
+    @Test
+    void oCONFIRMADOqueJAfoiACEITOnaoEHreconfirmado() {
+        // A protecao contra o "confirm em dobro" continua sendo a marca, e nao o status.
+        eventoDoMesmoPedido(pedido(OffsetDateTime.now().minusMinutes(2), StatusPedido.CONFIRMADO));
+
+        verify(client, never()).enviarStatus(any(), anyString(), anyString());
+        verify(pedidos, never()).marcarAceiteEnviado(anyLong(), anyLong());
     }
 
     @Test

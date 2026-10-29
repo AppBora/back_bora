@@ -103,7 +103,23 @@ public class AssinaturaService {
      * e visivel, o lojista reclama e da para estornar; zero e invisivel. E o id orfao fica GRAVADO em
      * {@code asaasSubscriptionAnterior} (V52), nao numa linha de log que rotaciona.</p>
      */
-    @Transactional
+    // SEM @Transactional, DE PROPOSITO (pente fino de 29/10/2026).
+    //
+    // Este metodo faz ate TRES chamadas HTTP ao Asaas em sequencia: criarCliente, criarAssinatura e
+    // cancelarAssinatura. Com @Transactional, as tres rodavam com uma conexao do banco na mao. O
+    // tempo limite configurado para o Asaas e de dezenas de segundos, e o pool de conexoes e
+    // COMPARTILHADO: Asaas lento com varios lojistas assinando ao mesmo tempo prende uma conexao por
+    // clique e, quando o pool acaba, param tambem o painel, o KDS, o cardapio e os marketplaces --
+    // por causa de um servico de fora. Uma assinatura falhar e aceitavel; a API inteira parar nao e.
+    //
+    // Nao se perde atomicidade: o unico momento que GRAVA e o `repo.save(a)` do fim, e o `save` do
+    // Spring Data e transacional por conta propria. Os passos anteriores so leem (findByLojaId,
+    // findById, donosDaLoja) e mexem no objeto em memoria. A protecao contra estado meio feito e
+    // outra, e esta no javadoc acima: CRIA primeiro, cancela depois, e o id orfao fica gravado em
+    // `asaasSubscriptionAnterior`.
+    //
+    // O mesmo desenho ja esta no checkout do cardapio (ver OasaasNaoSEGURAconexaoDoBancoTest), onde
+    // o defeito foi uma anotacao que desmentia o comentario.
     public Assinatura assinar(String cpfCnpj) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         Long lojaId = ctx.lojaId();
@@ -324,7 +340,7 @@ public class AssinaturaService {
      *
      * @return ATUALIZADA · SEM_ASSINATURA · SEM_ID_NO_ASAAS · ASAAS_NAO_CONFIGURADO
      */
-    @Transactional
+    // Sem @Transactional: fala com o Asaas e so depois grava. Ver a nota no `assinar`.
     public String sincronizarValorComMotivo(Long lojaId) {
         Loja loja = lojas.findById(lojaId).orElse(null);
         Assinatura a = repo.findByLojaId(lojaId).orElse(null);
@@ -397,8 +413,9 @@ public class AssinaturaService {
                 case "PAYMENT_CONFIRMED", "PAYMENT_RECEIVED" -> {
                     a.setStatus(StatusAssinatura.ATIVA);
                     ativarLoja(a.getLojaId(), true);
-                    // pagando pelo Asaas, o acesso nao tem data de fim -- e o Asaas manda no prazo
-                    prazoDeAcesso(a.getLojaId(), null, MotivoDoAcesso.ASSINATURA);
+                    // pagando pelo Asaas, o acesso nao tem data de fim -- e o Asaas manda no prazo.
+                    // Mas NAO por cima de LIBERACAO nem de PAGAMENTO_MANUAL: ver o metodo.
+                    passarAmandarNoPrazoPeloAsaas(a.getLojaId());
                 }
                 case "PAYMENT_OVERDUE" -> {
                     // A carencia comeca UMA vez, no primeiro atraso -- e a chave disso e o status de
@@ -1029,6 +1046,48 @@ public class AssinaturaService {
     }
 
     /**
+     * O Asaas passa a mandar no prazo desta loja -- <b>a nao ser</b> que ela esteja aberta por
+     * decisao que aviso do Asaas nao desfaz.
+     *
+     * <h2>O defeito que isto fecha (pente fino de 29/10/2026)</h2>
+     * <p>O ramo de PAYMENT_CONFIRMED/PAYMENT_RECEIVED chamava
+     * {@code prazoDeAcesso(lojaId, null, ASSINATURA)} direto, e o {@code prazoDeAcesso} grava as
+     * duas colunas sem olhar o que havia antes. Um pagamento confirmado apagava
+     * {@code LIBERACAO} ou {@code PAGAMENTO_MANUAL} <b>e a data deles</b>.
+     *
+     * <p>Dali em diante o {@link #prazoSemEncurtar} nao achava mais o motivo intocavel (virou
+     * ASSINATURA) nem data para comparar (virou NULL), e o {@code SUBSCRIPTION_DELETED} ou o
+     * {@code PAYMENT_OVERDUE} seguinte gravava "hoje + carencia" por cima. <b>E o acidente da Zira
+     * de 15/10/2026 por uma terceira porta</b> -- e a que mais engana, porque entra por um evento
+     * de SUCESSO: a loja paga, e o pagamento e o que apaga a protecao dela.</p>
+     *
+     * <h2>A excecao da excecao</h2>
+     * <p>Se a liberacao <b>ja venceu</b>, ela nao esta protegendo nada -- e ai o pagamento tem de
+     * valer, senao a loja pagou e continuaria bloqueada. Por isso a guarda exige que o acesso ainda
+     * esteja valendo: {@code acessoAte} nulo (sem fim) ou no futuro.</p>
+     *
+     * <p>Nao ha perda em manter: quem esta com LIBERACAO ou PAGAMENTO_MANUAL valendo ja tem acesso,
+     * e o que o Asaas acrescentaria e so quem manda no prazo. Mantendo, a protecao continua de pe
+     * para o proximo aviso.</p>
+     */
+    private void passarAmandarNoPrazoPeloAsaas(Long lojaId) {
+        Loja loja = lojas.findById(lojaId).orElse(null);
+        if (loja != null) {
+            MotivoDoAcesso porque = loja.acessoMotivo;
+            boolean intocavel = porque == MotivoDoAcesso.PAGAMENTO_MANUAL
+                    || porque == MotivoDoAcesso.LIBERACAO;
+            boolean aindaVale = loja.acessoAte == null || loja.acessoAte.isAfter(OffsetDateTime.now());
+            if (intocavel && aindaVale) {
+                log.info("Loja {}: pagamento confirmado no Asaas, mas o acesso segue por {} (ate {}) "
+                        + "-- nao sobrescrevo, senao o proximo aviso do Asaas encurta o que foi decidido aqui.",
+                        lojaId, porque, loja.acessoAte);
+                return;
+            }
+        }
+        prazoDeAcesso(lojaId, null, MotivoDoAcesso.ASSINATURA);
+    }
+
+    /**
      * O prazo que o atraso ou o cancelamento impoe -- sem NUNCA encurtar o que a loja ja tinha.
      *
      * <p>Tres casos, nesta ordem:</p>
@@ -1094,7 +1153,14 @@ public class AssinaturaService {
      * Não lança quando a cobrança não está configurada ou a assinatura não existe — o cancelamento
      * do cliente aqui não pode ficar refém do gateway; devolve o que aconteceu para o admin ver.
      */
-    @Transactional
+    // Sem @Transactional: fala com o Asaas e so depois grava. Ver a nota no `assinar`.
+    //
+    // ATENCAO ao que isto NAO resolve: os dois chamadores em PlataformaController
+    // (`definirAtivo` e `arquivar`) sao eles mesmos @Transactional, e com propagacao
+    // REQUIRED a chamada entra na transacao deles de qualquer jeito. Ali a conexao
+    // continua presa durante a chamada ao Asaas. Sao cliques do administrador da
+    // plataforma, um por vez, nao caminho de lojista -- por isso ficou para depois, e nao
+    // calado.
     public String cancelarPorAdministracao(Long lojaId) {
         Assinatura a = repo.findByLojaId(lojaId).orElse(null);
         if (a == null) return "sem assinatura";

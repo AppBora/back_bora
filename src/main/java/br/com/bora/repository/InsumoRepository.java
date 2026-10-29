@@ -6,6 +6,9 @@ public interface InsumoRepository extends JpaRepository<Insumo, Long> {
     List<Insumo> findByLojaIdOrderByNomeAsc(Long lojaId);
     Optional<Insumo> findByIdAndLojaId(Long id, Long lojaId);
 
+    /** Varios insumos de uma vez, para quem precisa do saldo de muitos sem uma consulta por linha. */
+    List<Insumo> findByLojaIdAndIdIn(Long lojaId, java.util.Collection<Long> ids);
+
     /**
      * Mexe no estoque do insumo no banco, nao em Java.
      *

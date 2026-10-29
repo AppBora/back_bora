@@ -110,6 +110,25 @@ public class DesempenhoService {
         return out;
     }
 
+    /**
+     * Esta venda gera cashback para alguem?
+     *
+     * <p>Espelha o {@code FidelidadeService.registrar}: sem cliente nao ha onde creditar, e no pedido
+     * de marketplace o credito e desligado quando o telefone nao e de pessoa -- o iFood manda a
+     * central de atendimento mais um codigo, e ninguem resgata saldo por ali.</p>
+     *
+     * <p>Pedido de PIX do proprio cardapio NAO entra nesta excecao: ele usa
+     * {@code canalExterno = "PIX_ASAAS"} para guardar o id da cobranca, e o cliente dele e pessoa com
+     * telefone de verdade.</p>
+     */
+    private static boolean geraCashback(Pedido p) {
+        if (p.clienteId == null) return false;
+        boolean deMarketplace = p.canalExterno != null && !p.canalExterno.isBlank()
+                && !"PIX_ASAAS".equals(p.canalExterno);
+        if (!deMarketplace) return true;
+        return PedidoService.telefoneDePessoa(p.clienteTelefone) != null;
+    }
+
     private Map<String, Object> daLoja(Loja l, OffsetDateTime ini, OffsetDateTime fim, long dias) {
         BigDecimal faturamento = zero(pedidos.somaReceita(l.id, ini, fim));
         long qtd = pedidos.contaPedidosValidos(l.id, ini, fim);
@@ -139,7 +158,21 @@ public class DesempenhoService {
 
         var cfg = configs.findByLojaId(l.id).orElse(null);
         BigDecimal pctCashback = cfg == null ? BigDecimal.ZERO : zero(cfg.cashbackPercentual);
-        BigDecimal cashback = faturamento.multiply(pctCashback)
+        // O CASHBACK NAO INCIDE NO FATURAMENTO INTEIRO, e isto era o defeito (pente fino de
+        // 29/10/2026). A conta era `faturamento * pct`, como se toda venda gerasse saldo. O sistema
+        // so credita quando ha CLIENTE: o `FidelidadeService.registrar` sai na primeira linha com
+        // `if (clienteId == null) return;`. Venda de balcao sem cadastro, que e a maioria numa loja
+        // com PDV, nao gera cashback nenhum -- e aparecia como custo.
+        //
+        // E tem o caso do marketplace: la o credito e desligado quando o telefone nao e de pessoa
+        // (iFood manda central + codigo), via `fidelidade.registrar(..., telReal != null)`. A mesma
+        // regra vale aqui, pelo mesmo metodo -- duplicar o teste do telefone faria as duas contas
+        // divergirem na primeira mudanca.
+        BigDecimal baseDoCashback = vendas.stream()
+                .filter(DesempenhoService::geraCashback)
+                .map(pd -> zero(pd.valorTotal))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal cashback = baseDoCashback.multiply(pctCashback)
                 .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
         BigDecimal aliquota = cfg == null ? null : cfg.aliquotaImposto;
@@ -147,7 +180,11 @@ public class DesempenhoService {
         BigDecimal imposto = aliquota == null ? BigDecimal.ZERO
                 : faturamento.multiply(aliquota).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         BigDecimal custoFixo = fixoMes == null ? BigDecimal.ZERO : rateio(fixoMes, dias);
-        BigDecimal mensalidade = rateio(l.precoEfetivo(), dias);
+        // `precoComModulos`, nao `precoEfetivo`: o segundo devolve so o plano, e deixava o Modulo
+        // IA (R$ 99/mes) de fora. A loja com o modulo ligado via "mensalidade R$ 199" rateada
+        // pagando R$ 298, e o LUCRO saia R$ 99/mes maior do que e -- no numero que o dono usa para
+        // decidir preco.
+        BigDecimal mensalidade = rateio(l.precoComModulos(), dias);
 
         BigDecimal custoTotal = cmv.add(entrega).add(cashback).add(imposto).add(custoFixo).add(mensalidade);
         BigDecimal lucro = faturamento.subtract(custoTotal);

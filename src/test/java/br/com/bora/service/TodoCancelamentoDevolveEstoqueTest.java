@@ -130,12 +130,72 @@ class TodoCancelamentoDevolveEstoqueTest {
         verify(devolucao).devolver(p, StatusPedido.RECEBIDO, false);
     }
 
+    /**
+     * O pedido que foi CANCELADO e voltou a valer pelo PIX pago tarde.
+     *
+     * <p>Na reabertura o webhook so RE-CONSOME o resgate; ele nao chama {@code registrar}. Entao esse
+     * pedido nunca gerou cashback novo, nem somou no historico do cliente. Mas
+     * {@code aguardandoPagamento} ja esta limpo e {@code pagoEm} preenchido, entao
+     * {@code !pagamentoPendente()} dizia "contabilizada" -- e o segundo cancelamento tirava do
+     * cliente um cashback que ele nunca ganhou, mais uma compra que nunca entrou. O saldo tirado
+     * vinha de OUTRO pedido (pente fino de 29/10/2026).</p>
+     */
+    @Test
+    void cancelarDEnovoOpedidoREABERTOnaoTIRAcashbackQUEnuncaFOIdado() {
+        PedidoRepository repo = mock(PedidoRepository.class);
+        LogStatusRepository logs = mock(LogStatusRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
+        Pedido p = pedido(StatusPedido.RECEBIDO);
+        p.aguardandoPagamento = false;                       // o webhook limpou
+        p.pagoEm = OffsetDateTime.now().minusMinutes(5);     // o dinheiro entrou
+        when(repo.findByIdAndLojaId(1L, 1L)).thenReturn(Optional.of(p));
+        when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
+        when(logs.findByLojaIdAndPedidoIdOrderByDataHoraAsc(18L, 1L))
+                .thenReturn(List.of(log("RECEBIDO", "CANCELADO")));
+
+        servicoDePedido(repo, logs).alterarStatus(1L, StatusPedido.CANCELADO, "nao vou conseguir atender");
+
+        verify(devolucao).devolver(p, StatusPedido.RECEBIDO, false);
+    }
+
+    @Test
+    void oPEDIDOpagoQUEnuncaFOIcanceladoCONTINUAcontabilizado() {
+        // A outra ponta: sem historico de cancelamento, a venda ACONTECEU e gerou cashback. Dizer
+        // "false" aqui deixaria no cliente um saldo que a venda cancelada nao devia ter deixado.
+        PedidoRepository repo = mock(PedidoRepository.class);
+        LogStatusRepository logs = mock(LogStatusRepository.class);
+        when(repo.avancarSeAindaEsta(any(), any(), any(), any(), any())).thenReturn(1);
+        Pedido p = pedido(StatusPedido.RECEBIDO);
+        p.pagoEm = OffsetDateTime.now().minusMinutes(5);
+        when(repo.findByIdAndLojaId(1L, 1L)).thenReturn(Optional.of(p));
+        when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
+        when(logs.findByLojaIdAndPedidoIdOrderByDataHoraAsc(18L, 1L))
+                .thenReturn(List.of(log(null, "RECEBIDO"), log("RECEBIDO", "EM_PREPARO")));
+
+        servicoDePedido(repo, logs).alterarStatus(1L, StatusPedido.CANCELADO, "faltou ingrediente");
+
+        verify(devolucao).devolver(p, StatusPedido.RECEBIDO, true);
+    }
+
+    private static br.com.bora.entity.LogStatus log(String de, String para) {
+        br.com.bora.entity.LogStatus l = new br.com.bora.entity.LogStatus();
+        l.setLojaId(18L);
+        l.setPedidoId(1L);
+        l.setStatusAnterior(de);
+        l.setStatusNovo(para);
+        return l;
+    }
+
     private PedidoService servicoDePedido(PedidoRepository repo) {
+        return servicoDePedido(repo, mock(LogStatusRepository.class));
+    }
+
+    private PedidoService servicoDePedido(PedidoRepository repo, LogStatusRepository logs) {
         AuthContext ctx = mock(AuthContext.class);
         when(ctx.lojaId()).thenReturn(1L);
         when(ctx.atual()).thenReturn(new BoraPrincipal(7L, 1L, "ADMINISTRADOR_LOJA", "admin@bora.app"));
         PedidoService service = new PedidoService(repo, mock(PedidoItemRepository.class),
-                mock(ProdutoRepository.class), mock(ClienteRepository.class), mock(LogStatusRepository.class),
+                mock(ProdutoRepository.class), mock(ClienteRepository.class), logs,
                 mock(PlanoService.class), mock(IntegracaoService.class), mock(TaxaEntregaRepository.class),
                 mock(InsumoService.class), mock(FidelidadeService.class), mock(ComplementoService.class),
                 ctx, devolucao, GerenciadorDeTransacaoFalso.novo());

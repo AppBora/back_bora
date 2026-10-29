@@ -382,7 +382,16 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
      */
     @Query("select p from Pedido p where p.lojaId = :lojaId and p.canalExterno = :canal "
          + "and p.idExterno is not null and p.aceiteEnviadoEm is null "
-         + "and p.status = br.com.bora.entity.StatusPedido.RECEBIDO "
+         // CONFIRMADO TAMBEM ENTRA, e isto era um defeito (pente fino de 29/10/2026). Com
+         // aceite automatico ligado, o "Confirmar" do painel nao manda nada ao canal (o verbo
+         // do CONFIRMADO e nulo quando autoAceitar e true) -- mas MUDA o status aqui. Com o
+         // filtro so em RECEBIDO, esse clique tirava o pedido da fila de retentativa PARA
+         // SEMPRE: aceite nunca confirmado la, e nenhuma tentativa a mais.
+         //
+         // Nao ha risco de aceitar em dobro: quem guarda isso e o `aceiteEnviadoEm`. Com ele
+         // preenchido o pedido nao aparece aqui, aceito pelo automatico ou pela retentativa.
+         + "and p.status in (br.com.bora.entity.StatusPedido.RECEBIDO, "
+         + "                 br.com.bora.entity.StatusPedido.CONFIRMADO) "
          + "and p.criadoEm >= :desde order by p.criadoEm")
     List<Pedido> semAceiteConfirmado(@Param("lojaId") Long lojaId,
                                      @Param("canal") String canal,

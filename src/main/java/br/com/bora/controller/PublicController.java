@@ -247,6 +247,11 @@ public class PublicController {
             mg.put("itens", itensPorGrupo.getOrDefault(g.id, List.of()));
             gruposPorProduto.computeIfAbsent(g.produtoId, k -> new java.util.ArrayList<>()).add(mg);
         }
+        // "Esgotado" de TODOS os produtos em duas consultas, nao uma por produto. O
+        // `fichaDaParaFazer` dentro do laco fazia uma consulta de ficha mais uma por linha de
+        // ficha: 45+ idas ao banco para desenhar a tela de 44 produtos da Zira.
+        java.util.Set<Long> semInsumo = insumos.produtosQueNaoDaoParaFazer(
+                lojaId, lista.stream().map(ItemDoCardapio::id).toList(), 1);
         resp.put("produtos", lista.stream().map(p -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.id());
@@ -264,7 +269,7 @@ public class PublicController {
             // que nao controla estoque (estoque nulo) nunca aparece esgotado -- e o caso de todos os
             // 123 produtos da producao hoje.
             boolean esgotado = (p.estoque() != null && p.estoque() < 1)
-                    || !insumos.fichaDaParaFazer(lojaId, p.id(), 1);
+                    || semInsumo.contains(p.id());
             m.put("esgotado", esgotado);
             return m;
         }).toList());
