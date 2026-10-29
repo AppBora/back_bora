@@ -222,7 +222,17 @@ public class PublicController {
         resp.put("aberta", !respeitarHorario || operacao.abertaAgora(lojaId));
         // Bairros atendidos e quanto custa entregar em cada um. Sem isto a tela nao tinha como
         // perguntar o bairro, e TODA entrega pelo cardapio saia sem frete.
-        resp.put("bairros", taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(lojaId).stream().map(t -> {
+        // UM BAIRRO, UMA LINHA. A tabela nao tem UNIQUE em (loja, bairro), entao o mesmo bairro
+        // pode aparecer duas vezes com fretes diferentes -- e o cliente escolhe pelo NOME, enquanto o
+        // servidor cobra pela consulta. Mostrar as duas e oferecer dois precos para a mesma entrega e
+        // cobrar um terceiro valor na hora de gravar.
+        //
+        // A ordem e a MESMA da consulta que cobra (bairro, id DESC), entao a linha que fica aqui e
+        // exatamente a que vai ser cobrada: a ultima que o lojista gravou.
+        java.util.Set<String> bairroJaListado = new java.util.HashSet<>();
+        resp.put("bairros", taxas.findByLojaIdAndAtivoTrueOrderByBairroAscIdDesc(lojaId).stream()
+                .filter(t -> bairroJaListado.add(t.bairro == null ? "" : t.bairro.trim().toLowerCase()))
+                .map(t -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("bairro", t.bairro);
             m.put("taxa", t.taxa == null ? BigDecimal.ZERO : t.taxa);
@@ -516,14 +526,14 @@ public class PublicController {
             // Frete do cardapio. Ate aqui a taxa ficava SEMPRE zero aqui, enquanto o balcao cobrava a
             // tabela do bairro: toda entrega feita pelo cardapio saia de graca, e o acerto do motoboy
             // ainda somava R$ 0 por ela. Quando a loja nao tem bairro cadastrado, nada muda.
-            var bairrosAtendidos = taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(lojaId);
+            var bairrosAtendidos = taxas.findByLojaIdAndAtivoTrueOrderByBairroAscIdDesc(lojaId);
             BigDecimal taxaEntrega = BigDecimal.ZERO;
             if (!retirada && !bairrosAtendidos.isEmpty()) {
                 if (bairro == null || bairro.isBlank()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Escolha o bairro da entrega para calcularmos a taxa.");
                 }
-                var tabela = taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(lojaId, bairro.trim())
+                var tabela = taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(lojaId, bairro.trim())
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                 "Ainda nao entregamos nesse bairro. Escolha um da lista ou retire no balcao."));
                 taxaEntrega = tabela.taxa == null ? BigDecimal.ZERO : tabela.taxa;

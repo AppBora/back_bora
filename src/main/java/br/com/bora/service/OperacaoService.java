@@ -39,8 +39,19 @@ public class OperacaoService {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         Long loja = ctx.lojaId();
         if (t.bairro == null || t.bairro.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bairro é obrigatório");
-        TaxaEntrega alvo = t.id == null ? new TaxaEntrega()
-                : taxas.findByIdAndLojaId(t.id, loja).orElseThrow(() -> naoEncontrado("Taxa"));
+        // CADASTRAR UM BAIRRO QUE JA EXISTE ATUALIZA, em vez de criar a segunda linha.
+        //
+        // Era `t.id == null ? new TaxaEntrega()`, sem procurar nada: o lojista que cadastrasse
+        // "Centro" duas vezes ficava com dois fretes para o mesmo bairro, e a tabela nao tem UNIQUE
+        // em (loja, bairro) para impedir. Dali em diante a tela mostrava o bairro duas vezes e a
+        // cobranca escolhia uma das linhas (pente fino de 29/10/2026).
+        //
+        // Procura ATIVA OU NAO: o bairro que o lojista tinha desligado e esta recadastrando e a
+        // mesma linha, com o `ativo` que ele acabou de mandar.
+        TaxaEntrega alvo = t.id != null
+                ? taxas.findByIdAndLojaId(t.id, loja).orElseThrow(() -> naoEncontrado("Taxa"))
+                : taxas.findFirstByLojaIdAndBairroIgnoreCaseOrderByIdDesc(loja, t.bairro.trim())
+                        .orElseGet(TaxaEntrega::new);
         alvo.lojaId = loja; alvo.bairro = t.bairro; alvo.taxa = t.taxa == null ? BigDecimal.ZERO : t.taxa;
         alvo.tempoMin = t.tempoMin; alvo.ativo = t.ativo == null || t.ativo;
         return taxas.save(alvo);

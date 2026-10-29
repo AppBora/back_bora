@@ -250,8 +250,8 @@ class PedidoDoCardapioTest {
         centro.bairro = "Centro";
         centro.taxa = new BigDecimal("7.50");
         centro.ativo = true;
-        when(taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(1L)).thenReturn(List.of(centro));
-        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(1L, "Centro")).thenReturn(Optional.of(centro));
+        when(taxas.findByLojaIdAndAtivoTrueOrderByBairroAscIdDesc(1L)).thenReturn(List.of(centro));
+        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(1L, "Centro")).thenReturn(Optional.of(centro));
 
         controller.pedirOnline(1L, corpo("bairro", "Centro", "taxaEntrega", "0.00"), requisicao());
 
@@ -267,7 +267,7 @@ class PedidoDoCardapioTest {
         centro.bairro = "Centro";
         centro.taxa = new BigDecimal("7.50");
         centro.ativo = true;
-        when(taxas.findByLojaIdAndAtivoTrueOrderByBairroAsc(1L)).thenReturn(List.of(centro));
+        when(taxas.findByLojaIdAndAtivoTrueOrderByBairroAscIdDesc(1L)).thenReturn(List.of(centro));
 
         controller.pedirOnline(1L, corpo("tipoEntrega", "RETIRADA", "bairro", "Centro"), requisicao());
 

@@ -85,7 +85,7 @@ public class PedidoService {
         if (origem != null && origem.toUpperCase().contains("BALC")) return BigDecimal.ZERO; // balcão não tem frete
         var cli = clientes.findByIdAndLojaId(clienteId, lojaId).orElse(null);
         if (cli == null || cli.bairro == null || cli.bairro.isBlank()) return BigDecimal.ZERO;
-        return taxasEntrega.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(lojaId, cli.bairro.trim())
+        return taxasEntrega.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(lojaId, cli.bairro.trim())
                 .map(t -> t.taxa == null ? BigDecimal.ZERO : t.taxa).orElse(BigDecimal.ZERO);
     }
 

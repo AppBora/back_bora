@@ -109,7 +109,7 @@ class PedidoServiceContaDoBalcaoTest {
         clienteNoBairro(3L, "Setor Bueno");
         TaxaEntrega t = new TaxaEntrega();
         t.taxa = new BigDecimal("7.00");
-        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(1L, "Setor Bueno")).thenReturn(Optional.of(t));
+        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(1L, "Setor Bueno")).thenReturn(Optional.of(t));
         // borda recheada: +12 no preço unitário
         when(complementos.aplicar(eq(1L), any(Produto.class), any()))
                 .thenReturn(new ComplementoService.Escolha(new BigDecimal("12.00"),
@@ -135,7 +135,7 @@ class PedidoServiceContaDoBalcaoTest {
     void cashbackResgatadoDescontaDoTotal() {
         produto(10L, "Acai 500ml", "30.00");
         clienteNoBairro(3L, "Centro");
-        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(anyLong(), anyString())).thenReturn(Optional.empty());
+        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(anyLong(), anyString())).thenReturn(Optional.empty());
         when(fidelidade.resgatePossivel(eq(1L), eq(3L), any(BigDecimal.class))).thenReturn(new BigDecimal("6.57"));
 
         service.criar(new NovoPedidoRequest(3L, "102", "PIX", "Delivery", null, true,
@@ -150,7 +150,7 @@ class PedidoServiceContaDoBalcaoTest {
         clienteNoBairro(3L, "Setor Bueno");
         TaxaEntrega t = new TaxaEntrega();
         t.taxa = new BigDecimal("7.00");
-        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(1L, "Setor Bueno")).thenReturn(Optional.of(t));
+        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(1L, "Setor Bueno")).thenReturn(Optional.of(t));
 
         service.criar(new NovoPedidoRequest(3L, "103", "Dinheiro", "Balcao", null, false,
                 List.of(new ItemPedidoRequest(10L, 1, null)), null, null, null, null));
@@ -165,7 +165,7 @@ class PedidoServiceContaDoBalcaoTest {
         clienteNoBairro(3L, "Setor Bueno");
         TaxaEntrega t = new TaxaEntrega();
         t.taxa = new BigDecimal("7.00");
-        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrue(1L, "Setor Bueno")).thenReturn(Optional.of(t));
+        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(1L, "Setor Bueno")).thenReturn(Optional.of(t));
 
         service.criar(new NovoPedidoRequest(3L, "104", "PIX", "Delivery", null, false,
                 List.of(new ItemPedidoRequest(10L, 1, null)), BigDecimal.ZERO, null, null, null)); // cortesia
