@@ -74,7 +74,8 @@ class OsplitDizAverdadeTest {
                 mock(br.com.bora.security.JwtService.class),
                 mock(br.com.bora.repository.ConfiguracaoLojaRepository.class),
                 mock(br.com.bora.service.marketplace.CredenciaisMarketplace.class),
-                mock(br.com.bora.service.LimpezaDeTestesService.class), "2");
+                mock(br.com.bora.service.LimpezaDeTestesService.class),
+                new br.com.bora.service.EnderecoDaLojaService(), "2");
     }
 
     private Map<String, Object> definirSplit(Object percentual) {

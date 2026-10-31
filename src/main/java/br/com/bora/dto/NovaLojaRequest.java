@@ -6,4 +6,6 @@ public record NovaLojaRequest(
         String plano,
         String adminNome,
         String adminEmail,
-        String adminSenha) {}
+        String adminSenha,
+        /** Endereco da unidade. Opcional na criacao — quem cadastra em lote preenche depois. */
+        EnderecoDaLoja endereco) {}

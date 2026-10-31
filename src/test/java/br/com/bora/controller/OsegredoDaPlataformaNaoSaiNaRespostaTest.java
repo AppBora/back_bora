@@ -81,6 +81,7 @@ class OsegredoDaPlataformaNaoSaiNaRespostaTest {
                 mock(br.com.bora.repository.ConfiguracaoLojaRepository.class),
                 credenciais,
                 mock(br.com.bora.service.LimpezaDeTestesService.class),
+                new br.com.bora.service.EnderecoDaLojaService(),
                 "0");
     }
 

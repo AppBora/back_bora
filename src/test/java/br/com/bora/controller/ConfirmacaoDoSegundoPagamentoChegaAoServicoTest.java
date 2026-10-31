@@ -66,7 +66,8 @@ class ConfirmacaoDoSegundoPagamentoChegaAoServicoTest {
                 mock(br.com.bora.security.JwtService.class),
                 mock(br.com.bora.repository.ConfiguracaoLojaRepository.class),
                 mock(br.com.bora.service.marketplace.CredenciaisMarketplace.class),
-                mock(br.com.bora.service.LimpezaDeTestesService.class), "0");
+                mock(br.com.bora.service.LimpezaDeTestesService.class),
+                new br.com.bora.service.EnderecoDaLojaService(), "0");
     }
 
     /** Manda o corpo e devolve o valor do `confirmarSegundoPagamento` que chegou ao serviço. */

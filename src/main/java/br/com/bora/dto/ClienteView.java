@@ -34,5 +34,11 @@ public record ClienteView(
          */
         OffsetDateTime acessoAte,
         Long empresaId,
-        String empresaNome) {
+        String empresaNome,
+        /**
+         * Endereco da unidade (V66). Vem junto porque a lista da plataforma e o unico lugar em que
+         * as unidades de um mesmo cliente aparecem lado a lado — e sem endereco "Zira - Centro" e
+         * "Zira - Zona Norte" nao se distinguem na hora de suspender, renomear ou cobrar.
+         */
+        EnderecoDaLoja endereco) {
 }

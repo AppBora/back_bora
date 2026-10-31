@@ -14,6 +14,24 @@ public class Loja {
     public String nome;
     public String documento;
 
+    // ---- Endereco da unidade (V66). Cadastro, nao aparencia: fica ao lado do documento. ----
+    /** CEP, so numeros ou com hifen. Nulo = nao informado (nenhuma loja tinha endereco antes da V66). */
+    public String cep;
+
+    /** Rua/avenida. */
+    public String logradouro;
+
+    public String numero;
+    public String complemento;
+
+    /** Bairro da unidade. A coluna espelha a largura de {@code taxa_entrega.bairro} (120). */
+    public String bairro;
+
+    public String cidade;
+
+    /** Sigla do estado, 2 letras. Gravada em maiusculas pelo servico. */
+    public String uf;
+
     /** Empresa dona da loja (mesmo CNPJ = mesma empresa). Fato societário, não controle de acesso. */
     @Column(name = "empresa_id")
     public Long empresaId;

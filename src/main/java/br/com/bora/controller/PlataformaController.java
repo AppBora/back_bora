@@ -42,6 +42,7 @@ public class PlataformaController {
     private final br.com.bora.service.marketplace.CredenciaisMarketplace credenciais;
     private final String splitPadrao;
     private final br.com.bora.service.LimpezaDeTestesService limpeza;
+    private final br.com.bora.service.EnderecoDaLojaService enderecos;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
 
@@ -60,7 +61,9 @@ public class PlataformaController {
                                 br.com.bora.repository.ConfiguracaoLojaRepository configLoja,
                                 br.com.bora.service.marketplace.CredenciaisMarketplace credenciais,
                                 br.com.bora.service.LimpezaDeTestesService limpeza,
+                                br.com.bora.service.EnderecoDaLojaService enderecos,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
+        this.enderecos = enderecos;
         this.limpeza = limpeza;
         this.splitPadrao = splitPadrao;
         this.credenciais = credenciais;
@@ -242,7 +245,8 @@ public class PlataformaController {
                         ultimoPedido.get(l.id),
                         l.acessoAte,
                         l.empresaId,
-                        l.empresaId == null ? null : nomesEmpresa.get(l.empresaId)))
+                        l.empresaId == null ? null : nomesEmpresa.get(l.empresaId),
+                        br.com.bora.dto.EnderecoDaLoja.de(l)))
                 .toList();
     }
 
@@ -270,6 +274,34 @@ public class PlataformaController {
         log.warn("AUDITORIA plataforma: usuario {} RENOMEOU a loja {} de \"{}\" para \"{}\"",
                 ctx.atual().userId(), lojaId, antes, novo);
         return Map.of("lojaId", lojaId, "nome", novo, "nomeAnterior", antes == null ? "" : antes);
+    }
+
+    /**
+     * Grava o endereco de uma unidade (V66).
+     *
+     * <p>Existe em duas portas de proposito: esta, da plataforma, para cadastrar a rede de um cliente
+     * de uma vez sem entrar na conta dele; e a {@code PUT /api/loja/endereco}, para o proprio lojista
+     * corrigir quando a loja muda de esquina. As duas passam pela mesma regra
+     * ({@code EnderecoDaLojaService}).</p>
+     *
+     * <p>Corpo: {@code {"cep":"18087-000","logradouro":"Rua Firmino Mineli","numero":"751",
+     * "complemento":null,"bairro":"Vila Mineirão","cidade":"Sorocaba","uf":"SP"}}. A ficha vem
+     * inteira: campo em branco apaga o que estava.</p>
+     */
+    @PutMapping("/lojas/{lojaId}/endereco")
+    @Transactional
+    public Map<String, Object> definirEndereco(@PathVariable Long lojaId,
+                                               @RequestBody br.com.bora.dto.EnderecoDaLoja corpo) {
+        ctx.requireAdminBora();
+        Loja loja = exigirLoja(lojaId);
+        enderecos.aplicar(loja, corpo);
+        lojas.save(loja);
+        log.warn("AUDITORIA plataforma: usuario {} gravou o ENDERECO da loja {} ({}, {} - {})",
+                ctx.atual().userId(), lojaId, loja.logradouro, loja.bairro, loja.uf);
+        Map<String, Object> resp = new java.util.LinkedHashMap<>();
+        resp.put("lojaId", lojaId);
+        resp.put("endereco", br.com.bora.dto.EnderecoDaLoja.de(loja));
+        return resp;
     }
 
     /**
@@ -685,6 +717,9 @@ public class PlataformaController {
         Loja loja = new Loja();
         loja.setNome(req.nomeLoja());
         loja.setDocumento(req.documento());
+        // Endereco e opcional na criacao: quem cadastra varias unidades de uma vez costuma ter o
+        // nome antes do CEP. Vindo errado, para aqui — antes de a loja existir pela metade.
+        if (req.endereco() != null) enderecos.aplicar(loja, req.endereco());
         loja.setPlano(parsePlano(req.plano()));
         loja.empresaId = empresa.getId();
         // Os 7 dias de cortesia que o site anuncia passam a existir no sistema: ate aqui a loja
