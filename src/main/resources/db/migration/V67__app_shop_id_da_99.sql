@@ -44,3 +44,32 @@ UPDATE integracao_canal
 
 -- O webhook passa a buscar pelos dois campos.
 CREATE INDEX IF NOT EXISTS idx_integracao_canal_shop_id ON integracao_canal(canal, shop_id_canal);
+
+-- =====================================================================================
+-- O QUE EU TINHA ESQUECIDO, E ERA O PRINCIPAL (medido na producao em 08/11/2026)
+--
+-- Trocar o merchant_id NAO basta. O OpenDeliveryClient.clientIdDaLoja decide assim:
+--
+--   if (!credencialDaLoja(i)) return appId() + "_" + i.merchantId;   // usa o merchant_id
+--   String proprio = i.clientId.trim();
+--   if (proprio.contains("_")) return proprio;                       // USA O CAMPO CRU
+--
+-- Ou seja: loja com client_id/client_secret PROPRIOS e com "_" no client_id tem o campo mandado
+-- cru, e o merchant_id nunca e consultado. Medido no banco: a loja 18 (Montreal) -- a unica
+-- marcada CONECTADO -- esta exatamente nesse caso, com
+-- client_id = '5764607707103889279_5764615393256407102' (App ID + ID do loja).
+--
+-- Sem a linha abaixo, a loja 18 continuaria mandando o identificador errado e levando 403 depois
+-- da migracao, e eu teria anunciado conserto medindo a tabela em vez da chamada.
+--
+-- A condicao e exata: so reescreve quando o client_id TERMINA em "_" + o ID do loja que acabamos
+-- de guardar em shop_id_canal, e troca so esse final pelo APPShopID. Roda depois dos UPDATEs
+-- acima, que e onde shop_id_canal e merchant_id ganham os valores certos. Rodar de novo nao faz
+-- nada: o final ja nao casa mais.
+UPDATE integracao_canal
+   SET client_id = left(client_id, length(client_id) - length(shop_id_canal)) || merchant_id
+ WHERE canal = 'NOVE_NOVE'
+   AND shop_id_canal IS NOT NULL
+   AND merchant_id IS NOT NULL
+   AND client_id IS NOT NULL
+   AND right(client_id, length(shop_id_canal) + 1) = '_' || shop_id_canal;
