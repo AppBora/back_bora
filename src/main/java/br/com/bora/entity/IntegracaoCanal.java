@@ -22,7 +22,18 @@ public class IntegracaoCanal {
     public Boolean ativo = false;
 
     @Column(name = "merchant_id")
-    public String merchantId;     // id do estabelecimento no marketplace
+    public String merchantId;     // id do estabelecimento no marketplace (na 99, o APPShopID)
+
+    /**
+     * Identificador alternativo da loja no canal — na 99Food, o "ID do loja" numerico.
+     *
+     * <p>Existe porque o {@code merchantId} precisa ser o APPShopID (a 99 exige
+     * {@code ClientId = AppID_AppShopId}), mas o webhook de entrada chega com o header
+     * {@code X-App-MerchantId} e a documentacao nao diz qual dos dois identificadores ela manda.
+     * Guardamos os dois e aceitamos qualquer um ao rotear — errar aqui perde pedido de verdade.</p>
+     */
+    @Column(name = "shop_id_canal")
+    public String shopIdCanal;
     @Column(name = "client_id")
     public String clientId;
     @Column(name = "client_secret")

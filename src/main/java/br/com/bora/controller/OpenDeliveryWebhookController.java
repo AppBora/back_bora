@@ -65,9 +65,7 @@ public class OpenDeliveryWebhookController {
         if (merchantId == null || merchantId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Header X-App-MerchantId ausente");
         }
-        IntegracaoCanal i = integracoes.findFirstByCanalAndMerchantId(client.canal(), merchantId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "Nenhuma loja conectada com o App Shop ID " + merchantId));
+        IntegracaoCanal i = lojaDoHeader(merchantId);
 
         if (!client.assinaturaValida(i, corpo, assinatura)) {
             log.warn("Open Delivery webhook: assinatura invalida para a loja {} (app shop {})", i.lojaId, merchantId);
@@ -137,9 +135,7 @@ public class OpenDeliveryWebhookController {
         if (merchantId == null || merchantId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Header X-App-MerchantId ausente");
         }
-        IntegracaoCanal i = integracoes.findFirstByCanalAndMerchantId(client.canal(), merchantId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                        "Nenhuma loja conectada com o App Shop ID " + merchantId));
+        IntegracaoCanal i = lojaDoHeader(merchantId);
         if (!client.assinaturaValida(i, corpo, assinatura)) {
             log.warn("Open Delivery rastreio: assinatura invalida para a loja {} (app shop {})", i.lojaId, merchantId);
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Assinatura invalida");
@@ -185,5 +181,20 @@ public class OpenDeliveryWebhookController {
 
     private static String primeiroNaoVazio(String a, String b) {
         return a == null || a.isBlank() ? b : a;
+    }
+    /**
+     * Acha a loja pelo header {@code X-App-MerchantId}.
+     *
+     * <p>Casa por <b>qualquer um</b> dos dois identificadores: o APPShopID (que vive no
+     * {@code merchantId}, porque e o que a API da 99 exige no {@code client_id}) ou o "ID do loja"
+     * numerico (em {@code shopIdCanal}). A documentacao da 99 nao diz qual dos dois ela manda neste
+     * header, e escolher errado nao daria erro visivel: daria 404 no webhook e <b>pedido real
+     * perdido</b>, em silencio.</p>
+     */
+    private IntegracaoCanal lojaDoHeader(String merchantId) {
+        return integracoes.findFirstByCanalAndMerchantId(client.canal(), merchantId)
+                .or(() -> integracoes.findFirstByCanalAndShopIdCanal(client.canal(), merchantId))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Nenhuma loja conectada com o identificador " + merchantId));
     }
 }

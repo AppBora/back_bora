@@ -17,6 +17,9 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
     /** Webhook do Open Delivery: a 99 identifica a loja pelo header X-App-MerchantId. */
     Optional<IntegracaoCanal> findFirstByCanalAndMerchantId(String canal, String merchantId);
 
+    /** O mesmo header pode trazer o outro identificador (o "ID do loja"); aceitamos os dois. */
+    Optional<IntegracaoCanal> findFirstByCanalAndShopIdCanal(String canal, String shopIdCanal);
+
     // ======================================================== ITEM 5.5 DA VARREDURA
     //
     // O ciclo de polling carregava a integracao no comeco (findByAtivoTrue, fora de transacao) e
