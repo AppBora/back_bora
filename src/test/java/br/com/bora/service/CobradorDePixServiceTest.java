@@ -116,7 +116,8 @@ class CobradorDePixServiceTest {
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
         when(repo.findById(1L)).thenReturn(java.util.Optional.of(p));
         PixService pix = mock(PixService.class);
-        when(pix.cobrancaFoiPaga(any(), any(), eq("pay_123"))).thenReturn(true);
+        when(pix.conferirPagamento(any(), any(), eq("pay_123")))
+                .thenReturn(PixService.PagamentoNoAsaas.PAGO);
         EstornoDaVendaService estorno = mock(EstornoDaVendaService.class);
 
         cobrador(repo, pix, mock(FidelidadeService.class), estorno).expirarAbandonados();
@@ -139,7 +140,8 @@ class CobradorDePixServiceTest {
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
         when(repo.findById(1L)).thenReturn(java.util.Optional.of(p));
         PixService pix = mock(PixService.class);
-        when(pix.cobrancaFoiPaga(any(), any(), eq("pay_123"))).thenReturn(true);
+        when(pix.conferirPagamento(any(), any(), eq("pay_123")))
+                .thenReturn(PixService.PagamentoNoAsaas.PAGO);
         FidelidadeService fid = mock(FidelidadeService.class);
 
         CobradorDePixService c = cobrador(repo, pix, fid, mock(EstornoDaVendaService.class));
@@ -156,7 +158,8 @@ class CobradorDePixServiceTest {
         p.idExterno = "pay_123";
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
         PixService pix = mock(PixService.class);
-        when(pix.cobrancaFoiPaga(any(), any(), anyString())).thenReturn(false);
+        when(pix.conferirPagamento(any(), any(), anyString()))
+                .thenReturn(PixService.PagamentoNoAsaas.NAO_PAGO);
         EstornoDaVendaService estorno = mock(EstornoDaVendaService.class);
 
         cobrador(repo, pix, mock(FidelidadeService.class), estorno).expirarAbandonados();
@@ -166,20 +169,36 @@ class CobradorDePixServiceTest {
     }
 
     @Test
-    void asaasForaDoAr_naoInventaPagamento() {
-        // cobrancaFoiPaga nunca lanca e devolve false quando nao conseguiu perguntar. O pedido segue
-        // o caminho de sempre: melhor cancelar um checkout abandonado do que liberar comida de graca.
+    void asaasForaDoAr_naoCANCELAeNAOinventaPAGAMENTO() {
+        // ESTE TESTE AFIRMAVA O CONTRARIO, E A AFIRMACAO ESTAVA ERRADA (trocado em 10/11/2026).
+        //
+        // Ele dizia: "cobrancaFoiPaga nunca lanca e devolve false quando nao conseguiu perguntar. O
+        // pedido segue o caminho de sempre: melhor cancelar um checkout abandonado do que liberar
+        // comida de graca." A escolha nunca foi entre cancelar e liberar comida.
+        //
+        // Nao cancelar NAO libera nada: o pedido continua com aguardandoPagamento = true, portanto
+        // fora do faturamento e fora da cozinha. Ele so nao e decidido AGORA -- e a rotina roda de
+        // novo em 5 minutos. Adiar custa uma rodada; cancelar venda PAGA e irreversivel, porque o
+        // dinheiro ja entrou na conta do lojista, o estoque e o cashback voltaram e o cliente ja foi
+        // avisado de que nao vai receber. Com o Asaas fora do ar por meia hora, todo PIX pago no
+        // periodo virava pedido cancelado.
         PedidoRepository repo = mock(PedidoRepository.class);
         Pedido p = pedido(true, null, StatusPedido.RECEBIDO);
         p.idExterno = "pay_123";
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
         PixService pix = mock(PixService.class);
-        when(pix.cobrancaFoiPaga(any(), any(), anyString())).thenReturn(false);
+        when(pix.conferirPagamento(any(), any(), anyString()))
+                .thenReturn(PixService.PagamentoNoAsaas.NAO_CONSEGUI_PERGUNTAR);
+        EstornoDaVendaService estorno = mock(EstornoDaVendaService.class);
 
-        cobrador(repo, pix, mock(FidelidadeService.class), mock(EstornoDaVendaService.class)).expirarAbandonados();
+        cobrador(repo, pix, mock(FidelidadeService.class), estorno).expirarAbandonados();
 
-        assertEquals(StatusPedido.CANCELADO, p.status);
-        assertNull(p.pagoEm);
+        assertEquals(StatusPedido.RECEBIDO, p.status, "sem resposta do Asaas, NAO se cancela");
+        assertEquals(Boolean.TRUE, p.aguardandoPagamento,
+                "continua em espera: e isso que o mantem fora do faturamento e fora da cozinha");
+        assertNull(p.pagoEm, "e tambem nao se inventa pagamento");
+        verify(estorno, never()).devolver(any(), any(), anyBoolean());
+        verify(pix, never()).cancelarCobranca(any(), any(), anyString());
     }
 
     @Test
@@ -193,8 +212,10 @@ class CobradorDePixServiceTest {
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(pago, abandonado));
         when(repo.findById(1L)).thenReturn(java.util.Optional.of(pago));
         PixService pix = mock(PixService.class);
-        when(pix.cobrancaFoiPaga(any(), any(), eq("pay_pago"))).thenReturn(true);
-        when(pix.cobrancaFoiPaga(any(), any(), eq("pay_nada"))).thenReturn(false);
+        when(pix.conferirPagamento(any(), any(), eq("pay_pago")))
+                .thenReturn(PixService.PagamentoNoAsaas.PAGO);
+        when(pix.conferirPagamento(any(), any(), eq("pay_nada")))
+                .thenReturn(PixService.PagamentoNoAsaas.NAO_PAGO);
 
         cobrador(repo, pix, mock(FidelidadeService.class), mock(EstornoDaVendaService.class)).expirarAbandonados();
 
@@ -210,6 +231,11 @@ class CobradorDePixServiceTest {
         p.idExterno = null;
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
         PixService pix = mock(PixService.class);
+        // O que o metodo DE VERDADE devolve com paymentId nulo: NAO_PAGO -- sem cobranca criada,
+        // ninguem pagou. Deixar o mock sem resposta faria o teste passar por acidente (null nao e
+        // nenhum dos tres), e o dible tem de dizer a verdade do metodo que ele substitui.
+        when(pix.conferirPagamento(any(), any(), isNull()))
+                .thenReturn(PixService.PagamentoNoAsaas.NAO_PAGO);
 
         cobrador(repo, pix, mock(FidelidadeService.class), mock(EstornoDaVendaService.class)).expirarAbandonados();
 

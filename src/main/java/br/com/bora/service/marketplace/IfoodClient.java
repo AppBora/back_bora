@@ -490,6 +490,19 @@ public class IfoodClient implements MarketplaceClient {
             i.ultimoErro = br.com.bora.entity.LarguraDeColuna.encurtar(resumo(e),
                     br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                     "integracao_canal.ultimo_erro da loja " + i.lojaId);
+            // 401 NUMA CHAMADA DE RECURSO = o token em cache nao vale mais. No iFood o cache dura
+            // SEIS HORAS, entao insistir com ele tira a loja do aplicativo por uma tarde inteira. O
+            // refreshToken fica: e por ele que a renovacao acontece sem novo login. Ver
+            // MarketplaceHttp.credencialRecusada -- so 401, nunca 403.
+            if (MarketplaceHttp.credencialRecusada(e)) {
+                i.accessToken = null;
+                i.tokenExpiraEm = null;
+                log.warn("iFood: o iFood recusou o TOKEN da loja {} (401) numa chamada de polling. "
+                        + "Joguei o token fora: a proxima rodada reautentica, em vez de insistir com "
+                        + "ele por ate seis horas.", i.lojaId);
+                repo.esquecerTokenRecusado(i.id, i.lojaId, i.ultimoPollingEm, i.ultimoErro);
+                return List.of();
+            }
             repo.marcarPollingFalhou(i.id, i.lojaId, i.ultimoPollingEm, i.ultimoErro);   // item 5.5
             log.warn("iFood: polling falhou para a loja {}: {}", i.lojaId, e.getMessage());
             return List.of();

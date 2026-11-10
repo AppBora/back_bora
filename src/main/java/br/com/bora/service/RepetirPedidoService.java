@@ -77,19 +77,24 @@ public class RepetirPedidoService {
     public RepetirPedidoService(PedidoRepository pedidos, PedidoItemRepository itens,
                                 ProdutoRepository produtos, ComplementoGrupoRepository grupos,
                                 ComplementoItemRepository complementos,
-                                @Value("${bora.jwt.secret:troque-este-segredo-em-producao-com-no-minimo-32-bytes!!}") String segredo) {
+                                // Mesmo segredo do JWT, e a MESMA exigencia: ver
+                                // JwtService.exigirSegredoDeVerdade. O literal do padrao antigo saiu
+                                // daqui para nao haver dois lugares com a chave publicada no codigo.
+                                @Value("${bora.jwt.secret:}") String segredo) {
         this.pedidos = pedidos;
         this.itens = itens;
         this.produtos = produtos;
         this.grupos = grupos;
         this.complementos = complementos;
+        // FALHA FECHADO, a mesma regra do JwtService -- e pelo mesmo motivo, que aqui era um
+        // `log.warn` (10/11/2026): com o segredo padrao do repositorio, qualquer pessoa que o conheca
+        // forja o link de repetir pedido. Aviso em log nao protege nada; ele some na primeira pagina
+        // e a API segue atendendo. A regra mora num lugar so, no JwtService, para as duas nao
+        // divergirem.
+        String bom = br.com.bora.security.JwtService.exigirSegredoDeVerdade(segredo);
         // Deriva uma chave propria do segredo do servidor. O prefixo separa o uso: assinatura de
         // link de repeticao nao e token de sessao, e nao deve valer uma pela outra.
-        this.chave = new SecretKeySpec(("repetir-pedido|" + segredo).getBytes(StandardCharsets.UTF_8), ALGORITMO);
-        if (segredo.startsWith("troque-")) {
-            log.warn("ATENCAO: bora.jwt.secret esta no valor padrao do repositorio. "
-                    + "Qualquer pessoa consegue forjar o link de repetir pedido.");
-        }
+        this.chave = new SecretKeySpec(("repetir-pedido|" + bom).getBytes(StandardCharsets.UTF_8), ALGORITMO);
     }
 
     // ---------------------------------------------------------------- o que sai daqui

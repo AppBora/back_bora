@@ -371,26 +371,49 @@ public class AssinaturaService {
     }
 
     /**
-     * Mesma coisa, mas também guarda a mensalidade recebida.
+     * Mesma coisa, mas tambem guarda a mensalidade recebida, e para quem nao tem valor de estorno a
+     * informar.
      *
-     * <p>O pagamento não deixava rastro nenhum: virava um status e acabou. Sem o identificador da
-     * cobrança, o valor e a data, não havia como dizer o que faturamos no mês nem onde pendurar a
+     * <p>O pagamento nao deixava rastro nenhum: virava um status e acabou. Sem o identificador da
+     * cobranca, o valor e a data, nao havia como dizer o que faturamos no mes nem onde pendurar a
      * nota fiscal de cada mensalidade.</p>
-     */
-    @Transactional
-    /**
-     * Mesma coisa, para quem nao tem valor de estorno para informar.
      *
      * <p>Quase todo evento do Asaas nao devolve dinheiro nenhum, e os testes de outros caminhos nao
-     * precisam saber deste parametro. <b>O webhook de verdade NAO usa esta sobrecarga</b>: ele le o
+     * precisam saber daquele parametro. <b>O webhook de verdade NAO usa esta sobrecarga</b>: ele le o
      * {@code refunds} do payload e chama a versao completa, senao o estorno parcial volta a nao ter
      * valor (item 3.6).</p>
      */
+    @Transactional
     public void processarWebhook(String event, String subscriptionId, String paymentId,
                                  java.math.BigDecimal valor, java.time.OffsetDateTime pagoEm) {
         processarWebhook(event, subscriptionId, paymentId, null, valor, pagoEm);
     }
 
+    /**
+     * A sobrecarga COMPLETA -- e a unica que o webhook de verdade chama.
+     *
+     * <h2>Por que o {@code @Transactional} esta aqui (defeito confirmado em 10/11/2026)</h2>
+     * <p>Ele estava na sobrecarga de 5 parametros, cujo proprio javadoc diz, com estas palavras, que
+     * <b>"o webhook de verdade NAO usa esta sobrecarga"</b>. O
+     * {@code AsaasWebhookController} chama esta, de 6 parametros, que <b>nao tinha anotacao nenhuma</b>
+     * -- entao o caminho real do webhook rodava <b>sem transacao</b>. Este metodo grava pagamento,
+     * muda o status da assinatura, ativa ou suspende a loja e estende o acesso: sem transacao, uma
+     * falha no meio deixa metade aplicada. Pagamento registrado sem o acesso estendido, ou acesso
+     * estendido sem o pagamento registrado.</p>
+     *
+     * <p>O que escondeu isso foi a <b>disposicao do arquivo</b>: a anotacao ficava entre dois
+     * javadoc, e parecia pertencer ao metodo de baixo. Ela se aplica sempre ao que vem DEPOIS dela,
+     * comentario no meio ou nao. As outras duas sobrecargas delegam para esta por chamada interna --
+     * que nao passa pelo proxy, mas ja roda dentro da transacao aberta por elas --, entao quem entra
+     * por elas sempre esteve coberto. So o caminho do controller estava descoberto, e e o unico que
+     * existe em producao.</p>
+     *
+     * <p>Nenhum teste podia pegar isto: todos chamam o servico direto, sem proxy do Spring, e sem
+     * proxy a anotacao nao faz nada em teste nenhum. O que pega e o
+     * {@code OwebhookDoAsaasRodaEmTransacaoTest}, que le a anotacao por reflexao na assinatura que o
+     * controller usa.</p>
+     */
+    @Transactional
     public void processarWebhook(String event, String subscriptionId, String paymentId,
                                  java.math.BigDecimal valorEstornado,
                                  BigDecimal valor, OffsetDateTime pagoEm) {

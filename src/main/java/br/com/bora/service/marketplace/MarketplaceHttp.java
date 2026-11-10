@@ -54,4 +54,29 @@ public class MarketplaceHttp {
         Long chave = i == null || i.id == null ? -1L : i.id;
         return travas.computeIfAbsent(chave, k -> new Object());
     }
+
+    /**
+     * A credencial foi RECUSADA pelo canal (HTTP 401) numa chamada que usou o token em cache?
+     *
+     * <p><b>Para que isto serve (defeito confirmado em 10/11/2026):</b> o token fica em cache ate o
+     * {@code tokenExpiraEm} -- 1 h na 99Food, 6 h no iFood. Se o canal REVOGAR o token antes disso
+     * (credencial trocada no portal, app suspenso, rotacao do lado deles), toda chamada volta 401 e o
+     * poller insistia com <b>o mesmo token morto</b> ate o vencimento. A loja some do aplicativo por
+     * horas, e a tela de Integracoes continua verde.</p>
+     *
+     * <p>So <b>401</b>. O <b>403</b> de proposito nao conta: ele quer dizer "o token vale, mas este
+     * recurso nao e seu" -- jogar o token fora ali faria o sistema reautenticar a cada 30 segundos
+     * para uma loja que nunca vai funcionar, martelando o endpoint de token do canal. E o 403 e um
+     * caso real em producao hoje: a loja de teste da 99 responde exatamente isso.</p>
+     */
+    public static boolean credencialRecusada(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof org.springframework.web.client.HttpStatusCodeException h
+                    && h.getStatusCode().value() == 401) {
+                return true;
+            }
+            if (t.getCause() == t) break;
+        }
+        return false;
+    }
 }

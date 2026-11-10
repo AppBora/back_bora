@@ -85,17 +85,35 @@ public class CobradorDePixService {
         //
         // O Asaas e chamado FORA da transacao: a conexao do banco ja voltou para o pool, e uma
         // lentidao deles nao segura o cardapio inteiro.
+        // TRES respostas possiveis, nao duas. "Nao consegui perguntar" NAO e "nao pagou" -- e era,
+        // e por isso pedido PAGO virava CANCELADO quando o Asaas dava timeout, 429 ou 5xx. Ver o
+        // javadoc de PixService.conferirPagamento.
         Set<Long> pagos = new LinkedHashSet<>();
+        Set<Long> semResposta = new LinkedHashSet<>();
         for (Pedido p : vencidos) {
             if (p.pagoEm != null || p.status == StatusPedido.CANCELADO) continue;
-            if (pix.cobrancaFoiPaga(lojas.findById(p.lojaId).orElse(null),
-                    integracoes.findByLojaIdAndCanal(p.lojaId, "PIX").orElse(null), p.idExterno)) {
-                pagos.add(p.id);
-            }
+            PixService.PagamentoNoAsaas r = pix.conferirPagamento(lojas.findById(p.lojaId).orElse(null),
+                    integracoes.findByLojaIdAndCanal(p.lojaId, "PIX").orElse(null), p.idExterno);
+            if (r == PixService.PagamentoNoAsaas.PAGO) pagos.add(p.id);
+            else if (r == PixService.PagamentoNoAsaas.NAO_CONSEGUI_PERGUNTAR) semResposta.add(p.id);
+        }
+
+        // Quem ficou sem resposta NAO e cancelado: continua com aguardandoPagamento = true, portanto
+        // fora do faturamento e fora da cozinha, e a proxima rodada (5 min) pergunta de novo. O
+        // pedido nao "vaza" -- ele so nao e decidido com base em um erro de rede.
+        if (!semResposta.isEmpty()) {
+            log.warn("AUDITORIA dinheiro: o Asaas nao respondeu sobre {} pedido(s) em espera {} -- "
+                            + "eles NAO foram cancelados nesta rodada, de proposito, e serao "
+                            + "perguntados de novo. Cancelar sem resposta ja transformou PIX pago em "
+                            + "pedido cancelado. Se isto se repetir por varias rodadas, confira a "
+                            + "chave do Asaas da loja na tela de Integracoes.",
+                    semResposta.size(), semResposta);
         }
 
         Integer confirmados = pagos.isEmpty() ? 0 : tx.execute(st -> confirmarOsQueForamPagos(pagos));
-        List<Pedido> cancelados = tx.execute(st -> cancelarVencidos(corte, pagos));
+        Set<Long> naoCancelar = new LinkedHashSet<>(pagos);
+        naoCancelar.addAll(semResposta);
+        List<Pedido> cancelados = tx.execute(st -> cancelarVencidos(corte, naoCancelar));
 
         if (confirmados != null && confirmados > 0) {
             log.warn("PIX: {} pedido(s) estavam PAGOS no Asaas e o aviso nunca chegou. Confirmados aqui, "

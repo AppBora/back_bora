@@ -136,19 +136,77 @@ public class PixService {
      *         rede, cobranca sumida) devolve false: na duvida o pedido segue o caminho de sempre.
      */
     @SuppressWarnings("unchecked")
-    public boolean cobrancaFoiPaga(Loja loja, IntegracaoCanal i, String paymentId) {
-        if (paymentId == null || paymentId.isBlank()) return false;
+    /**
+     * O que o Asaas respondeu sobre uma cobranca. <b>"Nao consegui perguntar" NAO e "nao pagou".</b>
+     *
+     * <p>Este enum existe porque o metodo abaixo devolvia {@code boolean}, e um booleano nao tem como
+     * dizer "nao sei". Todo erro -- timeout, 429, 5xx, chave revogada, loja sem chave -- caia no
+     * mesmo {@code false} de "o cliente nao pagou", e quem chama cancelava o pedido. Ver
+     * {@link #conferirPagamento}.</p>
+     */
+    public enum PagamentoNoAsaas {
+        /** O Asaas respondeu que a cobranca esta paga. */
+        PAGO,
+        /** O Asaas respondeu, e a cobranca NAO esta paga. */
+        NAO_PAGO,
+        /** Nao houve resposta utilizavel. Nao da para concluir nada: tentar de novo depois. */
+        NAO_CONSEGUI_PERGUNTAR
+    }
+
+    /**
+     * Pergunta ao Asaas se a cobranca foi paga, distinguindo os TRES estados possiveis.
+     *
+     * <h2>O defeito que isto fecha (confirmado em 10/11/2026)</h2>
+     * <p>Este metodo era {@code boolean cobrancaFoiPaga(...)} e devolvia {@code false} dentro do
+     * {@code catch (Exception e)}. Entao <b>timeout, 429, 5xx e chave revogada diziam exatamente a
+     * mesma coisa que "o cliente nao pagou"</b> -- e o {@code CobradorDePixService} seguia para o
+     * cancelamento, que devolve estoque, devolve cashback e avisa o cliente de que o pedido foi
+     * cancelado. Com o Asaas fora do ar por meia hora, <b>pedido pago virava pedido cancelado</b>:
+     * dinheiro na conta do lojista, comida nao entregue, cliente avisado do contrario.</p>
+     *
+     * <h2>Por que "pular a rodada" e a escolha certa, e nao um risco novo</h2>
+     * <p>Havia um teste trancando o comportamento antigo
+     * ({@code asaasForaDoAr_naoInventaPagamento}), com esta justificativa: "melhor cancelar um
+     * checkout abandonado do que liberar comida de graca". <b>A escolha nunca foi essa.</b> Nao
+     * cancelar nao libera nada: o pedido continua com {@code aguardandoPagamento = true}, continua
+     * fora do faturamento e continua sem ir para a cozinha. Ele so nao e cancelado AGORA -- e a
+     * rotina roda de novo em 5 minutos, quando o Asaas provavelmente responde.</p>
+     *
+     * <p>A assimetria e o contrario do que aquele comentario supunha: adiar o cancelamento custa uma
+     * rodada; cancelar venda paga e irreversivel -- o dinheiro ja entrou, o estoque ja voltou e o
+     * cliente ja foi avisado de que nao vai receber.</p>
+     *
+     * @return {@link PagamentoNoAsaas#NAO_PAGO} tambem quando nao existe cobranca ({@code paymentId}
+     *         nulo ou vazio): sem cobranca criada, ninguem pagou. Mas {@code NAO_CONSEGUI_PERGUNTAR}
+     *         quando falta a chave da loja -- ai o fato existe e e a nossa vista que nao alcanca.
+     */
+    public PagamentoNoAsaas conferirPagamento(Loja loja, IntegracaoCanal i, String paymentId) {
+        if (paymentId == null || paymentId.isBlank()) return PagamentoNoAsaas.NAO_PAGO;
         String apiKey = loja != null && loja.asaasApiKey != null && !loja.asaasApiKey.isBlank()
                 ? loja.asaasApiKey : (i == null ? null : i.clientSecret);
-        if (apiKey == null || apiKey.isBlank()) return false;
+        if (apiKey == null || apiKey.isBlank()) {
+            log.warn("Nao tenho chave do Asaas para conferir a cobranca {} (loja {}). NAO vou concluir "
+                            + "que o cliente nao pagou: o pedido fica como esta.",
+                    paymentId, loja == null ? null : loja.id);
+            return PagamentoNoAsaas.NAO_CONSEGUI_PERGUNTAR;
+        }
         try {
             Map<String, Object> r = client(apiKey).get().uri("/payments/{id}", paymentId)
                     .retrieve().body(Map.class);
-            String status = r == null || r.get("status") == null ? "" : String.valueOf(r.get("status"));
-            return "RECEIVED".equals(status) || "CONFIRMED".equals(status) || "RECEIVED_IN_CASH".equals(status);
+            if (r == null || r.get("status") == null) {
+                // Resposta sem status e resposta que nao da para interpretar -- nao e "nao pagou".
+                log.warn("O Asaas respondeu sobre a cobranca {} sem o campo status. NAO da para "
+                        + "concluir se foi paga.", paymentId);
+                return PagamentoNoAsaas.NAO_CONSEGUI_PERGUNTAR;
+            }
+            String status = String.valueOf(r.get("status"));
+            boolean pago = "RECEIVED".equals(status) || "CONFIRMED".equals(status)
+                    || "RECEIVED_IN_CASH".equals(status);
+            return pago ? PagamentoNoAsaas.PAGO : PagamentoNoAsaas.NAO_PAGO;
         } catch (Exception e) {
-            log.warn("Nao consegui conferir a cobranca {} no Asaas: {}", paymentId, e.getMessage());
-            return false;
+            log.warn("Nao consegui conferir a cobranca {} no Asaas: {}. O pedido NAO sera cancelado "
+                    + "nesta rodada.", paymentId, e.getMessage());
+            return PagamentoNoAsaas.NAO_CONSEGUI_PERGUNTAR;
         }
     }
 

@@ -287,6 +287,18 @@ public class OpenDeliveryClient implements MarketplaceClient {
                         br.com.bora.entity.LarguraDeColuna.INTEGRACAO_ULTIMO_ERRO,
                         "integracao_canal.ultimo_erro da loja " + i.lojaId);
             }
+            // 401 NUMA CHAMADA DE RECURSO = o token em cache nao vale mais. Jogar fora, senao a
+            // proxima rodada manda o MESMO token morto por ate 1 h. Ver
+            // MarketplaceHttp.credencialRecusada: so 401, nunca 403.
+            if (MarketplaceHttp.credencialRecusada(e)) {
+                i.accessToken = null;
+                i.tokenExpiraEm = null;
+                log.warn("Open Delivery: a 99Food recusou o TOKEN da loja {} (401) numa chamada de "
+                        + "polling. Joguei o token fora: a proxima rodada (30 s) reautentica, em vez "
+                        + "de insistir com ele por ate uma hora.", i.lojaId);
+                repo.esquecerTokenRecusado(i.id, i.lojaId, i.ultimoPollingEm, i.ultimoErro);
+                return List.of();
+            }
             // Item 5.5. O `falha()` ja gravou status e erro quando a excecao veio dele; aqui so a
             // hora da tentativa e, se houver, a mensagem.
             repo.marcarPollingFalhou(i.id, i.lojaId, i.ultimoPollingEm, i.ultimoErro);

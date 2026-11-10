@@ -65,6 +65,32 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
                             @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora,
                             @org.springframework.data.repository.query.Param("erro") String erro);
 
+    /**
+     * O canal RECUSOU o token em cache (401): joga o token fora, junto com a hora e o motivo.
+     *
+     * <p>Sem isto, a proxima rodada manda <b>o mesmo token morto</b>, e assim por diante ate o
+     * {@code tokenExpiraEm} -- 1 h na 99Food, 6 h no iFood. Com o token nulo, o {@code vigente()} dos
+     * dois clientes devolve false e a rodada seguinte (30 s) reautentica. Se a credencial estiver de
+     * fato morta, o {@code falha()} do caminho de autenticacao marca ERRO com o motivo certo -- entao
+     * a tela passa a dizer a verdade em meio minuto, em vez de horas.</p>
+     *
+     * <p><b>NAO mexe no {@code refreshToken}</b>: no iFood ele pode continuar valendo, e e por ele
+     * que a renovacao acontece sem novo login.</p>
+     *
+     * <p>Colunas nomeadas uma a uma, como as outras daqui (item 5.5): {@code save(i)} regravaria a
+     * linha inteira com valores de ate 25 segundos atras e desfaria o que o lojista salvou agora.</p>
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
+            + "i.accessToken = null, i.tokenExpiraEm = null, "
+            + "i.ultimoPollingEm = :agora, i.ultimoErro = :erro "
+            + "where i.id = :id and i.lojaId = :lojaId")
+    int esquecerTokenRecusado(@org.springframework.data.repository.query.Param("id") Long id,
+                              @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
+                              @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora,
+                              @org.springframework.data.repository.query.Param("erro") String erro);
+
     /** A integracao parou: status e motivo. */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.transaction.annotation.Transactional

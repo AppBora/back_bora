@@ -185,6 +185,14 @@ public class IntegracaoService {
             m.put("vinculoExpiraEm", i == null ? null : i.vinculoExpiraEm);
             m.put("ultimoPollingEm", i == null ? null : i.ultimoPollingEm);
             m.put("ultimoErro", i == null ? null : i.ultimoErro);
+            // ESTE CAMPO FALTAVA NA LISTAGEM, e o card da tela de Integracoes depende dele
+            // (10/11/2026). O `corpoOficial` do integracoes.js le `i.tokenExpiraEm` para desenhar o
+            // aviso "a autorizacao do iFood venceu" -- escrito em 25/10/2026 exatamente para o caso
+            // da Pizzaria, cujo token tinha vencido 18 dias antes com o cartao dizendo CONECTADO.
+            // So que a tela e alimentada por ESTA listagem, nao pelo detalhe, e aqui o campo nao
+            // existia: `i.tokenExpiraEm` chegava `undefined`, `tokenVencido` dava sempre false e o
+            // aviso NUNCA aparecia. O conserto de 25/10 estava inerte na tela para a qual foi feito.
+            m.put("tokenExpiraEm", i == null ? null : i.tokenExpiraEm);
             m.put("ultimoAviso", i == null ? null : i.ultimoAviso);
             m.put("ultimoAvisoEm", i == null ? null : i.ultimoAvisoEm);
             out.add(m);
