@@ -14,8 +14,17 @@
 -- neste sistema", medido em 25/10/2026. O numero certo estava na tela desde entao.
 --
 -- O App Secret e do APLICATIVO, nao da loja: o ClientId e AppID_AppShopId e as 5 lojas da Zira sao
--- shops do MESMO App ID (5764607707103889279 -- o mesmo que esta em credencial.opendelivery.client-id).
--- Entao o segredo que funciona na loja 18 e o segredo da plataforma, e esta guardado no lugar errado.
+-- shops do MESMO App ID (5764607707103889279). Entao o segredo que funciona na loja 18 e o segredo
+-- da plataforma, e esta guardado no lugar errado.
+--
+-- CORRECAO DE UMA AFIRMACAO FALSA QUE ESTAVA AQUI (reescrito em 10/11/2026, depois do flyway repair):
+-- este comentario dizia que 5764607707103889279 era "o mesmo que esta em
+-- credencial.opendelivery.client-id". **Nao era.** Aquele campo guardava 5764607673624955027, que e
+-- o App ID do aplicativo de TESTE. Eu nao medi: conferi que o valor tinha 19 digitos e comecava com
+-- 5764607 e declarei identidade -- e os DOIS App ID tem 19 digitos e comecam com 5764607. Por causa
+-- dessa frase, a V68 saiu achando que bastava consertar o segredo, e as lojas 19-22 continuaram em
+-- 401 por mais tres minutos depois do commit, ate a V69 consertar o App ID tambem. As duas juntas
+-- formam o par certo.
 --
 -- POR QUE COPIAR O TEXTO CIFRADO FUNCIONA:
 -- o SegredoGuardado usa AES-256/GCM com chave global (BORA_SEGREDO_COLUNAS), nonce gravado DENTRO do
@@ -32,6 +41,29 @@
 -- falhando exatamente como hoje -- elas estao em 100% de falha. O pior caso e empate, e o valor que
 -- estamos substituindo e comprovadamente lixo (o nome do app).
 
+-- ===================================================================================
+-- POR QUE ESTE ARQUIVO FOI REESCRITO DEPOIS DE JA ESTAR APLICADO (10/11/2026)
+--
+-- A primeira versao fazia `IF v_quantas <> 1 THEN RAISE EXCEPTION`, e isso transforma **migracao de
+-- dado de producao em pre-condicao de boot**. Num banco VAZIO nao existe loja 18 nenhuma: v_quantas
+-- = 0, excecao, Flyway falha, a API NAO SOBE. Efeito medido: os 211 testes de integracao so rodavam
+-- com `-Dspring.flyway.target=67`, e um ambiente novo do zero nao subia.
+--
+-- A regra certa, a mesma da V69: abortar so quando ha AMBIGUIDADE (mais de uma fonte possivel, e eu
+-- nao posso escolher sozinho qual e a certa). Com ZERO fontes nao ha nada a fazer, e esse e um
+-- estado legitimo -- avisa e sai.
+--
+-- EDITAR ESTE ARQUIVO EXIGIU UM `flyway repair` NA PRODUCAO, e e por isso que isto esta escrito
+-- aqui: o Flyway valida o checksum de toda migracao ja aplicada, entao mudar o arquivo faria o
+-- proximo deploy falhar na VALIDACAO, antes de qualquer migracao rodar. O repair nao re-executa
+-- nada; ele so realinha o checksum gravado com o do arquivo. Na producao o efeito desta migracao ja
+-- estava aplicado, entao nada precisava rodar de novo.
+--
+-- O QUE ISSO CUSTA, e e o preco de ter escrito a guarda errada: a producao foi corrigida pelo
+-- arquivo ANTIGO, e nenhum banco vai executar este texto novo em cima dela. Quem garante que o novo
+-- esta certo e o banco vazio -- os ITs e um ambiente novo --, nao a producao.
+-- ===================================================================================
+
 DO $$
 DECLARE
     v_cifrado  text;
@@ -47,10 +79,21 @@ BEGIN
        AND client_secret IS NOT NULL AND client_secret <> ''
        AND access_token IS NOT NULL;
 
-    IF v_quantas <> 1 THEN
-        RAISE EXCEPTION 'V68 abortada: esperava exatamente 1 integracao NOVE_NOVE conectada com '
-                        'credencial propria para usar como fonte do App Secret, e achei %. '
-                        'Conferir a mao antes de rodar.', v_quantas;
+    -- Mais de uma fonte: ha AMBIGUIDADE, e escolher errado grava o segredo errado para toda a
+    -- plataforma. Esse caso SIM precisa de gente olhando.
+    IF v_quantas > 1 THEN
+        RAISE EXCEPTION 'V68 abortada: ha % integracoes NOVE_NOVE conectadas com credencial propria, '
+                        'e nao da para saber de qual tirar o App Secret da plataforma. '
+                        'Conferir a mao.', v_quantas;
+    END IF;
+
+    -- Nenhuma fonte: banco novo, banco de teste de integracao, ou a loja de referencia sem token no
+    -- instante do deploy. Nao ha o que corrigir, e isto NAO e erro. Ver o bloco acima.
+    IF v_quantas = 0 THEN
+        RAISE NOTICE 'V68: nenhuma integracao NOVE_NOVE conectada com credencial propria para servir '
+                     'de fonte do App Secret. Nada a fazer (banco novo, ou a loja de referencia esta '
+                     'sem token agora). A migracao segue como aplicada.';
+        RETURN;
     END IF;
 
     SELECT client_secret INTO v_cifrado
@@ -81,20 +124,28 @@ BEGIN
     ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = now();
 
     RAISE NOTICE 'V68: App Secret da plataforma trocado pelo da loja conectada (criptograma copiado).';
+
+    -- Daqui para baixo so roda quando o segredo MUDOU de fato. Estes dois UPDATE ficavam FORA do
+    -- bloco, e rodavam sempre -- inclusive nos caminhos de "nada a fazer". Em todo deploy futuro
+    -- eles zerariam o token das integracoes sem credencial propria, forcando um ciclo de login novo
+    -- em producao sem motivo nenhum.
+
+    -- Trocar a credencial e manter o token antigo faria a loja seguir no app velho ate o token
+    -- vencer -- e o mesmo motivo do esquecerTokens() do CredenciaisMarketplace. So mexe em quem NAO
+    -- tem credencial propria: a loja conectada continua com o token dela, que funciona.
+    UPDATE integracao_canal
+       SET access_token = NULL, token_expira_em = NULL
+     WHERE canal = 'NOVE_NOVE'
+       AND (client_secret IS NULL OR client_secret = '');
+
+    -- Zera o relogio do backoff: mereceNovaTentativa() exige status ERRO e ultimo_polling_em mais
+    -- velho que 10 min. Com ultimo_polling_em nulo a proxima rodada do poller (30s) tenta na hora.
+    --
+    -- ATENCAO AO MEDIR: isto solta o poller no mesmo segundo em que a migracao commita. Falha
+    -- registrada nesse segundo NAO prova nada -- foi o erro que eu cometi as 14:15 de 10/11, quando
+    -- li o log 830ms depois do meu proprio commit e quase conclui dali.
+    UPDATE integracao_canal
+       SET ultimo_polling_em = NULL, ultimo_erro = NULL
+     WHERE canal = 'NOVE_NOVE' AND status = 'ERRO'
+       AND (client_secret IS NULL OR client_secret = '');
 END $$;
-
--- Trocar a credencial e manter o token antigo faria a loja seguir no app velho ate o token vencer --
--- e o mesmo motivo do esquecerTokens() do CredenciaisMarketplace. So mexe em quem NAO tem credencial
--- propria: a loja conectada continua com o token dela, que funciona.
-UPDATE integracao_canal
-   SET access_token = NULL, token_expira_em = NULL
- WHERE canal = 'NOVE_NOVE'
-   AND (client_secret IS NULL OR client_secret = '');
-
--- Zera o relogio do backoff: mereceNovaTentativa() exige status ERRO e ultimo_polling_em mais velho
--- que 10 min. Com ultimo_polling_em nulo a proxima rodada do poller (30s) tenta na hora, e o
--- veredito aparece no log em meio minuto em vez de dez.
-UPDATE integracao_canal
-   SET ultimo_polling_em = NULL, ultimo_erro = NULL
- WHERE canal = 'NOVE_NOVE' AND status = 'ERRO'
-   AND (client_secret IS NULL OR client_secret = '');
