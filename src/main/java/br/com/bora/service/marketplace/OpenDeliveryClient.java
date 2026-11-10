@@ -215,9 +215,14 @@ public class OpenDeliveryClient implements MarketplaceClient {
                     .body(form).retrieve().body(Map.class);
         } catch (HttpClientErrorException.NotFound e) {
             // Roteiro, pag. 17: sem a liberacao na AllowList da 99, toda chamada volta Not Found.
+            log.warn("Open Delivery: Not Found no token da loja {}. client_id enviado: {}. Resposta da 99: {}",
+                    i.lojaId, clientIdDaLoja(i), corpoDoErro(e, secretDaLoja(i)));
             throw falha(i, "A 99Food respondeu Not Found: o aplicativo ainda nao esta liberado na AllowList "
                     + "deles. Avise o time de integracao da 99 que o app foi criado.");
         } catch (HttpClientErrorException.Unauthorized e) {
+            log.warn("Open Delivery: a 99Food recusou a credencial da loja {}. client_id enviado: {}. "
+                            + "Resposta da 99: {}",
+                    i.lojaId, clientIdDaLoja(i), corpoDoErro(e, secretDaLoja(i)));
             throw falha(i, "A 99Food recusou a credencial: confira o App Shop ID desta loja e o App Secret da plataforma.");
         } catch (Exception e) {
             throw falha(i, "Falha ao autenticar na 99Food: " + resumo(e));
@@ -614,6 +619,33 @@ public class OpenDeliveryClient implements MarketplaceClient {
     }
 
     // ---------------------------------------------------------------- apoio
+
+    /**
+     * O que o provedor <b>respondeu</b>, para o log — nunca para o {@code ultimo_erro} do lojista.
+     *
+     * <h2>Por que isto existe (medido em 10/11/2026)</h2>
+     * <p>O {@code catch} do 401 descartava o {@code e} inteiro e gravava só a nossa frase, "confira o
+     * App Shop ID desta loja e o App Secret da plataforma". Por dois meses foi o que a gente tinha
+     * para olhar — e a frase lista <b>dois</b> suspeitos sem dizer qual. Em 10/11 isso me custou uma
+     * conclusão errada: provei que o App Secret salvo era o nome do app, troquei pelo que funciona na
+     * loja 18, e as outras quatro continuaram em 401. O corpo da resposta separa os dois casos
+     * ({@code invalid_client} é credencial; loja não vinculada é outra coisa) e ele estava chegando
+     * aqui o tempo todo.</p>
+     *
+     * <p>O {@code client_id} vai junto <b>de propósito</b>: ele não é segredo (é
+     * {@code AppID_AppShopId}) e é o campo que de fato sai na chamada. A lição de 08/11 foi medir a
+     * tabela em vez da chamada; com ele no log, o que saiu fica escrito.</p>
+     *
+     * @param segredo o App Secret da chamada, só para ser apagado: provedor que ecoa os parâmetros
+     *                recebidos dentro da mensagem de erro poria a credencial do lojista no nosso log,
+     *                e o log não é cifrado.
+     */
+    private String corpoDoErro(HttpStatusCodeException e, String segredo) {
+        String corpo = e.getResponseBodyAsString();
+        if (corpo == null || corpo.isBlank()) return "(a 99 respondeu com corpo vazio)";
+        if (segredo != null && !segredo.isBlank()) corpo = corpo.replace(segredo, "***");
+        return corpo.length() > 500 ? corpo.substring(0, 500) + "…" : corpo;
+    }
 
     private String resumo(Exception e) {
         String m = e.getMessage();
