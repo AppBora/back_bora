@@ -12,6 +12,7 @@ import java.time.OffsetDateTime;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -34,7 +35,17 @@ class PromocaoDaDescontoDeVerdadeTest {
 
     private final CupomRepository cupons = mock(CupomRepository.class);
     private final PromocaoRepository promocoes = mock(PromocaoRepository.class);
-    private final DescontoService svc = new DescontoService(cupons, promocoes);
+    /** Ver {@link #oUsoEhContadoDENTROdeUmaTransacaoABERTAaqui()}: a transacao e o conserto. */
+    private final org.springframework.transaction.PlatformTransactionManager gerente = gerenciadorFalso();
+    private final DescontoService svc = new DescontoService(cupons, promocoes, gerente);
+
+    /** Abre uma transacao de mentira e deixa o trabalho acontecer, para a ordem ser verificavel. */
+    private static org.springframework.transaction.PlatformTransactionManager gerenciadorFalso() {
+        var g = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        when(g.getTransaction(any()))
+                .thenReturn(new org.springframework.transaction.support.SimpleTransactionStatus());
+        return g;
+    }
 
     private Promocao relampago(int percentual, Integer limite, Integer usos, int horasRestantes) {
         Promocao p = new Promocao();
@@ -192,5 +203,45 @@ class PromocaoDaDescontoDeVerdadeTest {
         assertTrue(svc.resolver(LOJA, "", new BigDecimal("50.00")).isEmpty());
         assertTrue(svc.resolver(LOJA, null, new BigDecimal("50.00")).isEmpty());
         assertTrue(svc.resolver(LOJA, "BORA15", BigDecimal.ZERO).isEmpty());
+    }
+
+    // ============== a contagem do uso abre transacao propria (defeito medido em 10/11/2026)
+
+    @Test
+    void oUsoEhContadoDENTROdeUmaTransacaoABERTAaqui() {
+        relampago(15, 20, 0, 3);
+        var d = svc.resolver(LOJA, "BORA15", new BigDecimal("100.00")).get();
+        when(promocoes.somarUmUso(7L)).thenReturn(1);
+
+        svc.contabilizarUso(d);
+
+        // O QUE ESTE TESTE TRANCA: o somarUmUso e @Modifying(flushAutomatically = true), e o flush do
+        // JPA EXIGE transacao ativa. O POST do pedido do cardapio nao tem @Transactional de proposito
+        // (conserto de 26/10/2026), e esta contagem roda DEPOIS do tx.execute que grava o pedido. Sem
+        // nenhuma transacao em volta, o flush estourava TransactionRequiredException com o PEDIDO JA
+        // GRAVADO e o desconto aplicado: 500 na cara do cliente, pedido duplicado na tentativa
+        // seguinte, e contador de usos parado em zero -- desconto sem teto.
+        //
+        // Com MOCK do repositorio nao da para reproduzir o estouro, e foi exatamente por isso que
+        // este arquivo nao pegou o defeito (o outro teste, DescontoNoCheckoutIT, e @DataJpaTest, que
+        // roda DENTRO de uma transacao). O que DA para provar aqui e a estrutura: a transacao e
+        // aberta ANTES do incremento. Quem tirar o TransactionTemplate do servico reprova aqui.
+        var ordem = inOrder(gerente, promocoes);
+        ordem.verify(gerente).getTransaction(any());
+        ordem.verify(promocoes).somarUmUso(7L);
+        ordem.verify(gerente).commit(any());
+    }
+
+    @Test
+    void contagemQueFALHAnaoDERRUBAoPEDIDO() {
+        relampago(15, 20, 0, 3);
+        var d = svc.resolver(LOJA, "BORA15", new BigDecimal("100.00")).get();
+        when(promocoes.somarUmUso(7L)).thenThrow(
+                new jakarta.persistence.TransactionRequiredException("flush sem transacao"));
+
+        // A promessa que esta no javadoc do metodo: "nao faz o pedido falhar". Quando o QA mediu, ele
+        // fazia -- no pior momento possivel, com a venda ja registrada. Mesmo que um dia alguem tire
+        // a transacao outra vez, o cliente nao pode receber erro depois de o pedido estar gravado.
+        assertDoesNotThrow(() -> svc.contabilizarUso(d));
     }
 }

@@ -1,6 +1,7 @@
 package br.com.bora.service;
 
 import br.com.bora.entity.Cliente;
+import br.com.bora.entity.LarguraDeColuna;
 import br.com.bora.repository.ClienteRepository;
 import br.com.bora.repository.ConfiguracaoLojaRepository;
 import org.springframework.http.HttpStatus;
@@ -81,8 +82,13 @@ public class FidelidadeService {
                     // nada: desde a V48 o endereco da entrega fica no PROPRIO pedido
                     // (`pedido.endereco_entrega`), que e o que o motoboy le. O cadastro se corrige na
                     // tela de Clientes, por alguem logado.
-                    if ((c.nome == null || c.nome.isBlank()) && nome != null) {
-                        c.nome = nome;
+                    //
+                    // CORTA o nome: `cliente.nome` e varchar(160) e este valor vem do formulario do
+                    // cardapio. Ver o bloco do cadastro novo, logo abaixo, para o estrago.
+                    String nomeCabendo = LarguraDeColuna.encurtar(nome, LarguraDeColuna.CLIENTE_NOME,
+                            "nome do cliente " + c.id + " (loja " + lojaId + ")");
+                    if ((c.nome == null || c.nome.isBlank()) && nomeCabendo != null) {
+                        c.nome = nomeCabendo;
                         return clientes.save(c).id;
                     }
                     // Nada a completar: nem grava. Uma escrita a menos em cadastro de cliente a cada
@@ -90,11 +96,24 @@ public class FidelidadeService {
                     return c.id;
                 })
                 .orElseGet(() -> {
+                    // CORTA os dois, e o motivo e o MESMO defeito do `pedido.endereco_entrega`
+                    // (10/11/2026), um andar abaixo do que o QA mediu: `cliente.nome` e varchar(160)
+                    // e `cliente.endereco` e varchar(500), e os dois vinham crus do formulario do
+                    // cardapio -- o endereco sem nem um `trim()`.
+                    //
+                    // POR QUE ISTO E O MESMO BUG, E NAO UM EXTRA: este metodo roda DENTRO do
+                    // `tx.execute` que grava o pedido. Um endereco de 600 caracteres era recusado em
+                    // DOIS lugares da mesma transacao (aqui e no pedido), e um nome de 200 num
+                    // terceiro. Consertar so a linha do pedido deixaria o 500 de pe, pela segunda
+                    // recusa, com o mesmo pedido perdido do mesmo jeito.
                     Cliente novo = new Cliente();
                     novo.lojaId = lojaId;
-                    novo.nome = nome == null || nome.isBlank() ? "Cliente do cardápio" : nome.trim();
+                    String nomeCabendo = LarguraDeColuna.encurtar(nome, LarguraDeColuna.CLIENTE_NOME,
+                            "nome do cliente novo do cardapio (loja " + lojaId + ")");
+                    novo.nome = nomeCabendo == null ? "Cliente do cardápio" : nomeCabendo;
                     novo.telefone = tel;
-                    novo.endereco = endereco;
+                    novo.endereco = LarguraDeColuna.encurtar(endereco, LarguraDeColuna.CLIENTE_ENDERECO,
+                            "endereco do cliente novo do cardapio (loja " + lojaId + ")");
                     return clientes.save(novo).id;
                 });
     }

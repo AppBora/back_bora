@@ -67,7 +67,7 @@ class PedidoDoCardapioTest {
         controller = new PublicController(lojas, produtos, pedidos, itens,
                 mock(IntegracaoCanalRepository.class), mock(PixService.class),
                 mock(ComplementoGrupoRepository.class), mock(ComplementoItemRepository.class),
-                complementos, cupons, new br.com.bora.service.DescontoService(cupons, promocoes),
+                complementos, cupons, new br.com.bora.service.DescontoService(cupons, promocoes, gerenciadorFalso()),
                 new br.com.bora.security.FreioDoCardapio(0, 0), // freio desligado: cada caso faz 1 pedido
                 fidelidade, operacao, taxas, insumos,
                 devolucaoDeEstoque,
@@ -371,7 +371,7 @@ class PedidoDoCardapioTest {
         controller = new PublicController(lojas, produtos, pedidos, itens,
                 mock(IntegracaoCanalRepository.class), px,
                 mock(ComplementoGrupoRepository.class), mock(ComplementoItemRepository.class),
-                complementos, cupons, new br.com.bora.service.DescontoService(cupons, promocoes),
+                complementos, cupons, new br.com.bora.service.DescontoService(cupons, promocoes, gerenciadorFalso()),
                 new br.com.bora.security.FreioDoCardapio(0, 0), // freio desligado: cada caso faz 1 pedido
                 fidelidade, operacao, taxas, insumos,
                 devolucaoDeEstoque,
@@ -728,5 +728,36 @@ class PedidoDoCardapioTest {
     void textoDESCONHECIDOnaoEHgravadoCRU() {
         // A coluna alimenta relatorio e acerto; nao e lugar para texto livre vindo de fora.
         assertEquals("Na entrega", formaGravada("pago em bitcoin"));
+    }
+
+    // ========= largura de coluna no cardapio publico (defeito medido pelo QA em 10/11/2026) =========
+    //
+    // Os dois casos abaixo davam HTTP 500 com "value too long for type character varying", e o pedido
+    // se perdia INTEIRO: a escrita acontece dentro do tx.execute do Passo 1, entao a recusa do
+    // Postgres volta atras com a venda toda. O conserto da v126 cobriu o caminho de MARKETPLACE e
+    // deixou este -- que e justamente onde quem digita e uma pessoa, no celular, e nao um sistema.
+
+    @Test
+    void enderecoGIGANTEnaoPERDEoPEDIDO() {
+        String enorme = "Rua Muito Comprida, 1, " + "x".repeat(900);
+
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("endereco", enorme), requisicao()));
+
+        assertEquals(LarguraDeColuna.PEDIDO_ENDERECO, salvo().enderecoEntrega.length());
+        assertTrue(salvo().enderecoEntrega.startsWith("Rua Muito Comprida, 1,"),
+                "corta o fim, nao o comeco: o inicio do endereco e o que serve para entregar");
+    }
+
+    @Test
+    void bairroGIGANTEnaoPERDEoPEDIDO_naLOJAsemBAIRROcadastrado() {
+        // A conferencia do bairro contra a tabela de taxas so acontece quando a loja TEM bairro
+        // cadastrado. Aqui ela nao tem -- o mock de taxas devolve lista vazia, que e o caso de
+        // producao hoje e o motivo de a loja entregar de graca -- e o valor chega CRU do corpo da
+        // requisicao para uma coluna varchar(100).
+        String enorme = "Centro " + "y".repeat(300);
+
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("bairro", enorme), requisicao()));
+
+        assertEquals(LarguraDeColuna.PEDIDO_BAIRRO, salvo().bairroEntrega.length());
     }
 }

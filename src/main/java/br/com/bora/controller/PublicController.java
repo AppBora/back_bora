@@ -1,6 +1,7 @@
 package br.com.bora.controller;
 
 import br.com.bora.entity.IntegracaoCanal;
+import br.com.bora.entity.LarguraDeColuna;
 import br.com.bora.entity.Loja;
 import br.com.bora.entity.Pedido;
 import br.com.bora.entity.PedidoItem;
@@ -573,8 +574,25 @@ public class PublicController {
             // `cliente.endereco`, que no cliente recorrente e o endereco antigo dele. Ver V48.
             p.tipoEntrega = retirada ? "RETIRADA" : "ENTREGA";
             if (!retirada) {
-                if (endereco != null && !endereco.isBlank()) p.enderecoEntrega = endereco.trim();
-                if (bairro != null && !bairro.isBlank()) p.bairroEntrega = bairro.trim();
+                // CORTA, e por isto (medido pelo QA em 10/11/2026, com endereco de mais de 500
+                // caracteres): `endereco_entrega` e varchar(500) e `bairro_entrega` e varchar(100).
+                // Sem corte o Postgres RECUSA o insert, e como esta escrita esta dentro do
+                // `tx.execute` do Passo 1 o que volta atras e o PEDIDO INTEIRO -- o cliente ve 500 e
+                // a venda nao existe. Aqui quem digita e o CLIENTE FINAL, num formulario de celular.
+                //
+                // O conserto da v126 (ver LarguraDeColuna e PedidoService.criarExterno) cobriu o
+                // caminho de MARKETPLACE e deixou este. O comentario de la diz, com estas palavras,
+                // "o Postgres recusava o INSERT e o PEDIDO INTEIRO se perdia, com o entregador a
+                // caminho": era o mesmo estrago, no caminho onde quem digita e uma pessoa.
+                //
+                // O bairro tem o mesmo desenho e NAO estava protegido por validacao: a conferencia
+                // contra a tabela de taxas acontece apenas quando a loja TEM bairro cadastrado.
+                // Loja sem bairro cadastrado existe em producao -- e e por isso que ela entrega de
+                // graca -- e nela este valor chega cru do corpo da requisicao.
+                p.enderecoEntrega = LarguraDeColuna.encurtar(endereco, LarguraDeColuna.PEDIDO_ENDERECO,
+                        "endereco de entrega do cardapio (loja " + lojaId + ")");
+                p.bairroEntrega = LarguraDeColuna.encurtar(bairro, LarguraDeColuna.PEDIDO_BAIRRO,
+                        "bairro de entrega do cardapio (loja " + lojaId + ")");
             }
             if (obs != null && !obs.isBlank()) ob.append(" | Obs: ").append(obs.trim());
             p.observacao = ob.toString();

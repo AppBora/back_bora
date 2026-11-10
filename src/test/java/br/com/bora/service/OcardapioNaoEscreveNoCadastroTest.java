@@ -1,6 +1,7 @@
 package br.com.bora.service;
 
 import br.com.bora.entity.Cliente;
+import br.com.bora.entity.LarguraDeColuna;
 import br.com.bora.repository.ClienteRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -140,5 +141,28 @@ class OcardapioNaoEscreveNoCadastroTest {
         assertNull(fidelidade.identificarPeloTelefone(LOJA, "Joao", null, "Rua X"));
         verify(clientes, never()).save(any());
         verify(clientes, never()).findFirstByLojaIdAndTelefone(anyLong(), any());
+    }
+
+    // ===================== largura de coluna (defeito medido em 10/11/2026)
+
+    @Test
+    void cadastroNOVOcortaONOMEeOENDERECOqueNAOcabem() {
+        when(clientes.findFirstByLojaIdAndTelefone(LOJA, TEL)).thenReturn(Optional.empty());
+        String nomeEnorme = "Maria " + "a".repeat(300);
+        String enderecoEnorme = "Rua A, 1, " + "b".repeat(900);
+
+        fidelidade.identificarPeloTelefone(LOJA, nomeEnorme, TEL, enderecoEnorme);
+
+        // E O MESMO defeito do pedido.endereco_entrega, um andar abaixo do que o QA mediu: este
+        // metodo roda DENTRO do tx.execute que grava o pedido do cardapio, entao a recusa do Postgres
+        // AQUI tambem levava o PEDIDO INTEIRO. cliente.nome e varchar(160) e cliente.endereco e
+        // varchar(500), e os dois vinham crus do formulario -- o endereco sem nem um trim().
+        //
+        // Consertar so a linha do pedido deixaria o 500 de pe, pela segunda recusa, com a mesma venda
+        // perdida do mesmo jeito.
+        ArgumentCaptor<Cliente> c = ArgumentCaptor.forClass(Cliente.class);
+        verify(clientes).save(c.capture());
+        assertEquals(LarguraDeColuna.CLIENTE_NOME, c.getValue().nome.length());
+        assertEquals(LarguraDeColuna.CLIENTE_ENDERECO, c.getValue().endereco.length());
     }
 }

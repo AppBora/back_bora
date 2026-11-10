@@ -6,6 +6,8 @@ import br.com.bora.repository.CupomRepository;
 import br.com.bora.repository.PromocaoRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -42,9 +44,19 @@ public class DescontoService {
     private final CupomRepository cupons;
     private final PromocaoRepository promocoes;
 
-    public DescontoService(CupomRepository cupons, PromocaoRepository promocoes) {
+    /**
+     * Transacao propria, curta, so para a contagem de uso da promocao.
+     *
+     * <p>Quem chama o {@link #contabilizarUso(Desconto)} e o checkout do cardapio, que NAO tem
+     * transacao de proposito. O incremento precisa de uma. Ver o javadoc do metodo.</p>
+     */
+    private final TransactionTemplate tx;
+
+    public DescontoService(CupomRepository cupons, PromocaoRepository promocoes,
+                           PlatformTransactionManager gerenciadorDeTransacao) {
         this.cupons = cupons;
         this.promocoes = promocoes;
+        this.tx = new TransactionTemplate(gerenciadorDeTransacao);
     }
 
     /**
@@ -101,13 +113,46 @@ public class DescontoService {
      * teto de 20 usos tem que ser 20, e todos liam o mesmo numero antes de qualquer um gravar. Quem
      * perder a corrida sabe pelo numero de linhas afetadas. Nao faz o pedido falhar: o cliente ja
      * recebeu o desconto, e o estouro do teto por uma unidade e problema do lojista, nao do cliente.</p>
+     *
+     * <h2>Por que abre a propria transacao (defeito medido pelo QA em 10/11/2026)</h2>
+     *
+     * <p>O {@code somarUmUso} e {@code @Modifying(flushAutomatically = true)}, e o flush do JPA
+     * EXIGE transacao ativa. O {@code POST /loja/&#123;id&#125;/pedido} do cardapio nao tem
+     * {@code @Transactional} de proposito -- conserto de 26/10/2026, para a chamada ao Asaas nao
+     * rodar com uma conexao do banco na mao -- e esta contagem acontece DEPOIS do {@code tx.execute}
+     * que grava o pedido. Sem nenhuma transacao em volta, o flush estourava
+     * {@code TransactionRequiredException}, e o pedido JA ESTAVA GRAVADO com o desconto aplicado: o
+     * cliente via 500, pedia de novo (pedido duplicado) e o contador de usos ficava em zero, isto e,
+     * desconto sem teto. Um conserto havia quebrado o outro.</p>
+     *
+     * <p>Os 1345 testes nao pegaram porque os dois que cobrem isto nao exercitam este caminho: o
+     * {@code DescontoNoCheckoutIT} e {@code @DataJpaTest}, que roda DENTRO de uma transacao, e o
+     * {@code PromocaoDaDescontoDeVerdadeTest} usa mock do repositorio. Ambos verificavam a logica; a
+     * premissa em volta dela e que estava errada.</p>
+     *
+     * <h2>Por que o {@code try} fica FORA do {@code tx}, e nao dentro</h2>
+     *
+     * <p>Excecao de flush deixa a transacao marcada para rollback: engolir por dentro do
+     * {@code tx.execute} so mudaria o estouro de lugar, porque o commit estouraria no lugar dele. E
+     * engolir e o certo aqui -- este metodo existe para nao derrubar o pedido. Falha na contagem vira
+     * log, nunca resposta de erro para quem acabou de comprar.</p>
      */
     public void contabilizarUso(Desconto d) {
         if (d == null || !d.ehPromocao()) return;
-        int mexidas = promocoes.somarUmUso(d.promocaoId());
-        if (mexidas == 0) {
-            log.warn("Promocao {} ({}) estourou o limite de usos entre a validacao e a gravacao do pedido; "
-                    + "o desconto foi concedido", d.promocaoId(), d.codigo());
+        try {
+            Integer mexidas = tx.execute(st -> promocoes.somarUmUso(d.promocaoId()));
+            if (mexidas != null && mexidas == 0) {
+                log.warn("Promocao {} ({}) estourou o limite de usos entre a validacao e a gravacao do pedido; "
+                        + "o desconto foi concedido", d.promocaoId(), d.codigo());
+            }
+        } catch (RuntimeException e) {
+            // NAO relanca. O pedido esta gravado e o desconto foi dado: perder a CONTAGEM e ruim (o
+            // teto nao fecha, e o lojista precisa saber pelo log); perder o PEDIDO e pior, e era o
+            // que acontecia -- 500 na cara do cliente depois da venda registrada.
+            log.error("Promocao {} ({}): NAO consegui contar o uso. O pedido esta gravado e o desconto foi "
+                            + "concedido; o contador de usos desta promocao esta MENOR que o real, entao o "
+                            + "teto pode nao fechar. Causa: {}",
+                    d.promocaoId(), d.codigo(), e.toString(), e);
         }
     }
 }
