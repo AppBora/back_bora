@@ -183,10 +183,31 @@ public class AsaasSubcontaService {
         if (loja.asaasApiKey == null || loja.asaasApiKey.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ative o recebimento antes");
         }
+        // O token de ANTES, e a guarda compara com ele.
+        //
+        // A guarda era `token == null || isBlank()`, e isso media a coisa errada. Funciona na
+        // PRIMEIRA vez, quando o campo esta vazio. No religar o campo tem o token VELHO: se a
+        // criacao falha, `criarWebhookPix` engole a excecao (ela so vai para o log), o token velho
+        // continua ali, a guarda nao dispara -- e o lojista recebe 200.
+        //
+        // O que faz isso ser grave, e nao apenas uma mensagem ruim: `criarWebhookPix` APAGA os
+        // webhooks antigos ANTES de tentar criar o novo. Ou seja, o clique que existe para
+        // consertar o aviso de pagamento era capaz de APAGA-LO e dizer que deu certo. Dali para
+        // frente o cliente paga, o dinheiro entra na conta do lojista, nenhum aviso chega, e em 30
+        // minutos o CobradorDePixService cancela o pedido devolvendo estoque e cashback -- o mesmo
+        // estrago de 15/10/2026, quando a loja 18 tinha token no banco e zero webhooks no Asaas.
+        //
+        // A ordem (apagar antes de criar) fica como esta, de proposito: webhook antigo de pe chega
+        // com token velho, leva 401 nosso, e falha repetida faz o Asaas interromper TODOS os
+        // webhooks da conta. O que muda e a falha deixar de ser silenciosa.
+        String antes = loja.asaasWebhookToken;
         criarWebhookPix(loja, emailDoAdmin(loja));
-        if (loja.asaasWebhookToken == null || loja.asaasWebhookToken.isBlank()) {
+        if (loja.asaasWebhookToken == null || loja.asaasWebhookToken.isBlank()
+                || loja.asaasWebhookToken.equals(antes)) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                    "Nao foi possivel registrar o aviso de pagamento no Asaas. Veja o log da API.");
+                    "Nao foi possivel registrar o aviso de pagamento no Asaas, e o aviso anterior ja "
+                    + "foi removido: ate religar com sucesso, pagamento por PIX nao sera confirmado. "
+                    + "Tente de novo em alguns minutos; se continuar, veja o log da API.");
         }
         lojas.save(loja);
         return view(loja);
