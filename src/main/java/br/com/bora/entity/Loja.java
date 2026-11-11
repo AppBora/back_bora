@@ -107,9 +107,22 @@ public class Loja {
     public java.math.BigDecimal splitPercentual;
 
     /** Token que autentica o webhook de PIX registrado NA SUBCONTA do lojista.
-     *  Sem ele o Asaas não consegue confirmar o pagamento. NUNCA serializar. */
+     *  Sem ele o Asaas não consegue confirmar o pagamento. NUNCA serializar.
+     *
+     *  <p>Cifrado em repouso desde 11/11/2026. Esta era a ÚNICA coluna de credencial do banco que
+     *  tinha ficado fora do cifrador: enquanto as 6 irmãs passavam pelo {@code SegredoGuardado}, esta
+     *  saía em texto puro em todo {@code pg_dump}. Ninguém tinha visto porque o teste de cobertura
+     *  olhava o caminho inverso — ele cobra que toda coluna COM {@code @Convert} esteja na lista do
+     *  {@code CifragemEmRepousoService}, e não que toda coluna de segredo tenha {@code @Convert}.
+     *  O {@code CifragemCobreTodasAsColunasTest} agora cobra os dois lados.</p>
+     *
+     *  <p>Cifrar é seguro aqui porque a comparação é feita em Java sobre a entidade já carregada
+     *  ({@code PublicController:926}, {@code Segredos.iguais}), nunca por igualdade no SQL — uma
+     *  busca {@code where asaas_webhook_token = ?} jamais casaria, porque o GCM usa nonce aleatório
+     *  e o mesmo valor cifra diferente a cada vez.</p> */
     @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "asaas_webhook_token")
+    @jakarta.persistence.Convert(converter = br.com.bora.config.SegredoGuardado.class)
     public String asaasWebhookToken;
 
     // ---- Decisão do ADMINISTRADOR_BORA sobre o cliente (separada de "ativo", que é do webhook) ----

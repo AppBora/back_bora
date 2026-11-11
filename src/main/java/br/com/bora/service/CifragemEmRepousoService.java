@@ -58,6 +58,7 @@ public class CifragemEmRepousoService {
      */
     private static final List<Alvo> ALVOS = List.of(
             new Alvo("loja", "id", "asaas_api_key"),
+            new Alvo("loja", "id", "asaas_webhook_token"),
             new Alvo("config_plataforma", "chave", "valor"),
             new Alvo("integracao_canal", "id", "client_secret"),
             new Alvo("integracao_canal", "id", "access_token"),

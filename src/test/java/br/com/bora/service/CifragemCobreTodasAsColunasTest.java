@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -84,6 +85,64 @@ class CifragemCobreTodasAsColunasTest {
         }
     }
 
+    /**
+     * O CAMINHO INVERSO: toda coluna de segredo tem que PASSAR pelo cifrador.
+     *
+     * <p>Os testes acima cobram que toda coluna <b>com</b> {@code @Convert} esteja na lista do
+     * serviço. Nenhum deles cobra o que falhou de verdade: uma coluna de credencial que nunca ganhou
+     * o {@code @Convert}. Essa não aparece em lista nenhuma, e por isso não aparecia em teste nenhum.
+     *
+     * <p><b>Medido em produção em 11/11/2026</b>, no meio da tarefa de cifrar as que estavam em texto
+     * puro: {@code loja.asaas_webhook_token} tinha 1 valor gravado, em claro, sem {@code @Convert}.
+     * Varri o {@code information_schema} inteiro atrás de colunas com cara de segredo justamente
+     * porque cifrar 20 e dizer "pronto" deixaria a 21ª no dump de todo dia. Era a única.
+     *
+     * <p>A lista de exceções é curta de propósito, e cada uma tem o motivo escrito. Coluna de segredo
+     * nova sem {@code @Convert} e sem motivo aqui reprova.
+     */
+    @Test
+    void todaCOLUNAdeSEGREDOpassaPELOcifrador() throws IOException {
+        // Coluna que casa com isto e NAO e cifrada tem que estar nas excecoes abaixo, com motivo.
+        Pattern cheiroDeSegredo =
+                Pattern.compile("secret|token|senha|password|api_?key|credencial", Pattern.CASE_INSENSITIVE);
+
+        // As excecoes, uma por uma, com o porque:
+        Map<String, String> excecoes = Map.of(
+                // Hash BCrypt, nao segredo recuperavel: ja e irreversivel, e quem o compara e o
+                // encoder. Cifrar um hash nao protege nada que o hash nao proteja.
+                "senha_hash", "e hash BCrypt, nao credencial recuperavel");
+
+        List<String> deFora = new ArrayList<>();
+        for (Campo c : camposDeTexto()) {
+            if (!cheiroDeSegredo.matcher(c.coluna()).find()) continue;
+            if (c.cifrado() || excecoes.containsKey(c.coluna())) continue;
+            deFora.add(c.arquivo() + " -> " + c.coluna());
+        }
+
+        assertTrue(deFora.isEmpty(),
+                "estas colunas tem cara de credencial e NAO passam pelo cifrador: saem em texto puro "
+                        + "em todo pg_dump. Ponha @Convert(SegredoGuardado) e a entrada em ALVOS, ou, "
+                        + "se nao for segredo, acrescente a excecao COM O MOTIVO neste teste: " + deFora);
+    }
+
+    @Test
+    void oINVERSOestaREALMENTEenxergandoOsCAMPOS() throws IOException {
+        // O mesmo cuidado do outro teste-do-teste: se a leitura do fonte quebrar, a lista vem vazia e
+        // o teste acima passa medindo nada.
+        List<Campo> todos = camposDeTexto();
+
+        assertTrue(todos.size() >= 40, "esperava pelo menos 40 campos de texto nas entidades, achei "
+                + todos.size() + ". A leitura do fonte quebrou.");
+        Campo whk = todos.stream().filter(c -> c.coluna().equals("asaas_webhook_token")).findFirst()
+                .orElseThrow(() -> new AssertionError("nao achei loja.asaas_webhook_token"));
+        assertTrue(whk.cifrado(), "o asaas_webhook_token tem que estar cifrado: era a coluna de "
+                + "credencial que estava em texto puro no banco em 11/11/2026");
+        Campo senha = todos.stream().filter(c -> c.coluna().equals("senha_hash")).findFirst()
+                .orElseThrow(() -> new AssertionError("nao achei usuario.senha_hash; o regex quebrou"));
+        assertFalse(senha.cifrado(), "o senha_hash nao e cifrado, e por isso ele prova que a excecao "
+                + "do teste acima esta sendo exercitada de verdade");
+    }
+
     @Test
     void oSERVICOnaoGRAVAoQUEjaESTAcifrado() throws IOException {
         // A idempotencia: rodar duas vezes nao pode cifrar duas vezes nem reescrever a toa.
@@ -125,6 +184,49 @@ class CifragemCobreTodasAsColunasTest {
     }
 
     // ------------------------------------------------------------------ a leitura do fonte
+
+    /** Um campo de texto de entidade: a coluna no banco e se ela passa pelo cifrador. */
+    private record Campo(String arquivo, String coluna, boolean cifrado) {}
+
+    /**
+     * Todo campo {@code String} das entidades, com o nome da coluna e se tem {@code @Convert}.
+     *
+     * <p>Só campo de texto: o cifrador é {@code AttributeConverter<String, String>}, então data,
+     * número e booleano não entram nem poderiam.</p>
+     */
+    private List<Campo> camposDeTexto() throws IOException {
+        assertTrue(Files.isDirectory(ENTIDADES), "nao achei " + ENTIDADES.toAbsolutePath());
+        Pattern declaracao = Pattern.compile(
+                "^\\s*(?:public|private|protected)\\s+(?:final\\s+)?(?:java\\.lang\\.)?String\\s+(\\w+)\\s*[;=]");
+        Pattern nomeDaColuna = Pattern.compile("@Column\\s*\\([^)]*name\\s*=\\s*\"(\\w+)\"");
+        List<Campo> out = new ArrayList<>();
+        try (var arquivos = Files.list(ENTIDADES)) {
+            for (Path f : arquivos.filter(x -> x.toString().endsWith(".java")).toList()) {
+                // As anotacoes do campo que vem a seguir. Javadoc e qualquer outra linha zeram a
+                // pilha: anotacao vem SEMPRE logo antes do campo, depois do javadoc.
+                List<String> anotacoes = new ArrayList<>();
+                for (String linha : Files.readAllLines(f, StandardCharsets.UTF_8)) {
+                    String t = linha.trim();
+                    if (t.startsWith("@")) { anotacoes.add(t); continue; }
+                    Matcher d = declaracao.matcher(linha);
+                    if (d.find()) {
+                        String juntas = String.join("\n", anotacoes);
+                        Matcher c = nomeDaColuna.matcher(juntas);
+                        String coluna = c.find() ? c.group(1) : paraSnake(d.group(1));
+                        out.add(new Campo(f.getFileName().toString(), coluna,
+                                juntas.contains(CONVERSOR)));
+                    }
+                    anotacoes.clear();
+                }
+            }
+        }
+        return out;
+    }
+
+    /** {@code asaasWebhookToken} -> {@code asaas_webhook_token}: o padrao do Hibernate sem @Column. */
+    private static String paraSnake(String campo) {
+        return campo.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase();
+    }
 
     /** Cada {@code @Convert(SegredoGuardado)} do projeto, com o nome da coluna no banco. */
     private List<Cifrada> cifradas() throws IOException {
