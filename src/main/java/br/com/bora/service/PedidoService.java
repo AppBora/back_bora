@@ -79,14 +79,44 @@ public class PedidoService {
         this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
     }
 
-    /** Taxa de entrega ativa para o bairro do cliente (0 se não houver). */
-    private BigDecimal taxaPara(Long lojaId, Long clienteId, String origem) {
-        if (clienteId == null) return BigDecimal.ZERO;
+    /**
+     * Taxa de entrega do bairro DESTE pedido -- e nunca R$ 0,00 em silêncio.
+     *
+     * <h2>O defeito que isto fecha (medido em 11/11/2026)</h2>
+     * <p>Antes: sem correspondência na tabela de bairros, devolvia {@code ZERO} e o pedido era
+     * aceito com frete zerado, sem aviso nenhum. Cliente sem bairro no cadastro também pagava zero.
+     * Diferente do cardápio público, que recusa com 400 "Ainda não entregamos nesse bairro", aqui
+     * passava calado -- e quem mora em bairro fora da lista recebia <b>de graça</b>, todos os dias,
+     * sem nada denunciar. Na produção isso estava armado: a loja 18 chama-se "Zirá - Montreal" e
+     * <b>não tem Montreal</b> entre os 6 bairros cadastrados dela.</p>
+     *
+     * <h2>O bairro vem do PEDIDO, não do cadastro do cliente</h2>
+     * <p>Era {@code cliente.bairro}, e isso é um segundo defeito no mesmo lugar: o atendente digita
+     * "entregar no Centro" e o frete saia do bairro do cadastro -- outro bairro, outro preço. O
+     * {@code bairroEntrega} do pedido já nasce resolvido (o do corpo, e na falta dele o do cadastro),
+     * exatamente como o endereço. É também o que faz frete existir para quem não tem cadastro
+     * nenhum: antes, {@code clienteId == null} significava frete zero.</p>
+     *
+     * <h2>Por que 400 e não um zero com aviso no log</h2>
+     * <p>Porque log ninguém lê, e o que está em jogo é dinheiro que sai todo dia. Quem chama este
+     * caminho é só quem <b>não informou</b> a taxa: o painel sempre informa (o campo "Taxa" vai no
+     * corpo, e o balconista pode combinar frete fora da tabela ou cortesia, inclusive 0). Ou seja,
+     * nenhuma venda de balcão fica travada por isto -- e nenhuma API cliente grava mais frete zero
+     * sem ter dito que queria frete zero.</p>
+     */
+    private BigDecimal taxaPara(Long lojaId, Pedido p, String origem) {
+        if ("RETIRADA".equals(p.tipoEntrega)) return BigDecimal.ZERO;
         if (origem != null && origem.toUpperCase().contains("BALC")) return BigDecimal.ZERO; // balcão não tem frete
-        var cli = clientes.findByIdAndLojaId(clienteId, lojaId).orElse(null);
-        if (cli == null || cli.bairro == null || cli.bairro.isBlank()) return BigDecimal.ZERO;
-        return taxasEntrega.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(lojaId, cli.bairro.trim())
-                .map(t -> t.taxa == null ? BigDecimal.ZERO : t.taxa).orElse(BigDecimal.ZERO);
+        String bairro = p.bairroEntrega == null ? "" : p.bairroEntrega.trim();
+        if (bairro.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Pedido de entrega sem bairro: informe o bairro da entrega, ou a taxa deste pedido.");
+        }
+        return taxasEntrega.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(lojaId, bairro)
+                .map(t -> t.taxa == null ? BigDecimal.ZERO : t.taxa)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "O bairro \"" + bairro + "\" nao esta na lista de entrega desta loja. Cadastre o "
+                        + "bairro em Taxas de entrega, ou informe a taxa deste pedido."));
     }
 
     public List<Pedido> listar() {
@@ -192,6 +222,18 @@ public class PedidoService {
     /** Cria o pedido a partir dos itens; o total é calculado no servidor (autoritativo). */
     @Transactional
     public Pedido criar(NovoPedidoRequest req) {
+        return criar(req, null);
+    }
+
+    /**
+     * O mesmo {@link #criar(NovoPedidoRequest)}, carimbando a chave de idempotência no pedido.
+     *
+     * <p>Quem decide o que fazer quando a chave repete é o {@link PedidoIdempotenteService}, e tem de
+     * ser ele: o {@code catch} do índice unico precisa acontecer FORA desta transação. Aqui a chave
+     * só é gravada -- sem ela na linha, o índice não tem o que comparar.</p>
+     */
+    @Transactional
+    public Pedido criar(NovoPedidoRequest req, String chaveIdempotencia) {
         Long lojaId = ctx.lojaId();
         planos.checarLimitePedidosMes(lojaId); // RN09
         if (req.itens() == null || req.itens().isEmpty()) {
@@ -203,6 +245,7 @@ public class PedidoService {
         // o cliente também: id de outra loja no corpo não pode virar pedido nesta
         p.clienteId = clienteDaLoja(lojaId, req.clienteId());
         p.codigo = req.codigo();
+        p.chaveIdempotencia = chaveIdempotencia;
         p.formaPagamento = req.formaPagamento();
         p.origem = req.origem();
         p.observacao = req.observacao();
@@ -278,7 +321,7 @@ public class PedidoService {
         // Só respeitamos valor não negativo; sem informar nada, vale a tabela do bairro.
         BigDecimal taxa = req.taxaEntrega() != null && req.taxaEntrega().signum() >= 0
                 ? req.taxaEntrega()
-                : taxaPara(lojaId, p.clienteId, req.origem());
+                : taxaPara(lojaId, p, req.origem());
         p.taxaEntrega = taxa;
         p.valorTotal = total.add(taxa).subtract(resgate);
         // Em campo proprio, igual ao cardapio. Sem isto o pedido de balcao descontava o cashback e nao

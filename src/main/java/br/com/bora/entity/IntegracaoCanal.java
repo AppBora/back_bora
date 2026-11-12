@@ -84,6 +84,31 @@ public class IntegracaoCanal {
     public OffsetDateTime ultimoPollingEm;
 
     /**
+     * Falhas CONSECUTIVAS da busca de pedido. Zerada pelo {@code marcarPollingOk}.
+     *
+     * <p>Existe para a loja parar de ficar VERDE quando cai. O {@code marcarPollingFalhou} gravava a
+     * hora e a mensagem e nao mexia no status: uma integracao CONECTADO que comeca a levar 403 em
+     * toda consulta seguia verde na tela, com o motivo escondido numa coluna que ninguem le. Foi
+     * assim na loja 18 em 04/11/2026, e e o mesmo "morre em silencio" que custou dois meses no
+     * 99Food.</p>
+     *
+     * <p><b>Por que contar em vez de rebaixar na primeira falha:</b> ERRO tem preco. O
+     * {@link #mereceNovaTentativa()} espaca a tentativa seguinte em {@value #ESPERA_APOS_ERRO_MIN}
+     * minutos, entao rebaixar no primeiro tropeco faria um 500 passageiro do marketplace atrasar
+     * pedido real em ate 10 min -- trocaria o defeito de silencio por um defeito de atraso. Com o
+     * ciclo de 30 s e o limite de {@value #FALHAS_PARA_REBAIXAR}, uma queda de verdade fica vermelha
+     * em cerca de um minuto e meio, e um tropeco isolado nao custa nada.</p>
+     *
+     * <p>Falha de AUTENTICACAO nao passa por aqui: ela tem caminho proprio, que marca ERRO na hora e
+     * com o motivo certo.</p>
+     */
+    @Column(name = "falhas_seguidas", nullable = false)
+    public int falhasSeguidas = 0;
+
+    /** Quantas falhas seguidas rebaixam CONECTADO para ERRO. Ver {@link #falhasSeguidas}. */
+    public static final int FALHAS_PARA_REBAIXAR = 3;
+
+    /**
      * SAUDE da integracao: falha de polling, de autenticacao, de vinculo.
      *
      * <p>E apagada por {@code marcarPollingOk} quando o polling volta a funcionar — e tem de ser,
@@ -112,7 +137,16 @@ public class IntegracaoCanal {
     @Column(name = "ultimo_aviso_em")
     public OffsetDateTime ultimoAvisoEm;
 
-    public String status = "DESCONECTADO";   // DESCONECTADO | AGUARDANDO_AUTORIZACAO | CONECTADO | ERRO
+    /**
+     * DESCONECTADO | PRONTO | AGUARDANDO_AUTORIZACAO | CONECTADO | ERRO.
+     *
+     * <p>O {@code PRONTO} faltava nesta lista e existe desde sempre no {@code IntegracaoService}:
+     * credencial cadastrada e canal ainda nao ligado. Na producao de 12/11/2026 ha uma integracao
+     * assim (o iFood da loja 18). Quem rebaixa status olhando esta coluna tem de tratar os CINCO --
+     * e por isso que o {@code marcarPollingFalhou} so rebaixa quem esta {@code CONECTADO}, em vez de
+     * "qualquer coisa que nao seja ERRO".</p>
+     */
+    public String status = "DESCONECTADO";
     @Column(name = "ultima_sync")
     public OffsetDateTime ultimaSync;
     @Column(name = "pedidos_recebidos")

@@ -48,22 +48,65 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.transaction.annotation.Transactional
     @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
-            + "i.ultimoPollingEm = :agora, i.ultimoErro = null, "
+            + "i.ultimoPollingEm = :agora, i.ultimoErro = null, i.falhasSeguidas = 0, "
             + "i.status = case when i.status = 'ERRO' then 'CONECTADO' else i.status end "
             + "where i.id = :id and i.lojaId = :lojaId")
     int marcarPollingOk(@org.springframework.data.repository.query.Param("id") Long id,
                         @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
                         @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora);
 
-    /** O polling falhou: a hora da tentativa e a mensagem, sem mexer em mais nada. */
+    /**
+     * O polling falhou: a hora, a mensagem, mais uma na conta de falhas seguidas -- e, no limite,
+     * CONECTADO cai para ERRO.
+     *
+     * <h2>O defeito que isto fecha (aberto desde sempre, reconferido em 10/11/2026)</h2>
+     * <p>Esta consulta gravava "a hora da tentativa e a mensagem, sem mexer em mais nada". O caminho
+     * inverso existia -- o {@link #marcarPollingOk} promove ERRO para CONECTADO --, mas a queda nao
+     * rebaixava: uma integracao CONECTADO que comeca a levar 403 em TODA consulta continuava
+     * <b>verde</b> na tela de Integracoes, com o motivo escondido no {@code ultimo_erro}, que
+     * ninguem le. Medido na producao em 04/11/2026: a loja 18 com {@code status = CONECTADO} e
+     * {@code ultimo_erro = 403 ... forbidden}. E o mesmo "morre em silencio" que custou dois meses no
+     * 99Food, e agora que as 5 lojas da Zira dependem desse canal, e a trava que importa.</p>
+     *
+     * <h2>Por que no LIMITE, e nao na primeira falha</h2>
+     * <p>Porque ERRO tem preco: o {@code mereceNovaTentativa()} espaca a tentativa seguinte em 10
+     * minutos. Rebaixar no primeiro tropeco faria um 500 passageiro do marketplace atrasar pedido
+     * real em ate 10 min -- seria trocar um defeito de silencio por um defeito de atraso. Com o ciclo
+     * de 30 s e o limite de {@code FALHAS_PARA_REBAIXAR}, uma queda de verdade fica vermelha em cerca
+     * de um minuto e meio.</p>
+     *
+     * <h2>Duas finezas da consulta</h2>
+     * <p>O {@code case} le {@code i.falhasSeguidas} <b>antes</b> do incremento -- num UPDATE, todas as
+     * expressoes do SET veem a linha como ela esta --, por isso compara {@code + 1}. E so rebaixa
+     * quem esta CONECTADO: DESCONECTADO e AGUARDANDO_AUTORIZACAO nao sao falha de polling, e
+     * sobrescrever qualquer um dos dois com ERRO apagaria a informacao de que o lojista ainda tem um
+     * passo a dar no portal.</p>
+     */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.transaction.annotation.Transactional
     @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
-            + "i.ultimoPollingEm = :agora, i.ultimoErro = :erro where i.id = :id and i.lojaId = :lojaId")
+            + "i.ultimoPollingEm = :agora, i.ultimoErro = :erro, "
+            + "i.falhasSeguidas = i.falhasSeguidas + 1, "
+            + "i.status = case when i.status = 'CONECTADO' and i.falhasSeguidas + 1 >= :limite "
+            + "then 'ERRO' else i.status end "
+            + "where i.id = :id and i.lojaId = :lojaId")
     int marcarPollingFalhou(@org.springframework.data.repository.query.Param("id") Long id,
                             @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
                             @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora,
-                            @org.springframework.data.repository.query.Param("erro") String erro);
+                            @org.springframework.data.repository.query.Param("erro") String erro,
+                            @org.springframework.data.repository.query.Param("limite") int limite);
+
+    /**
+     * O mesmo de cima com o limite padrao, para nao espalhar a constante pelos clientes.
+     *
+     * <p>{@code default} na interface do repositorio: chamada de metodo {@code default} para outro
+     * metodo da MESMA interface passa pelo proxy do Spring Data normalmente -- o proxy e o objeto que
+     * recebe a chamada de dentro.</p>
+     */
+    default int marcarPollingFalhou(Long id, Long lojaId, OffsetDateTime agora, String erro) {
+        return marcarPollingFalhou(id, lojaId, agora, erro,
+                br.com.bora.entity.IntegracaoCanal.FALHAS_PARA_REBAIXAR);
+    }
 
     /**
      * O canal RECUSOU o token em cache (401): joga o token fora, junto com a hora e o motivo.

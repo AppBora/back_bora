@@ -135,7 +135,14 @@ class PedidoServiceContaDoBalcaoTest {
     void cashbackResgatadoDescontaDoTotal() {
         produto(10L, "Acai 500ml", "30.00");
         clienteNoBairro(3L, "Centro");
-        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(anyLong(), anyString())).thenReturn(Optional.empty());
+        // Centro cadastrado com frete ZERO -- entrega gratis no bairro, decisao do lojista. Antes
+        // este teste usava `Optional.empty()`, ou seja, dependia do bairro NAO estar cadastrado para
+        // o frete sair zero. Era justamente o defeito: bairro fora da lista virava frete zero em
+        // silencio. Ver BairroForaDaListaNaoSaiDeGracaTest.
+        TaxaEntrega gratis = new TaxaEntrega();
+        gratis.taxa = BigDecimal.ZERO;
+        when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(1L, "Centro"))
+                .thenReturn(Optional.of(gratis));
         when(fidelidade.resgatePossivel(eq(1L), eq(3L), any(BigDecimal.class))).thenReturn(new BigDecimal("6.57"));
 
         service.criar(new NovoPedidoRequest(3L, "102", "PIX", "Delivery", null, true,

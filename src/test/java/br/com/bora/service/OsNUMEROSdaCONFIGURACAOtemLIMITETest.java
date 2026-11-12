@@ -71,7 +71,12 @@ class OsNUMEROSdaCONFIGURACAOtemLIMITETest {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(
                         new BoraPrincipal(7L, LOJA, papel, "eu@loja.com"), null, List.of()));
-        return new ConfiguracaoLojaService(repo, planos, new AuthContext());
+        // O LojaRepository entrou no construtor para o GET/PUT devolverem o nome REAL da loja
+        // (ConfiguracaoLoja.nomeDaLoja), que e o que faz a rede de seguranca do painel funcionar
+        // quando o lojista apaga o "nome de exibicao". Este teste e sobre os LIMITES dos numeros:
+        // um duble vazio basta, e `findById` devolvendo Optional.empty() deixa o nome nulo.
+        return new ConfiguracaoLojaService(repo, planos, new AuthContext(),
+                org.mockito.Mockito.mock(br.com.bora.repository.LojaRepository.class));
     }
 
     private ConfiguracaoLoja comCashback(String pct) {

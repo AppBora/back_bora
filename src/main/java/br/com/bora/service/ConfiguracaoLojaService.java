@@ -14,20 +14,35 @@ public class ConfiguracaoLojaService {
     private final ConfiguracaoLojaRepository repo;
     private final PlanoService planos;
     private final AuthContext ctx;
+    private final br.com.bora.repository.LojaRepository lojas;
 
-    public ConfiguracaoLojaService(ConfiguracaoLojaRepository repo, PlanoService planos, AuthContext ctx) {
+    public ConfiguracaoLojaService(ConfiguracaoLojaRepository repo, PlanoService planos, AuthContext ctx,
+                                   br.com.bora.repository.LojaRepository lojas) {
         this.repo = repo;
         this.planos = planos;
         this.ctx = ctx;
+        this.lojas = lojas;
     }
 
     public ConfiguracaoLoja atual() {
         Long lojaId = ctx.lojaId();
-        return repo.findByLojaId(lojaId).orElseGet(() -> {
-            ConfiguracaoLoja c = new ConfiguracaoLoja();
-            c.lojaId = lojaId;
-            return c;
+        ConfiguracaoLoja c = repo.findByLojaId(lojaId).orElseGet(() -> {
+            ConfiguracaoLoja nova = new ConfiguracaoLoja();
+            nova.lojaId = lojaId;
+            return nova;
         });
+        return comNomeDaLoja(c, lojaId);
+    }
+
+    /**
+     * Carimba o nome real da loja na resposta. Ver {@code ConfiguracaoLoja.nomeDaLoja}.
+     *
+     * <p>E o que faz a rede de seguranca do painel funcionar quando o lojista apaga o "nome de
+     * exibicao": a tela tem para onde cair sem pedir nada a mais ao servidor.</p>
+     */
+    private ConfiguracaoLoja comNomeDaLoja(ConfiguracaoLoja c, Long lojaId) {
+        if (lojaId != null) c.nomeDaLoja = lojas.findById(lojaId).map(l -> l.getNome()).orElse(null);
+        return c;
     }
 
     /** RN10 — só aplica os campos de white-label que o plano da loja libera. */
@@ -80,6 +95,8 @@ public class ConfiguracaoLojaService {
         // Marca Bora só pode ser removida no Enterprise (futuro)
         c.mostrarMarcaBora = !plano.permiteRemoverMarca();
 
-        return repo.save(c);
+        // O PUT devolve o mesmo formato do GET, nome da loja incluido: a tela usa a resposta do
+        // salvar para se redesenhar, e sem isto o nome sumiria logo depois de salvar.
+        return comNomeDaLoja(repo.save(c), lojaId);
     }
 }

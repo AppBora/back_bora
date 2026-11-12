@@ -493,4 +493,18 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                            @Param("esperado") StatusPedido esperado,
                            @Param("novo") StatusPedido novo,
                            @Param("agora") OffsetDateTime agora);
+
+    /**
+     * O pedido que esta chave de idempotencia ja gravou nesta loja, se gravou.
+     *
+     * <p>Sempre com {@code lojaId}: a chave vem do navegador do lojista, duas lojas podem sortear a
+     * mesma, e sem o inquilino na consulta um reenvio da loja A devolveria o pedido da loja B --
+     * trocaria uma venda duplicada por um vazamento entre inquilinos, que e pior.</p>
+     *
+     * <p>Esta consulta NAO e a trava. A trava e o indice unico
+     * {@code uq_pedido_loja_chave_idempotencia} (V71): dois cliques quase juntos sao duas
+     * requisicoes em paralelo, as duas procuram antes de qualquer uma gravar, as duas nao acham.
+     * Isto aqui so poupa o trabalho no caso comum (o reenvio que chega depois).</p>
+     */
+    Optional<Pedido> findByLojaIdAndChaveIdempotencia(Long lojaId, String chaveIdempotencia);
 }

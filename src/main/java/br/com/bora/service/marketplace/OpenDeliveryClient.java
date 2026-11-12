@@ -215,13 +215,19 @@ public class OpenDeliveryClient implements MarketplaceClient {
                     .body(form).retrieve().body(Map.class);
         } catch (HttpClientErrorException.NotFound e) {
             // Roteiro, pag. 17: sem a liberacao na AllowList da 99, toda chamada volta Not Found.
-            log.warn("Open Delivery: Not Found no token da loja {}. client_id enviado: {}. Resposta da 99: {}",
+            // DETALHE, e nao evento: a linha que conta a falha e uma so, a do `polling` ("polling
+            // falhou para a loja"). Esta aqui acompanha, com o que nao cabe na coluna que o lojista
+            // le. A palavra DETALHE esta no texto de proposito -- sem ela, quem contava 401 por
+            // `grep` somava duas linhas para um unico evento (era a pendencia do log dobrado).
+            log.warn("Open Delivery: DETALHE da falha da loja {} -- Not Found no token. "
+                    + "client_id enviado: {}. Resposta da 99: {}",
                     i.lojaId, clientIdDaLoja(i), corpoDoErro(e, secretDaLoja(i)));
             throw falha(i, "A 99Food respondeu Not Found: o aplicativo ainda nao esta liberado na AllowList "
                     + "deles. Avise o time de integracao da 99 que o app foi criado.");
         } catch (HttpClientErrorException.Unauthorized e) {
-            log.warn("Open Delivery: a 99Food recusou a credencial da loja {}. client_id enviado: {}. "
-                            + "Resposta da 99: {}",
+            // DETALHE, nao evento -- ver o comentario do Not Found, logo acima.
+            log.warn("Open Delivery: DETALHE da falha da loja {} -- a 99Food recusou a credencial. "
+                            + "client_id enviado: {}. Resposta da 99: {}",
                     i.lojaId, clientIdDaLoja(i), corpoDoErro(e, secretDaLoja(i)));
             throw falha(i, "A 99Food recusou a credencial: confira o App Shop ID desta loja e o App Secret da plataforma.");
         } catch (Exception e) {
@@ -302,6 +308,9 @@ public class OpenDeliveryClient implements MarketplaceClient {
             // Item 5.5. O `falha()` ja gravou status e erro quando a excecao veio dele; aqui so a
             // hora da tentativa e, se houver, a mensagem.
             repo.marcarPollingFalhou(i.id, i.lojaId, i.ultimoPollingEm, i.ultimoErro);
+            // A LINHA DO EVENTO, uma por falha: `grep -c "polling falhou para a loja"` conta
+            // falhas, nao linhas. As linhas de DETALHE acima dizem DETALHE no texto exatamente para
+            // nao entrarem nessa conta.
             log.warn("Open Delivery: polling falhou para a loja {}: {}", i.lojaId, e.getMessage());
             return List.of();
         }
