@@ -113,6 +113,7 @@ public class IntegracaoService {
         m.put("status", i.status);
         m.put("ativo", Boolean.TRUE.equals(i.ativo));
         m.put("ultimoPollingEm", i.ultimoPollingEm);
+        m.put("conectadoEm", i.conectadoEm);
         m.put("ultimaSync", i.ultimaSync);
         m.put("pedidosRecebidos", i.pedidosRecebidos);
         m.put("ultimoErro", i.ultimoErro);
@@ -184,6 +185,10 @@ public class IntegracaoService {
             m.put("verificationUrl", i == null ? null : i.verificationUrl);
             m.put("vinculoExpiraEm", i == null ? null : i.vinculoExpiraEm);
             m.put("ultimoPollingEm", i == null ? null : i.ultimoPollingEm);
+            // "Ligada e funcionando desde" (V73). E o que deixa o cartao dizer HA QUANTO TEMPO esta
+            // sem pedido, em vez de so dizer que esta. Nulo = ainda nao houve uma busca boa, ou
+            // canal que nao faz polling -- e ai a tela nao afirma duracao nenhuma.
+            m.put("conectadoEm", i == null ? null : i.conectadoEm);
             m.put("ultimoErro", i == null ? null : i.ultimoErro);
             // ESTE CAMPO FALTAVA NA LISTAGEM, e o card da tela de Integracoes depende dele
             // (10/11/2026). O `corpoOficial` do integracoes.js le `i.tokenExpiraEm` para desenhar o
@@ -234,6 +239,10 @@ public class IntegracaoService {
                     i.accessToken = null;
                     i.refreshToken = null;
                     i.tokenExpiraEm = null;
+                    // E o relógio de "ligada desde" começa do zero junto: é outra loja no
+                    // marketplace, então "está ligada há 5 dias sem pedido" deixou de ser verdade
+                    // sobre esta ligação. Ver IntegracaoCanal.conectadoEm (V73).
+                    i.conectadoEm = null;
                     i.userCode = null;
                     i.codeVerifier = null;
                     i.verificationUrl = null;

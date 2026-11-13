@@ -44,11 +44,16 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
      *
      * <p>O {@code case} existe para nao promover quem esta em AGUARDANDO_AUTORIZACAO (falta o lojista
      * digitar o codigo no portal: dizer CONECTADO prometeria pedido que nao vem) nem rebaixar nada.</p>
+     *
+     * <p><b>E o unico lugar que carimba o {@code conectadoEm}</b> (V73), com {@code coalesce}: a
+     * PRIMEIRA busca boa desta ligacao. O {@code coalesce} e o que faz "nao reinicia a cada busca" e
+     * "nao reinicia ao voltar de um ERRO" serem a mesma linha. Ver o javadoc do campo.</p>
      */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.transaction.annotation.Transactional
     @org.springframework.data.jpa.repository.Query("update IntegracaoCanal i set "
             + "i.ultimoPollingEm = :agora, i.ultimoErro = null, i.falhasSeguidas = 0, "
+            + "i.conectadoEm = coalesce(i.conectadoEm, :agora), "
             + "i.status = case when i.status = 'ERRO' then 'CONECTADO' else i.status end "
             + "where i.id = :id and i.lojaId = :lojaId")
     int marcarPollingOk(@org.springframework.data.repository.query.Param("id") Long id,

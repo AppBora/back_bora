@@ -147,8 +147,43 @@ public class IntegracaoCanal {
      * "qualquer coisa que nao seja ERRO".</p>
      */
     public String status = "DESCONECTADO";
+    /**
+     * ULTIMA COISA QUE CHEGOU por este canal -- e nao "ultimo pedido", por mais que o nome sugira.
+     *
+     * <p>Medido em 13/11/2026 antes de usar isto para contar tempo: quatro caminhos escrevem aqui,
+     * e um deles ({@code PublicController}, webhook do PIX) nao e pedido nenhum; alem disso o
+     * {@code descontarRecebido} desconta o contador sem mexer na data. Na producao daquele dia a
+     * loja 18 tinha {@code ultima_sync} de 21/10 com {@code pedidos_recebidos = 0}, e o PIX da loja
+     * 1 tinha data com o contador zerado. Para "ha quanto tempo esta ligada" use
+     * {@link #conectadoEm}.</p>
+     */
     @Column(name = "ultima_sync")
     public OffsetDateTime ultimaSync;
+
+    /**
+     * Desde quando esta integracao esta ligada E FUNCIONANDO: a primeira busca de pedido que deu
+     * certo nesta ligacao.
+     *
+     * <p>E o que falta para o aviso "Conectado, sem pedido ainda" virar diagnostico. Ligado ha duas
+     * horas sem pedido e uma tarde fraca; ligado ha cinco dias sem nenhum pedido e vinculo errado do
+     * lado do marketplace -- e so a duracao separa os dois.</p>
+     *
+     * <p><b>Escrita num lugar so</b>, o {@code marcarPollingOk}, com {@code coalesce}. Nao em quem
+     * grava o status: {@code CONECTADO} e escrito em OITO lugares do codigo, e carimbar a data nos
+     * oito e garantir que o nono esqueca, calado -- o padrao que este projeto vive consertando. Alem
+     * disso "o poller foi atendido pelo marketplace" e uma afirmacao mais forte do que "alguem
+     * marcou a coluna".</p>
+     *
+     * <p><b>Nao reinicia</b> quando a integracao se levanta de um ERRO, de proposito: uma queda de
+     * dez minutos nao desmente uma seca de tres dias, e e a seca que o lojista precisa ver. Quem
+     * zera e a troca de vinculo, que e situacao nova de verdade.</p>
+     *
+     * <p>Nula em canal que nao faz polling (PIX, WhatsApp, manual) e nas integracoes anteriores a
+     * V73 -- ali nao ha de onde tirar a data real, e inventar {@code now()} trocaria "nao sei" por
+     * uma mentira precisa.</p>
+     */
+    @Column(name = "conectado_em")
+    public OffsetDateTime conectadoEm;
     @Column(name = "pedidos_recebidos")
     public Integer pedidosRecebidos = 0;
 

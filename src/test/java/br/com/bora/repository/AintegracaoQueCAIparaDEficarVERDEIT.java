@@ -139,6 +139,69 @@ class AintegracaoQueCAIparaDEficarVERDEIT {
                 "se o sucesso nao tivesse zerado, estas duas completariam o limite");
     }
 
+    // --------------------------------------------- o relogio de "ligada e funcionando desde" (V73)
+
+    @Test
+    void oRELOGIOcomecaNaPRIMEIRAbuscaBOA() {
+        IntegracaoCanal i = canal("CONECTADO");
+        assertNull(doBanco(i.id).conectadoEm, "nasce sem relogio: nenhuma busca boa aconteceu ainda");
+
+        OffsetDateTime primeira = OffsetDateTime.now();
+        repo.marcarPollingOk(i.id, i.lojaId, primeira);
+
+        OffsetDateTime marcado = doBanco(i.id).conectadoEm;
+        assertNotNull(marcado, "sem isto a tela nao tem como dizer HA QUANTO TEMPO esta sem pedido");
+        assertEquals(0, java.time.Duration.between(primeira, marcado).abs().toSeconds(),
+                "a marca e a hora da propria busca");
+    }
+
+    @Test
+    void oRELOGIOnaoREINICIAaCADAbusca() {
+        // E o `coalesce`. Sem ele, cada busca de 30 s reescreveria a data e a tela diria para sempre
+        // "conectado ha 0 minutos" -- que e pior do que nao dizer nada, porque parece informacao.
+        IntegracaoCanal i = canal("CONECTADO");
+        OffsetDateTime primeira = OffsetDateTime.now().minusDays(3);
+        repo.marcarPollingOk(i.id, i.lojaId, primeira);
+        OffsetDateTime depoisDaPrimeira = doBanco(i.id).conectadoEm;
+
+        repo.marcarPollingOk(i.id, i.lojaId, OffsetDateTime.now());
+        repo.marcarPollingOk(i.id, i.lojaId, OffsetDateTime.now());
+
+        assertEquals(depoisDaPrimeira, doBanco(i.id).conectadoEm,
+                "tres buscas boas, uma marca so");
+    }
+
+    @Test
+    void oRELOGIOnaoREINICIAaoVOLTARdeUMerro() {
+        // De proposito: uma queda de dez minutos nao desmente uma seca de tres dias, e e a seca que
+        // o lojista precisa enxergar.
+        IntegracaoCanal i = canal("CONECTADO");
+        repo.marcarPollingOk(i.id, i.lojaId, OffsetDateTime.now().minusDays(5));
+        OffsetDateTime deAntes = doBanco(i.id).conectadoEm;
+
+        falhar(i, "403");
+        falhar(i, "403");
+        falhar(i, "403");
+        assertEquals("ERRO", doBanco(i.id).status, "controle: a queda precisa ter acontecido mesmo");
+
+        repo.marcarPollingOk(i.id, i.lojaId, OffsetDateTime.now());
+
+        IntegracaoCanal voltou = doBanco(i.id);
+        assertEquals("CONECTADO", voltou.status);
+        assertEquals(deAntes, voltou.conectadoEm, "a conta do tempo sem pedido continua de onde estava");
+    }
+
+    @Test
+    void aQUEDAnaoAPAGAoRELOGIO() {
+        IntegracaoCanal i = canal("CONECTADO");
+        repo.marcarPollingOk(i.id, i.lojaId, OffsetDateTime.now().minusDays(2));
+        OffsetDateTime deAntes = doBanco(i.id).conectadoEm;
+
+        falhar(i, "timeout");
+
+        assertEquals(deAntes, doBanco(i.id).conectadoEm, "falhar nao e trocar de vinculo");
+    }
+
     // ------------------------------------------------------------------ o que NAO pode mudar
 
     @Test
