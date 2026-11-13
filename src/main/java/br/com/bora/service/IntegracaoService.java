@@ -110,6 +110,7 @@ public class IntegracaoService {
         m.put("integracaoOficial", client.isPresent());
         m.put("appDaPlataformaConfigurado", client.map(c -> c.configurado()).orElse(false));
         m.put("merchantId", i.merchantId);
+        m.put("shopIdCanal", i.shopIdCanal);
         m.put("status", i.status);
         m.put("ativo", Boolean.TRUE.equals(i.ativo));
         m.put("ultimoPollingEm", i.ultimoPollingEm);
@@ -171,6 +172,7 @@ public class IntegracaoService {
             m.put("status", status);
             m.put("recebendo", i != null && Boolean.TRUE.equals(i.ativo) && (!oficial || vinculado));
             m.put("merchantId", i == null ? null : i.merchantId);
+            m.put("shopIdCanal", i == null ? null : i.shopIdCanal);
             m.put("clientId", i == null ? null : i.clientId);
             m.put("temSecret", i != null && i.clientSecret != null && !i.clientSecret.isBlank());
             m.put("autoAceitar", i == null || Boolean.TRUE.equals(i.autoAceitar));
@@ -228,8 +230,7 @@ public class IntegracaoService {
                     throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                             "O código da loja no " + label(code) + " é definido pelo suporte do BoraHapp.");
                 }
-                if (novo != null && repo.findByCanal(code).stream()
-                        .anyMatch(o -> !lojaId.equals(o.lojaId) && novo.equalsIgnoreCase(limpo(o.merchantId)))) {
+                if (novo != null && jaEhDeOutraLoja(code, lojaId, novo)) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
                             "Este código já está ligado a outra loja do BoraHapp no " + label(code) + ".");
                 }
@@ -249,6 +250,26 @@ public class IntegracaoService {
                     i.vinculoExpiraEm = null;
                     i.status = novo == null ? "DESCONECTADO" : "PRONTO";
                 }
+            }
+        }
+        // O "ID do loja" NUMERICO da 99 (V67). Ele nao entra na credencial -- quem entra e o App
+        // Shop ID, no merchantId --, mas ele TAMBEM roteia o webhook: a documentacao da 99 chama o
+        // header `X-App-MerchantId` so de "unique identifier for the merchant across different
+        // systems" e nao diz qual dos dois ela manda, por isso o webhook casa pelos DOIS
+        // (OpenDeliveryWebhookController.lojaDoHeader). Sem campo na tela, cada unidade nova exigia
+        // escrita no banco para ficar completa -- e ninguem lembra de pedir o que nao tem campo.
+        if (body.containsKey("shopIdCanal")) {
+            String novo = limpo(str(body.get("shopIdCanal")));
+            if (!java.util.Objects.equals(novo, limpo(i.shopIdCanal))) {
+                if (oficial && !ctx.isAdminBora()) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                            "O ID da loja no " + label(code) + " é definido pelo suporte do BoraHapp.");
+                }
+                if (novo != null && jaEhDeOutraLoja(code, lojaId, novo)) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "Este ID já está ligado a outra loja do BoraHapp no " + label(code) + ".");
+                }
+                i.shopIdCanal = novo;
             }
         }
         if (body.containsKey("clientId")) i.clientId = str(body.get("clientId"));
@@ -379,6 +400,22 @@ public class IntegracaoService {
     private String str(Object o) { return o == null ? null : String.valueOf(o); }
 
     private static String limpo(String v) { return v == null || v.isBlank() ? null : v.trim(); }
+
+    /**
+     * Este identificador ja pertence a OUTRA loja neste canal?
+     *
+     * <p>Confere contra os <b>dois</b> campos das outras lojas (App Shop ID e ID numerico), e nao
+     * so contra o campo homonimo. O motivo esta no {@code lojaDoHeader} do webhook: ele acha a loja
+     * por qualquer um dos dois, nessa ordem. Um valor repetido <b>entre</b> os campos -- o ID
+     * numerico desta loja igual ao App Shop ID de outra -- faria o pedido real de uma cair no
+     * painel da outra, calado, e nenhuma trava que olhasse so o campo homonimo pegaria isso.</p>
+     */
+    private boolean jaEhDeOutraLoja(String canal, Long lojaId, String valor) {
+        return repo.findByCanal(canal).stream()
+                .filter(o -> !lojaId.equals(o.lojaId))
+                .anyMatch(o -> valor.equalsIgnoreCase(limpo(o.merchantId))
+                        || valor.equalsIgnoreCase(limpo(o.shopIdCanal)));
+    }
 
     /**
      * Avisa os marketplaces que esta loja saiu do ar — ou que voltou.
