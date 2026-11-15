@@ -23,6 +23,10 @@ public class UsuarioService {
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
     private final PedidoDeSenhaService pedidosDeSenha;
 
+    /** Formato minimo: tem um @, tem ponto depois dele, e nao tem espaco. */
+    private static final java.util.regex.Pattern EMAIL_ACEITAVEL =
+            java.util.regex.Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$");
+
     public UsuarioService(UsuarioRepository repo, PlanoService planos, PasswordEncoder encoder, AuthContext ctx,
                           br.com.bora.repository.UsuarioLojaRepository vinculos,
                           PedidoDeSenhaService pedidosDeSenha) {
@@ -112,6 +116,44 @@ public class UsuarioService {
         impedirAlvoProprio(id, "Você não pode desativar a si mesmo");
         Usuario u = buscar(id);
         u.setAtivo(ativo);
+        return view(repo.save(u));
+    }
+
+    /**
+     * Troca o e-mail de acesso de alguem da loja — o login provisorio vira o definitivo.
+     *
+     * <p><b>Por que isto existe (15/11/2026):</b> nao havia jeito nenhum. O {@code setEmail} do
+     * servico so rodava na criacao, e a tela de Usuarios desabilitava o campo na edicao. Uma loja
+     * aberta com e-mail provisorio ficava presa a ele para sempre.</p>
+     *
+     * <p><b>O detalhe que tranca a pessoa para fora:</b> o login procura por
+     * {@code findByEmail(email.trim().toLowerCase())}. Gravar aqui com maiuscula ou com espaco
+     * sobrando NAO da erro nenhum — a tela diz "salvo" e no proximo login o e-mail simplesmente
+     * nao casa. Por isso normaliza antes de gravar, igual a criacao faz.</p>
+     *
+     * <p><b>Mudar o PROPRIO e-mail e permitido, de proposito.</b> O caso que motivou isto e
+     * exatamente o do unico administrador com login provisorio: barrar alvo proprio (como
+     * {@code papel} e {@code ativo} fazem) deixaria o recurso inutil para quem mais precisa dele.
+     * O token identifica por id ({@code subject}), nao por e-mail, entao a sessao aberta continua
+     * valendo; so o claim fica velho ate o proximo login.</p>
+     */
+    public UsuarioView definirEmail(Long id, String novo) {
+        ctx.requirePapel("ADMINISTRADOR_LOJA");
+        if (novo == null || novo.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o novo e-mail");
+        }
+        String email = novo.trim().toLowerCase();
+        if (!EMAIL_ACEITAVEL.matcher(email).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "E-mail invalido: \"" + novo.trim() + "\"");
+        }
+        Usuario u = buscar(id); // 404 fora da loja de quem pediu -- isolamento
+        repo.findByEmail(email).ifPresent(outro -> {
+            if (!outro.getId().equals(u.getId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "E-mail ja cadastrado");
+            }
+        });
+        u.setEmail(email);
         return view(repo.save(u));
     }
 

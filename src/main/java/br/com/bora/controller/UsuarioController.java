@@ -44,6 +44,15 @@ public class UsuarioController {
         return service.definirSenha(id, body == null ? null : body.get("novaSenha"));
     }
 
+    /**
+     * Troca o e-mail de acesso. Nasceu do caso real: a Doce Jardim abriu com login provisorio e
+     * nao havia tela nem endpoint para corrigir.
+     */
+    @PutMapping("/{id}/email")
+    public UsuarioView email(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
+        return service.definirEmail(id, body == null ? null : body.get("email"));
+    }
+
     @PutMapping("/{id}/ativo")
     public UsuarioView ativo(@PathVariable Long id, @RequestParam boolean ativo) {
         return service.definirAtivo(id, ativo);
