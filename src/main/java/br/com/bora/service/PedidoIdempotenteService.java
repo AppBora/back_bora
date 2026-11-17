@@ -100,7 +100,7 @@ public class PedidoIdempotenteService {
      * <p>Corta nos {@value #MAX_CHARS} em vez de recusar: chave longa nao e motivo para perder uma
      * venda, e o corte e estavel — o reenvio corta no mesmo ponto e casa com o que foi gravado.</p>
      */
-    static String normalizar(String crua) {
+    public static String normalizar(String crua) {
         if (crua == null) return null;
         String c = crua.trim();
         if (c.isEmpty()) return null;

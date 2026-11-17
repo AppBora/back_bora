@@ -136,7 +136,7 @@ class PedidoDoCardapioTest {
 
     @Test
     void oTotalEhCalculadoNoServidor_naoAceitaPrecoDoCliente() {
-        controller.pedirOnline(1L, corpo("valorTotal", "0.01", "preco", "0.01"), requisicao());
+        controller.pedirOnline(1L, corpo("valorTotal", "0.01", "preco", "0.01"), null, requisicao());
 
         assertEquals(0, new BigDecimal("40.00").compareTo(salvo().valorTotal),
                 "2 x R$ 20 = R$ 40; preco mandado pelo cliente nao pode valer");
@@ -149,7 +149,7 @@ class PedidoDoCardapioTest {
         // O pedido e gravado antes dos itens, entao quem garante que nada sobra e a transacao do
         // metodo. Aqui o que importa e que o pedido NAO se completa com produto de outra loja.
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo(), requisicao()));
+                () -> controller.pedirOnline(1L, corpo(), null, requisicao()));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
         verify(itens, never()).save(any(PedidoItem.class));
     }
@@ -162,7 +162,7 @@ class PedidoDoCardapioTest {
         when(lojas.findById(1L)).thenReturn(Optional.of(fechada));
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo(), requisicao()));
+                () -> controller.pedirOnline(1L, corpo(), null, requisicao()));
         assertEquals(HttpStatus.NOT_FOUND, e.getStatusCode());
     }
 
@@ -171,7 +171,7 @@ class PedidoDoCardapioTest {
         Map<String, Object> vazio = corpo();
         vazio.put("itens", List.of());
 
-        assertThrows(ResponseStatusException.class, () -> controller.pedirOnline(1L, vazio, requisicao()));
+        assertThrows(ResponseStatusException.class, () -> controller.pedirOnline(1L, vazio, null, requisicao()));
         verify(pedidos, never()).save(any(Pedido.class));
     }
 
@@ -192,7 +192,7 @@ class PedidoDoCardapioTest {
         m.put("itens", "dois acai");
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, m, requisicao()));
+                () -> controller.pedirOnline(1L, m, null, requisicao()));
 
         assertEquals(400, e.getStatusCode().value(),
                 "corpo torto virou erro do servidor: " + e.getStatusCode());
@@ -204,7 +204,7 @@ class PedidoDoCardapioTest {
         m.put("itens", List.of(Map.of("produtoId", "dez", "quantidade", 1)));
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, m, requisicao()));
+                () -> controller.pedirOnline(1L, m, null, requisicao()));
 
         assertEquals(400, e.getStatusCode().value());
         assertTrue(String.valueOf(e.getReason()).contains("produtoId"),
@@ -217,7 +217,7 @@ class PedidoDoCardapioTest {
         m.put("itens", List.of(Map.of("produtoId", 10, "quantidade", "dois")));
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, m, requisicao()));
+                () -> controller.pedirOnline(1L, m, null, requisicao()));
 
         assertEquals(400, e.getStatusCode().value());
         assertTrue(String.valueOf(e.getReason()).contains("quantidade"), e.getReason());
@@ -229,7 +229,7 @@ class PedidoDoCardapioTest {
         Map<String, Object> m = corpo();
         m.put("itens", List.of(Map.of("produtoId", 10)));
 
-        controller.pedirOnline(1L, m, requisicao());
+        controller.pedirOnline(1L, m, null, requisicao());
 
         assertEquals(0, new BigDecimal("20.00").compareTo(salvo().valorTotal),
                 "1 x R$ 20; o padrao de quantidade se perdeu");
@@ -240,7 +240,7 @@ class PedidoDoCardapioTest {
         Map<String, Object> m = corpo();
         m.remove("clienteNome");
 
-        assertThrows(ResponseStatusException.class, () -> controller.pedirOnline(1L, m, requisicao()));
+        assertThrows(ResponseStatusException.class, () -> controller.pedirOnline(1L, m, null, requisicao()));
     }
 
     @Test
@@ -253,7 +253,7 @@ class PedidoDoCardapioTest {
         when(taxas.findByLojaIdAndAtivoTrueOrderByBairroAscIdDesc(1L)).thenReturn(List.of(centro));
         when(taxas.findFirstByLojaIdAndBairroIgnoreCaseAndAtivoTrueOrderByIdDesc(1L, "Centro")).thenReturn(Optional.of(centro));
 
-        controller.pedirOnline(1L, corpo("bairro", "Centro", "taxaEntrega", "0.00"), requisicao());
+        controller.pedirOnline(1L, corpo("bairro", "Centro", "taxaEntrega", "0.00"), null, requisicao());
 
         Pedido p = salvo();
         assertEquals(0, new BigDecimal("7.50").compareTo(p.taxaEntrega), "o frete e o da tabela da loja");
@@ -269,7 +269,7 @@ class PedidoDoCardapioTest {
         centro.ativo = true;
         when(taxas.findByLojaIdAndAtivoTrueOrderByBairroAscIdDesc(1L)).thenReturn(List.of(centro));
 
-        controller.pedirOnline(1L, corpo("tipoEntrega", "RETIRADA", "bairro", "Centro"), requisicao());
+        controller.pedirOnline(1L, corpo("tipoEntrega", "RETIRADA", "bairro", "Centro"), null, requisicao());
 
         assertEquals(0, BigDecimal.ZERO.compareTo(salvo().taxaEntrega));
     }
@@ -277,7 +277,7 @@ class PedidoDoCardapioTest {
     @Test
     void cupomInventado_naoDaDesconto() {
         assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo("cupom", "BORA90"), requisicao()),
+                () -> controller.pedirOnline(1L, corpo("cupom", "BORA90"), null, requisicao()),
                 "cupom que nao existe nao pode virar desconto");
     }
 
@@ -298,7 +298,7 @@ class PedidoDoCardapioTest {
         when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean())).thenReturn(null);
 
         var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo(), requisicao()));
+                () -> controller.pedirOnline(1L, corpo(), null, requisicao()));
 
         assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
         assertTrue(erro.getReason().contains("Açaí 500ml"),
@@ -315,7 +315,7 @@ class PedidoDoCardapioTest {
                 .thenThrow(new br.com.bora.service.InsumoService.SemInsumo("Polpa de Acai Organico"));
 
         var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo(), requisicao()));
+                () -> controller.pedirOnline(1L, corpo(), null, requisicao()));
 
         assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
         assertTrue(erro.getReason().contains("Açaí 500ml"));
@@ -329,12 +329,12 @@ class PedidoDoCardapioTest {
         // sem controle passasse a ser tratado como esgotado, o cardapio inteiro pararia de vender.
         assertNull(acai.estoque, "a fixture tem que continuar sem controle de estoque");
 
-        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo(), requisicao()));
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo(), null, requisicao()));
     }
 
     @Test
     void aFichaTecnicaEhConsumidaNaVenda() {
-        controller.pedirOnline(1L, corpo(), requisicao());
+        controller.pedirOnline(1L, corpo(), null, requisicao());
 
         // Com exigirEstoque = TRUE: o cardapio publico e o unico canal que recusa quando falta, porque
         // o cliente nao tem o produto na mao. Balcao e marketplace usam a sobrecarga de 3 argumentos.
@@ -346,7 +346,7 @@ class PedidoDoCardapioTest {
     void naEntrega_oCashbackEhRegistradoNaHora() {
         when(fidelidade.identificarPeloTelefone(anyLong(), any(), any(), any())).thenReturn(42L);
 
-        controller.pedirOnline(1L, corpo(), requisicao());
+        controller.pedirOnline(1L, corpo(), null, requisicao());
 
         verify(fidelidade).registrar(eq(1L), eq(42L), any(), any());
     }
@@ -388,7 +388,7 @@ class PedidoDoCardapioTest {
         recriarCom(px);
         when(pedidos.findById(anyLong())).thenAnswer(i -> Optional.of(salvo()));
 
-        Map<String, Object> r = controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735"), requisicao());
+        Map<String, Object> r = controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735"), null, requisicao());
 
         assertEquals(Boolean.TRUE, r.get("aguardandoPagamento"));
         assertNotNull(r.get("pix"));
@@ -409,7 +409,7 @@ class PedidoDoCardapioTest {
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
                 () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735",
-                        "usarCashback", true), requisicao()));
+                        "usarCashback", true), null, requisicao()));
 
         assertEquals(HttpStatus.BAD_GATEWAY, e.getStatusCode());
         // o pedido ja existia quando o Asaas falhou: nao pode ficar vivo esperando um PIX que nao veio
@@ -435,7 +435,7 @@ class PedidoDoCardapioTest {
         recriarCom(px); // loja sem chave Asaas
 
         assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735"), requisicao()));
+                () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "11144477735"), null, requisicao()));
 
         verify(pedidos, never()).save(any(Pedido.class));
         verify(px, never()).criarCobranca(any(), any(), any(), any(), anyString());
@@ -447,7 +447,7 @@ class PedidoDoCardapioTest {
         recriarCom(px);
 
         assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "123"), requisicao()));
+                () -> controller.pedirOnline(1L, corpo("formaPagamento", "PIX", "cpf", "123"), null, requisicao()));
 
         verify(pedidos, never()).save(any(Pedido.class));
     }
@@ -458,7 +458,7 @@ class PedidoDoCardapioTest {
         // a coisa errada para quem mexeu na ficha depois do pedido. A gravacao nao tinha teste
         // nenhum: inverter a condicao, ou apagar a linha, passava despercebido.
         when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean())).thenReturn(null); // produto sem ficha
-        controller.pedirOnline(1L, corpo(), requisicao());
+        controller.pedirOnline(1L, corpo(), null, requisicao());
 
         var capturado = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
         verify(itens, atLeastOnce()).save(capturado.capture());
@@ -469,7 +469,7 @@ class PedidoDoCardapioTest {
         when(itens.save(any())).thenAnswer(i -> i.getArgument(0));
         when(insumos.consumirFicha(anyLong(), anyLong(), anyInt(), anyBoolean()))
                 .thenReturn(new java.math.BigDecimal("4.00")); // agora com ficha
-        controller.pedirOnline(1L, corpo(), requisicao());
+        controller.pedirOnline(1L, corpo(), null, requisicao());
 
         var comFicha = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
         verify(itens, atLeastOnce()).save(comFicha.capture());
@@ -490,7 +490,7 @@ class PedidoDoCardapioTest {
                         List.of(new ComplementoService.Escolhido(12L, "Granola", new BigDecimal("2.00")))));
 
         controller.pedirOnline(1L, corpo("itens",
-                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), requisicao());
+                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), null, requisicao());
 
         var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
         verify(itens).save(c.capture());
@@ -508,7 +508,7 @@ class PedidoDoCardapioTest {
     @Test
     void entregaSemEnderecoEhRecusada() {
         var e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo("endereco", ""), requisicao()));
+                () -> controller.pedirOnline(1L, corpo("endereco", ""), null, requisicao()));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
         assertTrue(e.getReason().toLowerCase().contains("endereco") || e.getReason().toLowerCase().contains("endereço"),
                 "o recado tem que dizer o que falta: " + e.getReason());
@@ -519,14 +519,14 @@ class PedidoDoCardapioTest {
     void entregaComEnderecoCurtoDemaisEhRecusada() {
         // "Rua A" nao da para entregar: falta numero.
         var e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo("endereco", "Rua A"), requisicao()));
+                () -> controller.pedirOnline(1L, corpo("endereco", "Rua A"), null, requisicao()));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
     }
 
     @Test
     void pedidoSemTelefoneEhRecusado() {
         var e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo("telefone", ""), requisicao()));
+                () -> controller.pedirOnline(1L, corpo("telefone", ""), null, requisicao()));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
         assertTrue(e.getReason().toLowerCase().contains("telefone"), e.getReason());
     }
@@ -534,14 +534,14 @@ class PedidoDoCardapioTest {
     @Test
     void telefoneSemDddEhRecusado() {
         var e = assertThrows(ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo("telefone", "999990001"), requisicao()));
+                () -> controller.pedirOnline(1L, corpo("telefone", "999990001"), null, requisicao()));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
     }
 
     @Test
     void telefoneComMascaraEhAceito() {
         // O cliente digita do jeito que quiser; quem normaliza e o servidor.
-        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("telefone", "(15) 99999-0001"), requisicao()));
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("telefone", "(15) 99999-0001"), null, requisicao()));
     }
 
     @Test
@@ -549,16 +549,16 @@ class PedidoDoCardapioTest {
         // Quem vai buscar na loja nao tem entrega; o telefone continua, porque e como a loja avisa
         // que o pedido ficou pronto.
         assertDoesNotThrow(() -> controller.pedirOnline(1L,
-                corpo("tipoEntrega", "RETIRADA", "endereco", ""), requisicao()));
+                corpo("tipoEntrega", "RETIRADA", "endereco", ""), null, requisicao()));
 
         var e = assertThrows(ResponseStatusException.class, () -> controller.pedirOnline(1L,
-                corpo("tipoEntrega", "RETIRADA", "endereco", "", "telefone", ""), requisicao()));
+                corpo("tipoEntrega", "RETIRADA", "endereco", "", "telefone", ""), null, requisicao()));
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
     }
 
     @Test
     void oPedidoGuardaEnderecoBairroETipoEmCOLUNA_naoSoNoTexto() {
-        controller.pedirOnline(1L, corpo("endereco", "Rua das Flores, 123 ap 2"), requisicao());
+        controller.pedirOnline(1L, corpo("endereco", "Rua das Flores, 123 ap 2"), null, requisicao());
 
         Pedido p = salvo();
         assertEquals("Rua das Flores, 123 ap 2", p.enderecoEntrega,
@@ -568,7 +568,7 @@ class PedidoDoCardapioTest {
 
     @Test
     void naRetiradaOPedidoNaoGuardaEnderecoDeEntrega() {
-        controller.pedirOnline(1L, corpo("tipoEntrega", "RETIRADA", "endereco", ""), requisicao());
+        controller.pedirOnline(1L, corpo("tipoEntrega", "RETIRADA", "endereco", ""), null, requisicao());
 
         Pedido p = salvo();
         assertEquals("RETIRADA", p.tipoEntrega);
@@ -597,7 +597,7 @@ class PedidoDoCardapioTest {
         when(complementos.aplicar(anyLong(), any(), any())).thenReturn(comGranola());
 
         controller.pedirOnline(1L, corpo("itens",
-                List.of(Map.of("produtoId", 10, "quantidade", 2, "complementos", List.of(12)))), requisicao());
+                List.of(Map.of("produtoId", 10, "quantidade", 2, "complementos", List.of(12)))), null, requisicao());
 
         var lista = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(insumos).consumirAdicionais(eq(1L), lista.capture(), eq(2), eq(true));
@@ -620,7 +620,7 @@ class PedidoDoCardapioTest {
         var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
                 () -> controller.pedirOnline(1L, corpo("itens",
                         List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))),
-                        requisicao()));
+                        null, requisicao()));
 
         assertEquals(org.springframework.http.HttpStatus.CONFLICT, erro.getStatusCode());
         assertTrue(erro.getReason().contains("Granola"), "a mensagem foi: " + erro.getReason());
@@ -639,7 +639,7 @@ class PedidoDoCardapioTest {
                 .thenReturn(new BigDecimal("4.00"));
 
         controller.pedirOnline(1L, corpo("itens",
-                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), requisicao());
+                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), null, requisicao());
 
         var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
         verify(itens).save(c.capture());
@@ -653,7 +653,7 @@ class PedidoDoCardapioTest {
         when(complementos.aplicar(anyLong(), any(), any())).thenReturn(comGranola());
 
         controller.pedirOnline(1L, corpo("itens",
-                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), requisicao());
+                List.of(Map.of("produtoId", 10, "quantidade", 1, "complementos", List.of(12)))), null, requisicao());
 
         var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.PedidoItem.class);
         verify(itens).save(c.capture());
@@ -668,7 +668,7 @@ class PedidoDoCardapioTest {
     private String formaGravada(Object escolhido) {
         var corpo = corpo();
         corpo.put("formaPagamento", escolhido);
-        controller.pedirOnline(1L, corpo, requisicao());
+        controller.pedirOnline(1L, corpo, null, requisicao());
         var c = org.mockito.ArgumentCaptor.forClass(br.com.bora.entity.Pedido.class);
         verify(pedidos, atLeastOnce()).save(c.capture());
         return c.getValue().formaPagamento;
@@ -712,7 +712,7 @@ class PedidoDoCardapioTest {
         corpo.put("formaPagamento", "PIX");
 
         var erro = assertThrows(org.springframework.web.server.ResponseStatusException.class,
-                () -> controller.pedirOnline(1L, corpo, requisicao()));
+                () -> controller.pedirOnline(1L, corpo, null, requisicao()));
 
         assertTrue(erro.getReason().contains("PIX"), "foi: " + erro.getReason());
     }
@@ -741,7 +741,7 @@ class PedidoDoCardapioTest {
     void enderecoGIGANTEnaoPERDEoPEDIDO() {
         String enorme = "Rua Muito Comprida, 1, " + "x".repeat(900);
 
-        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("endereco", enorme), requisicao()));
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("endereco", enorme), null, requisicao()));
 
         assertEquals(LarguraDeColuna.PEDIDO_ENDERECO, salvo().enderecoEntrega.length());
         assertTrue(salvo().enderecoEntrega.startsWith("Rua Muito Comprida, 1,"),
@@ -756,8 +756,87 @@ class PedidoDoCardapioTest {
         // requisicao para uma coluna varchar(100).
         String enorme = "Centro " + "y".repeat(300);
 
-        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("bairro", enorme), requisicao()));
+        assertDoesNotThrow(() -> controller.pedirOnline(1L, corpo("bairro", enorme), null, requisicao()));
 
         assertEquals(LarguraDeColuna.PEDIDO_BAIRRO, salvo().bairroEntrega.length());
     }
+    // ================================================================================
+    // IDEMPOTENCIA DO CARDAPIO (17/11/2026)
+    // ================================================================================
+
+    /**
+     * O MESMO PEDIDO, GRAVADO UMA VEZ -- mesmo que o "Confirmar" chegue duas.
+     *
+     * <p><b>O defeito, medido na varredura:</b> tres POSTs identicos em paralelo no cardapio
+     * criaram TRES pedidos e baixaram o estoque TRES vezes. O painel tem essa trava desde a V71 e o
+     * marketplace desde a V28; o cardapio -- o canal mais usado, e o unico em que quem toca o botao
+     * e o cliente final, no celular dele -- nao tinha.</p>
+     *
+     * <p>E nem precisa de clique duplo: perder a VOLTA da resposta basta. O pedido foi gravado, o
+     * celular nao soube, o cliente toca de novo, e a loja recebe dois pedidos iguais de quem vai
+     * pagar um.</p>
+     *
+     * <p><b>O que estes testes NAO provam:</b> a corrida de verdade, que e do indice unico do banco
+     * (`uq_pedido_loja_chave_idempotencia`). Isso foi medido contra Postgres: tres envios paralelos
+     * com a mesma chave -> 1 pedido, estoque baixado 1 vez. Aqui se prova a consulta que evita o
+     * trabalho no reenvio, e que a chave chega ao pedido gravado.</p>
+     */
+    @Test
+    void reenvioComAmesmaChaveNAOgravaOUTROpedido() {
+        Pedido jaGravado = new Pedido();
+        jaGravado.id = 777L;
+        jaGravado.lojaId = 1L;
+        jaGravado.codigo = "CD-777";
+        jaGravado.valorTotal = new java.math.BigDecimal("24.90");
+        jaGravado.tipoEntrega = "ENTREGA";
+        when(pedidos.findByLojaIdAndChaveIdempotencia(1L, "chave-do-cliente"))
+                .thenReturn(java.util.Optional.of(jaGravado));
+
+        Map<String, Object> r = controller.pedirOnline(1L, corpo(), "chave-do-cliente", requisicao());
+
+        assertEquals(777L, r.get("pedidoId"));
+        assertEquals(Boolean.TRUE, r.get("jaEstavaGravado"), "a tela precisa saber que nao criou outro");
+        // containsKey, e nao notNull: o RepetirPedidoService deste fixture e um mock inline que
+        // devolve null. O que da para provar aqui e que o campo E PRODUZIDO -- quem apagar a linha
+        // quebra isto. Que o token vem preenchido de verdade foi medido contra Postgres.
+        assertTrue(r.containsKey("acompanharToken"), "sem o token o cliente nao consegue acompanhar");
+        verify(pedidos, never()).save(any(Pedido.class));
+    }
+
+    /** A chave tem de CHEGAR no pedido gravado -- senao o indice unico nao tem o que proteger. */
+    @Test
+    void aChaveDoClienteEhGravadaNoPedido() {
+        when(pedidos.findByLojaIdAndChaveIdempotencia(any(), any())).thenReturn(java.util.Optional.empty());
+
+        controller.pedirOnline(1L, corpo(), "chave-do-cliente", requisicao());
+
+        var c = org.mockito.ArgumentCaptor.forClass(Pedido.class);
+        verify(pedidos, atLeastOnce()).save(c.capture());
+        assertEquals("chave-do-cliente", c.getAllValues().get(0).chaveIdempotencia);
+    }
+
+    /**
+     * SEM O CABECALHO, NADA MUDA. Cardapio antigo em cache no celular de alguem continua pedindo
+     * igual -- e e por isso que a trava pode subir sem o front subir junto.
+     */
+    @Test
+    void semAchaveOcardapioContinuaFuncionandoComoAntes() {
+        controller.pedirOnline(1L, corpo(), null, requisicao());
+
+        var c = org.mockito.ArgumentCaptor.forClass(Pedido.class);
+        verify(pedidos, atLeastOnce()).save(c.capture());
+        assertNull(c.getAllValues().get(0).chaveIdempotencia);
+        verify(pedidos, never()).findByLojaIdAndChaveIdempotencia(any(), any());
+    }
+
+    /** Chave em branco e o mesmo que nao mandar chave: nao vira uma chave vazia no banco. */
+    @Test
+    void chaveEmBrancoNaoViraChave() {
+        controller.pedirOnline(1L, corpo(), "   ", requisicao());
+
+        var c = org.mockito.ArgumentCaptor.forClass(Pedido.class);
+        verify(pedidos, atLeastOnce()).save(c.capture());
+        assertNull(c.getAllValues().get(0).chaveIdempotencia);
+    }
+
 }

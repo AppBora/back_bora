@@ -81,11 +81,36 @@ class OasaasNaoSEGURAconexaoDoBancoTest {
     void oMETODOdoPEDIDOnaoEHtransacionalINTEIRO() {
         // Reflexao, e nao texto: pega tambem a anotacao herdada ou posta em outro lugar.
         Method m = assertDoesNotThrow(() -> PublicController.class.getMethod("pedirOnline",
-                Long.class, java.util.Map.class, jakarta.servlet.http.HttpServletRequest.class));
+                Long.class, java.util.Map.class, String.class,
+                jakarta.servlet.http.HttpServletRequest.class));
 
         assertNull(m.getAnnotation(org.springframework.transaction.annotation.Transactional.class),
                 "voltou o @Transactional no metodo: os tres passos entram numa transacao so e a "
                         + "chamada HTTP ao Asaas volta a segurar conexao do banco");
+    }
+
+    /**
+     * O MESMO, no metodo que faz o trabalho.
+     *
+     * <p>Em 17/11/2026 o {@code pedirOnline} virou uma casca fina: ele resolve a chave de
+     * idempotencia e delega para o {@code pedirOnlineGravando}, que tem os tres passos. Checar so a
+     * casca deixaria a guarda vigiando um metodo que nao faz nada -- bastaria alguem anotar o
+     * metodo de baixo para o defeito voltar com o teste verde.</p>
+     */
+    @Test
+    void oMETODOqueGRAVAtambemNAOeTRANSACIONALinteiro() {
+        Method m = assertDoesNotThrow(() -> {
+            Method achado = null;
+            for (Method cand : PublicController.class.getDeclaredMethods()) {
+                if (cand.getName().equals("pedirOnlineGravando")) achado = cand;
+            }
+            assertNotNull(achado, "nao achei o pedirOnlineGravando: este teste mede nada");
+            return achado;
+        });
+
+        assertNull(m.getAnnotation(org.springframework.transaction.annotation.Transactional.class),
+                "o metodo que grava o pedido virou transacional inteiro: a chamada ao Asaas volta a "
+                        + "segurar conexao do banco");
     }
 
     @Test

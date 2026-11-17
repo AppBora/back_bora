@@ -460,7 +460,71 @@ public class PublicController {
     // o codigo escrito para compensar nao compensava nada. Agora o Passo 1 commitou de verdade, e
     // cancelar e devolver o cashback e o que precisa acontecer.
     public Map<String, Object> pedirOnline(@PathVariable Long lojaId, @RequestBody Map<String, Object> body,
+                                           @RequestHeader(name = "Idempotency-Key", required = false) String chaveCrua,
                                            jakarta.servlet.http.HttpServletRequest http) {
+        // IDEMPOTENCIA DO CARDAPIO (17/11/2026).
+        //
+        // O painel tem essa trava desde a V71 e o marketplace desde a V28. O CARDAPIO -- o canal
+        // mais usado, e o unico em que quem clica e o cliente final, no celular, com a internet
+        // dele -- nao tinha. Medido na varredura: tres POSTs identicos em paralelo criaram TRES
+        // pedidos e baixaram o estoque TRES vezes.
+        //
+        // O caso comum nem precisa de clique duplo: perder a VOLTA da resposta basta. O pedido foi
+        // gravado, o celular nao soube, o cliente toca "Confirmar" de novo -- e a loja recebe dois
+        // pedidos iguais, com estoque e cashback dobrados, para uma pessoa que vai pagar um.
+        //
+        // Quem garante a unicidade e o indice `uq_pedido_loja_chave_idempotencia` (V71), nao a
+        // consulta abaixo: dois toques quase juntos sao duas requisicoes em paralelo, as duas
+        // procuram antes de qualquer uma gravar. A consulta poupa trabalho no reenvio que chega
+        // depois; o `catch` la embaixo resolve a corrida.
+        //
+        // SEM A CHAVE, NADA MUDA: cardapio antigo em cache no celular de alguem continua pedindo
+        // igual. A trava so vale para quem manda o cabecalho.
+        String chave = br.com.bora.service.PedidoIdempotenteService.normalizar(chaveCrua);
+        if (chave != null) {
+            var jaGravado = pedidos.findByLojaIdAndChaveIdempotencia(lojaId, chave);
+            if (jaGravado.isPresent()) {
+                AUDITORIA_CARDAPIO.info("Cardapio da loja {}: pedido repetido barrado pela chave de "
+                        + "idempotencia; devolvendo o pedido {} em vez de gravar outra venda",
+                        lojaId, jaGravado.get().id);
+                return respostaDePedidoJaGravado(lojaId, jaGravado.get());
+            }
+        }
+        return pedirOnlineGravando(lojaId, body, chave, http);
+    }
+
+    private static final org.slf4j.Logger AUDITORIA_CARDAPIO =
+            org.slf4j.LoggerFactory.getLogger(PublicController.class);
+
+    /**
+     * A resposta de um pedido que JA existe — o reenvio recebe o mesmo pedido, e não um 409.
+     *
+     * <p>Responder erro faria o cliente achar que o pedido não entrou e mandar tudo de novo pelo
+     * WhatsApp; a loja ficaria com dois. Devolver o mesmo é o sistema funcionando.</p>
+     *
+     * <p><b>O que esta resposta NÃO traz é o QR do PIX.</b> O QR e o copia-e-cola vêm do Asaas e não
+     * são gravados em lugar nenhum — só o {@code idExterno} da cobrança fica. Então, no reenvio de
+     * um pedido PIX, a tela recebe o pedido e o aviso de que a cobrança já existe, e acompanha o
+     * pagamento pelo status. Inventar um QR aqui seria pior que não ter: o cliente pagaria uma
+     * cobrança que talvez não fosse a dele.</p>
+     */
+    private Map<String, Object> respostaDePedidoJaGravado(Long lojaId, Pedido p) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("pedidoId", p.id);
+        r.put("codigo", p.codigo);
+        r.put("acompanharToken", repetir.token(lojaId, p.id));
+        r.put("valorTotal", p.valorTotal);
+        r.put("retirada", "RETIRADA".equals(p.tipoEntrega));
+        r.put("aguardandoPagamento", Boolean.TRUE.equals(p.aguardandoPagamento));
+        r.put("jaEstavaGravado", true);
+        if ("PIX_ASAAS".equals(p.canalExterno)) {
+            r.put("pixJaGerado", true);
+        }
+        return r;
+    }
+
+    private Map<String, Object> pedirOnlineGravando(Long lojaId, Map<String, Object> body, String chave,
+                                                    jakarta.servlet.http.HttpServletRequest http) {
         // Teto por origem, ANTES de qualquer efeito: este endpoint e publico e cada chamada cria
         // pedido, baixa estoque e pode abrir cobranca no Asaas da loja. Ver FreioDoCardapio.
         freio.pedido(http);
@@ -522,7 +586,14 @@ public class PublicController {
         }
 
         // ---- Passo 1: só banco, transação curta. Nenhuma chamada externa aqui dentro. ----
-        Rascunho rascunho = tx.execute(st -> {
+        //
+        // O `catch` do conflito mora FORA desta transação, de propósito: quando o índice único
+        // recusa a segunda inserção, a transação está marcada para rollback e nenhuma leitura
+        // dentro dela vale. É a mesma razão que faz o PedidoIdempotenteService ser uma classe
+        // separada do PedidoService.
+        Rascunho rascunho;
+        try {
+        rascunho = tx.execute(st -> {
 
             // Frete do cardapio. Ate aqui a taxa ficava SEMPRE zero aqui, enquanto o balcao cobrava a
             // tabela do bairro: toda entrega feita pelo cardapio saia de graca, e o acerto do motoboy
@@ -560,6 +631,7 @@ public class PublicController {
 
             Pedido p = new Pedido();
             p.lojaId = lojaId;
+            p.chaveIdempotencia = chave; // nulo quando o cardápio não mandou o cabeçalho
             p.origem = "Cardápio Digital";
             p.formaPagamento = "PIX".equals(forma) ? "PIX (aguardando)" : forma;
             if (telefone != null && !telefone.isBlank()) p.clienteTelefone = telefone.replaceAll("[^0-9]", "");
@@ -767,6 +839,21 @@ public class PublicController {
             resp.put("aguardandoPagamento", comPix);
             return new Rascunho(p, resp, clienteId, resgate, descontoUsado);
         });
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // A corrida: o outro toque gravou entre a consulta do começo do método e esta inserção.
+            var doOutroToque = chave == null
+                    ? java.util.Optional.<Pedido>empty()
+                    : pedidos.findByLojaIdAndChaveIdempotencia(lojaId, chave);
+            if (doOutroToque.isEmpty()) {
+                // O conflito era de OUTRO índice — canal externo, telefone de cliente, o que for.
+                // Engolir aqui esconderia um defeito de verdade.
+                throw e;
+            }
+            AUDITORIA_CARDAPIO.warn("Dois 'Confirmar' ao mesmo tempo no cardapio da loja {}: o indice "
+                    + "unico recusou a segunda venda e o pedido {} foi devolvido para os dois",
+                    lojaId, doOutroToque.get().id);
+            return respostaDePedidoJaGravado(lojaId, doOutroToque.get());
+        }
 
         Map<String, Object> resp = rascunho.resposta();
         if (!comPix) {
