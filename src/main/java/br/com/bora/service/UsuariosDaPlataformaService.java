@@ -313,7 +313,8 @@ public class UsuariosDaPlataformaService {
         r.put("linhasDeHistoricoQuePerdemONome", mexeuEmPedidos);
         List<String> impedimentos = new ArrayList<>();
         try { impedirAlvoProprio(alvo, "excluir"); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
-        try { impedirUltimoAdminDaPlataforma(alvo, "excluir"); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
+        // SemTravar: a previa roda fora de transacao. Ver o javadoc do metodo.
+        try { impedirUltimoAdminDaPlataformaSemTravar(alvo, "excluir"); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
         try { impedirDeixarLojaSemDono(alvo, "Excluir"); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
         r.put("impedimentos", impedimentos);
         r.put("podeExcluir", impedimentos.isEmpty());
@@ -392,10 +393,37 @@ public class UsuariosDaPlataformaService {
      * Trava a lista de administradores de plataforma com {@code FOR UPDATE} <b>antes</b> de decidir.
      * Sem o lock, duas chamadas simultâneas contam "o outro ainda está ativo" e as duas passam —
      * resultado: plataforma sem dono.
+     *
+     * <p><b>Só para quem ALTERA</b> ({@code definirAtivo}, {@code excluir}), que roda dentro de
+     * {@code @Transactional}: consulta com trava pessimista <b>exige transação aberta</b>.</p>
      */
     private void impedirUltimoAdminDaPlataforma(Usuario alvo, String acao) {
         if (alvo.getPapel() != Papel.ADMINISTRADOR_BORA) return;
-        List<Usuario> daPlataforma = usuarios.findByPapelParaAtualizar(Papel.ADMINISTRADOR_BORA);
+        conferirSeSobraAdmin(alvo, acao, usuarios.findByPapelParaAtualizar(Papel.ADMINISTRADOR_BORA));
+    }
+
+    /**
+     * A MESMA regra, sem o {@code FOR UPDATE} — para a prévia, que não altera nada.
+     *
+     * <h2>O defeito que isto conserta (17/11/2026, achado em produção pelo dono)</h2>
+     * <p>A prévia chamava a versão travada e estourava
+     * <i>"Query requires transaction be in progress, but no transaction is known to be in
+     * progress"</i>: ela não tem {@code @Transactional}, e trava pessimista sem transação não roda.
+     * O botão Excluir ficava inútil — mas <b>só quando o alvo era ADMINISTRADOR_BORA</b>, porque é
+     * o único papel que chega a executar esta consulta. A bateria tinha previsto exclusão de
+     * operador e de admin de loja, que saem da função antes dela. <b>O caminho nunca foi pisado.</b></p>
+     *
+     * <p><b>Por que não foi só pôr {@code @Transactional(readOnly = true)}:</b> a prévia é leitura e
+     * não tem por que segurar linha do banco. Abrir transação só para satisfazer uma trava que ela
+     * não precisa seria carregar o custo e o risco de contenção numa consulta que só informa.</p>
+     */
+    private void impedirUltimoAdminDaPlataformaSemTravar(Usuario alvo, String acao) {
+        if (alvo.getPapel() != Papel.ADMINISTRADOR_BORA) return;
+        conferirSeSobraAdmin(alvo, acao, usuarios.findByPapel(Papel.ADMINISTRADOR_BORA));
+    }
+
+    /** A conta em si, igual nos dois caminhos. Quem decide travar ou não é quem chama. */
+    private void conferirSeSobraAdmin(Usuario alvo, String acao, List<Usuario> daPlataforma) {
         long ativosDepois = daPlataforma.stream()
                 .filter(u -> Boolean.TRUE.equals(u.getAtivo()) && !u.getId().equals(alvo.getId()))
                 .count();

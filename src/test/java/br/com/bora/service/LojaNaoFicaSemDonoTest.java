@@ -296,6 +296,53 @@ class LojaNaoFicaSemDonoTest {
         verify(vinculos, never()).deleteAll(any());
     }
 
+    /**
+     * A PRÉVIA NÃO PODE USAR A CONSULTA COM {@code FOR UPDATE}.
+     *
+     * <p><b>Defeito real, achado pelo dono em produção em 17/11/2026</b>, depois de a bateria
+     * inteira passar: clicar em Excluir num ADMINISTRADOR_BORA devolvia <i>"Query requires
+     * transaction be in progress, but no transaction is known to be in progress"</i>. A prévia não
+     * é {@code @Transactional}, e consulta com trava pessimista exige transação aberta.</p>
+     *
+     * <p><b>Por que a bateria não pegou:</b> aquela trava só executa quando o alvo é
+     * {@code ADMINISTRADOR_BORA} — os outros papéis saem da função antes. Todos os cenários de
+     * prévia que eu tinha escrito usavam operador ou admin de loja. O caminho existia e nunca foi
+     * pisado.</p>
+     *
+     * <p><b>O que este teste prova, e o que não prova:</b> prova que a prévia pede a consulta SEM
+     * trava — ou seja, pega quem trocar uma pela outra. Não prova a falha do Hibernate em si, que é
+     * comportamento de transação e só aparece contra um banco de verdade.</p>
+     */
+    @Test
+    void previaDeAdminDaPlataformaNaoUsaConsultaComTrava() {
+        UsuariosDaPlataformaService s = servico();
+        Usuario alvo = usuario(2L, Papel.ADMINISTRADOR_BORA, null, true);
+        Usuario euAtivo = conta(EU, Papel.ADMINISTRADOR_BORA, null, true);
+        when(usuarios.findByPapel(Papel.ADMINISTRADOR_BORA)).thenReturn(List.of(euAtivo, alvo));
+
+        Map<String, Object> p = s.previaDaExclusao(2L);
+
+        assertEquals(true, p.get("podeExcluir"));
+        verify(usuarios).findByPapel(Papel.ADMINISTRADOR_BORA);
+        verify(usuarios, never()).findByPapelParaAtualizar(any());
+    }
+
+    /** E a regra continua valendo pelo caminho sem trava: último ativo não some nem na prévia. */
+    @Test
+    void previaAcusaOUltimoAdminDaPlataforma() {
+        UsuariosDaPlataformaService s = servico();
+        Usuario alvo = usuario(2L, Papel.ADMINISTRADOR_BORA, null, true);
+        Usuario euInativo = conta(EU, Papel.ADMINISTRADOR_BORA, null, false);
+        when(usuarios.findByPapel(Papel.ADMINISTRADOR_BORA)).thenReturn(List.of(euInativo, alvo));
+
+        Map<String, Object> p = s.previaDaExclusao(2L);
+
+        assertEquals(false, p.get("podeExcluir"));
+        @SuppressWarnings("unchecked")
+        List<String> impedimentos = (List<String>) p.get("impedimentos");
+        assertTrue(impedimentos.get(0).contains("último administrador ativo"), impedimentos.get(0));
+    }
+
     @Test
     void previaDizPorqueNaoPodeQuandoATravaPega() {
         UsuariosDaPlataformaService s = servico();
