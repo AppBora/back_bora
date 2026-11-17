@@ -158,7 +158,7 @@ class QuemFicouComAtaxaDeEntregaTest {
                 mock(IntegracaoService.class), mock(TaxaEntregaRepository.class),
                 mock(InsumoService.class), mock(FidelidadeService.class),
                 mock(ComplementoService.class), ctx, mock(EstornoDaVendaService.class),
-                GerenciadorDeTransacaoFalso.novo());
+                mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         org.springframework.test.util.ReflectionTestUtils.setField(service, "notifCliente",
                 mock(NotificacaoClienteService.class));
 

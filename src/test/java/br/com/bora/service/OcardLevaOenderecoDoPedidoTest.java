@@ -53,7 +53,7 @@ class OcardLevaOenderecoDoPedidoTest {
                 clientes, mock(LogStatusRepository.class), mock(PlanoService.class),
                 mock(IntegracaoService.class), mock(TaxaEntregaRepository.class),
                 mock(InsumoService.class), mock(FidelidadeService.class), mock(ComplementoService.class),
-                ctx, mock(EstornoDaVendaService.class), GerenciadorDeTransacaoFalso.novo());
+                ctx, mock(EstornoDaVendaService.class), mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         when(repo.findByLojaIdAndStatusInOrderByCriadoEmDesc(eq(LOJA), any())).thenReturn(List.of());
     }
 

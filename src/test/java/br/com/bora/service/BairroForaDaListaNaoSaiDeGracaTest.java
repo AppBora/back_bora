@@ -78,7 +78,7 @@ class BairroForaDaListaNaoSaiDeGracaTest {
         service = new PedidoService(repo, mock(PedidoItemRepository.class), produtos, clientes,
                 mock(LogStatusRepository.class), mock(PlanoService.class), mock(IntegracaoService.class),
                 taxas, insumos, fidelidade, complementos, ctx, mock(EstornoDaVendaService.class),
-                GerenciadorDeTransacaoFalso.novo());
+                mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         ReflectionTestUtils.setField(service, "notifCliente", mock(NotificacaoClienteService.class));
 
         when(ctx.lojaId()).thenReturn(1L);

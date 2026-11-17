@@ -54,6 +54,15 @@ public class PedidoService {
     private final AuthContext ctx;
     private final EstornoDaVendaService devolucao;
     /** Transacao explicita, para agrupar o que precisa cair junto sem prender chamada externa. */
+    /**
+     * A fila de eventos do ERP (entrega A2). Grava na MESMA transacao do fato.
+     *
+     * <p>Nasce DESLIGADA: enquanto {@code config_plataforma['outbox.habilitado']} nao for "true",
+     * nenhuma das chamadas abaixo escreve coisa alguma. E a chave que desliga, sem deploy, uma
+     * gravacao que esta no caminho de toda venda.</p>
+     */
+    private final PublicadorDeEventos eventos;
+
     private final org.springframework.transaction.support.TransactionTemplate tx;
 
     public PedidoService(PedidoRepository repo, PedidoItemRepository itemRepo, ProdutoRepository produtos,
@@ -62,7 +71,9 @@ public class PedidoService {
                          InsumoService insumos, FidelidadeService fidelidade,
                          ComplementoService complementos, AuthContext ctx,
                          EstornoDaVendaService devolucao,
+                         PublicadorDeEventos eventos,
                          org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao) {
+        this.eventos = eventos;
         this.fidelidade = fidelidade;
         this.complementos = complementos;
         this.repo = repo;
@@ -332,7 +343,30 @@ public class PedidoService {
         itens.forEach(it -> it.setPedidoId(salvo.id));
         itemRepo.saveAll(itens);
         acumularFidelidade(lojaId, p.clienteId, p.valorTotal, resgate); // CRM / cashback
+        // OUTBOX (A2) — na MESMA transacao da venda, porque `criar` e @Transactional.
+        eventos.dePedido("PedidoRecebido", salvo, java.util.Map.of("canal", "PAINEL"));
         return salvo;
+    }
+
+    /**
+     * O nome do evento no catálogo, para cada status do pedido.
+     *
+     * <p>São nomes do contrato (capítulo 7 do documento 00), e não o nome do enum: o consumidor
+     * assina {@code PedidoConfirmado}, não {@code CONFIRMADO}. Status que o catálogo não nomeia
+     * vira {@code PedidoStatusAlterado} — melhor um evento genérico e honesto do que inventar um
+     * nome que nenhum módulo vai assinar.</p>
+     */
+    static String eventoDeStatus(StatusPedido status) {
+        if (status == null) return "PedidoStatusAlterado";
+        return switch (status) {
+            case CONFIRMADO -> "PedidoConfirmado";
+            case EM_PREPARO -> "PedidoEmPreparo";
+            case PRONTO -> "PedidoPronto";
+            case ENTREGUE -> "PedidoFinalizado";
+            case CANCELADO -> "PedidoCancelado";
+            case RECEBIDO -> "PedidoRecebido";
+            default -> "PedidoStatusAlterado";
+        };
     }
 
     private static String primeiroNaoVazio(String a, String b) {
@@ -469,6 +503,10 @@ public class PedidoService {
         itemRepo.saveAll(itens);
         // Sem telefone de verdade o cliente nunca usaria o cashback aqui: registra a compra, sem saldo.
         fidelidade.registrar(lojaId, salvo.clienteId, p.valorTotal, BigDecimal.ZERO, telReal != null);
+        // OUTBOX (A2) — `criarExterno` e @Transactional, entao o evento entra na mesma transacao.
+        eventos.dePedido("PedidoRecebido", salvo, java.util.Map.of(
+                "canal", canalCodigo == null ? "MARKETPLACE" : canalCodigo,
+                "idExterno", salvo.idExterno == null ? "" : salvo.idExterno));
         return salvo;
     }
 
@@ -536,6 +574,11 @@ public class PedidoService {
         registro.setStatusNovo(StatusPedido.CANCELADO.name());
         registro.setUsuarioId(null); // quem cancelou foi o marketplace, nao um usuario do painel (coluna nula na V2)
         logs.save(registro);
+        // OUTBOX (A2) — @Transactional neste metodo; o evento acompanha o cancelamento.
+        eventos.dePedido("PedidoCancelado", salvo, java.util.Map.of(
+                "fase", anterior == null ? "" : anterior.name(),
+                "solicitante", "MARKETPLACE",
+                "motivo", motivo == null ? "" : motivo));
         return true;
     }
 
@@ -775,6 +818,16 @@ public class PedidoService {
             // depende do estagio em que o pedido estava: ver EstornoDaVendaService.
             if (status == StatusPedido.CANCELADO) devolucao.devolver(gravado, anteriorFinal, vendaJaContabilizada);
             registrarLog(gravado, anteriorFinal, status); // RN07
+            // OUTBOX (A2) — DENTRO do tx.execute, e nao depois dele.
+            //
+            // Este metodo NAO tem @Transactional: a transacao e este bloco. Gravar o evento
+            // depois do `});` seria outra transacao, e a promessa do outbox ("ou os dois
+            // existem, ou nenhum") se perderia justamente no ponto em que o estorno de estoque
+            // acontece.
+            eventos.dePedido(eventoDeStatus(status), gravado, java.util.Map.of(
+                    "statusAnterior", anteriorFinal == null ? "" : anteriorFinal.name(),
+                    "statusNovo", status.name(),
+                    "motivo", motivo == null ? "" : motivo));
             return gravado;
         });
         integracoes.notificarStatus(salvo, status.name()); // sincroniza status com o marketplace (se conectado)
@@ -945,6 +998,17 @@ public class PedidoService {
         boolean jaEstornado = p.status == StatusPedido.CANCELADO;
 
         int devolvidos = jaEstornado ? 0 : devolucao.devolver(p, p.status, vendaJaContabilizada);
+
+        // OUTBOX (A2) — ANTES de apagar, enquanto o pedido ainda existe para ser lido.
+        //
+        // Excluir e diferente de cancelar: o pedido SOME do banco. Para quem consome eventos,
+        // some sem aviso -- e um modulo que ja tivesse baixado estoque por ele nunca saberia que
+        // precisa devolver. Por isso o evento sai aqui, com o estado que o pedido tinha.
+        eventos.dePedido("PedidoCancelado", p, java.util.Map.of(
+                "fase", p.status == null ? "" : p.status.name(),
+                "solicitante", "LOJA",
+                "motivo", "pedido excluido do painel",
+                "exclusao", true));
 
         itemRepo.deleteByLojaIdAndPedidoId(p.lojaId, p.id);
         logs.deleteByLojaIdAndPedidoId(p.lojaId, p.id);

@@ -32,7 +32,11 @@ public final class ChavesDaPlataforma {
      * screenshot, alguém consegue usar?". Se sim, não entra.</p>
      */
     private static final Set<String> VALOR_PODE_SAIR = Set.of(
-            "fiscal.habilitado"   // "true"/"false": liga a emissão de NFC-e. Não dá acesso a nada.
+            "fiscal.habilitado",  // "true"/"false": liga a emissão de NFC-e. Não dá acesso a nada.
+            // "true"/"false": liga a gravação da fila de eventos do ERP (outbox). É a chave que
+            // desliga, SEM DEPLOY, uma gravação que fica no caminho de toda venda. Precisa poder
+            // ser LIDA na tela: quem vai desligar às pressas tem de ver em que estado ela está.
+            "outbox.habilitado"
     );
 
     /** O que a tela recebe no lugar do valor quando ele não pode sair. */

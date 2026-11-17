@@ -58,7 +58,7 @@ class OstatusNaoVoltaAtrasTest {
                 mock(ClienteRepository.class), mock(LogStatusRepository.class), mock(PlanoService.class),
                 integracoes, mock(TaxaEntregaRepository.class), mock(InsumoService.class),
                 mock(FidelidadeService.class), mock(ComplementoService.class), ctx,
-                mock(EstornoDaVendaService.class), GerenciadorDeTransacaoFalso.novo());
+                mock(EstornoDaVendaService.class), mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         ReflectionNotif.injetar(service, notifCliente);
         when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
         // A trava do avanco concorrente: no banco, 1 = este chamador ganhou. O duble precisa

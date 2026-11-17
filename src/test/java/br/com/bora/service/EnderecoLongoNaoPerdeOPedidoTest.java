@@ -61,7 +61,7 @@ class EnderecoLongoNaoPerdeOPedidoTest {
                 mock(LogStatusRepository.class), mock(PlanoService.class), mock(IntegracaoService.class),
                 mock(TaxaEntregaRepository.class), mock(InsumoService.class), mock(FidelidadeService.class),
                 mock(ComplementoService.class), ctx, mock(EstornoDaVendaService.class),
-                GerenciadorDeTransacaoFalso.novo());
+                mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         ReflectionTestUtils.setField(service, "notifCliente", mock(NotificacaoClienteService.class));
 
         when(ctx.lojaId()).thenReturn(1L);

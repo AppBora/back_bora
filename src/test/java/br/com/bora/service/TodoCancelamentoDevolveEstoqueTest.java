@@ -198,7 +198,7 @@ class TodoCancelamentoDevolveEstoqueTest {
                 mock(ProdutoRepository.class), mock(ClienteRepository.class), logs,
                 mock(PlanoService.class), mock(IntegracaoService.class), mock(TaxaEntregaRepository.class),
                 mock(InsumoService.class), mock(FidelidadeService.class), mock(ComplementoService.class),
-                ctx, devolucao, GerenciadorDeTransacaoFalso.novo());
+                ctx, devolucao, mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         ReflectionTestUtils.setField(service, "notifCliente", mock(NotificacaoClienteService.class));
         return service;
     }

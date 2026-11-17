@@ -55,7 +55,7 @@ class AvancoPeloEntregadorTest {
                 mock(ClienteRepository.class), logs, mock(PlanoService.class), integracoes,
                 mock(TaxaEntregaRepository.class), mock(InsumoService.class), mock(FidelidadeService.class),
                 mock(ComplementoService.class), mock(AuthContext.class), mock(EstornoDaVendaService.class),
-                GerenciadorDeTransacaoFalso.novo());
+                mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         ReflectionTestUtils.setField(service, "notifCliente", notifCliente);
     }
 

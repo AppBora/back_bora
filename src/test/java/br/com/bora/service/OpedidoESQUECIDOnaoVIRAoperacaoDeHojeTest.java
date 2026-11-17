@@ -56,6 +56,7 @@ class OpedidoESQUECIDOnaoVIRAoperacaoDeHojeTest {
                 mock(br.com.bora.repository.TaxaEntregaRepository.class),
                 mock(InsumoService.class), mock(FidelidadeService.class),
                 mock(ComplementoService.class), ctx, mock(EstornoDaVendaService.class),
+                mock(PublicadorDeEventos.class),
                 mock(org.springframework.transaction.PlatformTransactionManager.class));
     }
 

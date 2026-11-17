@@ -51,7 +51,7 @@ class TrocarOmotoboyTemRegraTest {
                 mock(ClienteRepository.class), mock(LogStatusRepository.class), mock(PlanoService.class),
                 mock(IntegracaoService.class), mock(TaxaEntregaRepository.class), mock(InsumoService.class),
                 mock(FidelidadeService.class), mock(ComplementoService.class), ctx,
-                mock(EstornoDaVendaService.class), GerenciadorDeTransacaoFalso.novo());
+                mock(EstornoDaVendaService.class), mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         when(repo.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
     }
 

@@ -60,7 +60,7 @@ class PedidoServiceContaDoBalcaoTest {
 
         service = new PedidoService(repo, itemRepo, produtos, clientes, mock(LogStatusRepository.class),
                 mock(PlanoService.class), mock(IntegracaoService.class), taxas, insumos, fidelidade,
-                complementos, ctx, mock(EstornoDaVendaService.class), GerenciadorDeTransacaoFalso.novo());
+                complementos, ctx, mock(EstornoDaVendaService.class), mock(PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo());
         ReflectionTestUtils.setField(service, "notifCliente", mock(NotificacaoClienteService.class));
 
         when(ctx.lojaId()).thenReturn(1L);
