@@ -5,7 +5,9 @@ import br.com.bora.entity.Modulo;
 import br.com.bora.repository.ConfigPlataformaRepository;
 import br.com.bora.repository.LicencaModuloRepository;
 import br.com.bora.repository.LojaRepository;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -115,10 +117,29 @@ public class LicencaModuloService {
      * plataforma, nunca do lojista. Esta classe não checa papel de propósito, para poder ser usada
      * também por rotina interna (provisionamento de cliente novo).</p>
      */
+    @org.springframework.transaction.annotation.Transactional
     public LicencaModulo definir(Long lojaId, Modulo modulo, boolean ativo, Long usuarioId, String motivo) {
         if (modulo.sempreIncluido) {
-            throw new IllegalArgumentException(
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "O módulo " + modulo + " faz parte do principal e não se liga nem se desliga.");
+        }
+        // FISCAL e IA ainda sao governados pelos mecanismos antigos, e gravar linha aqui criaria
+        // uma TERCEIRA opiniao que contradiz as outras duas -- em dinheiro:
+        //   IA     -- o IaService e a cobranca leem loja.modulo_ia. Uma linha ativa faria este
+        //             servico dizer "ligado" enquanto o add-on nao e cobrado; uma linha inativa
+        //             diria "desligado" para uma loja que paga e usa.
+        //   FISCAL -- a emissao segue a chave global. A linha nao liga nem desliga emissao nenhuma.
+        // Enquanto a fonte de verdade for a antiga, recusar e mais honesto que gravar algo que nao
+        // governa nada. Quando o modulo for de fato acoplado, a migracao desta regra vem junto.
+        if (modulo == Modulo.FISCAL || modulo == Modulo.IA) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "O módulo " + modulo + " ainda é governado pelo mecanismo antigo ("
+                            + (modulo == Modulo.IA ? "loja.modulo_ia" : "config_plataforma['fiscal.habilitado']")
+                            + "). Mude por lá — gravar licença aqui criaria duas respostas diferentes "
+                            + "para a mesma pergunta.");
+        }
+        if (lojaId == null || lojas.findById(lojaId).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Loja #" + lojaId + " não existe");
         }
         LicencaModulo l = licencas.findByLojaIdAndModulo(lojaId, modulo).orElseGet(() -> {
             LicencaModulo novo = new LicencaModulo();
@@ -134,6 +155,7 @@ public class LicencaModuloService {
             l.setMotivoDesativacao(null);
         } else {
             l.setDesativadoEm(java.time.OffsetDateTime.now());
+            l.setDesativadoPor(usuarioId);
             l.setMotivoDesativacao(motivo);
         }
         return licencas.save(l);

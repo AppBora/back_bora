@@ -101,7 +101,8 @@ class LojaNaoFicaSemDonoTest {
         UsuariosDaPlataformaService s = servico();
         Usuario dono = usuario(9L, Papel.ADMINISTRADOR_LOJA, 7L, true);
         when(vinculos.findByUsuarioId(9L)).thenReturn(List.of());
-        when(usuarios.donosDaLoja(7L)).thenReturn(List.of(dono)); // só ele
+        // TRAVADA: quem altera conta com SELECT ... FOR UPDATE. Ver donosDaLojaParaAtualizar.
+        when(usuarios.donosDaLojaParaAtualizar(7L)).thenReturn(List.of(dono)); // só ele
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
                 () -> s.definirAtivo(9L, false));
@@ -118,7 +119,7 @@ class LojaNaoFicaSemDonoTest {
         Usuario dono = usuario(9L, Papel.ADMINISTRADOR_LOJA, 7L, true);
         Usuario socio = usuario(10L, Papel.ADMINISTRADOR_LOJA, 7L, true);
         when(vinculos.findByUsuarioId(9L)).thenReturn(List.of());
-        when(usuarios.donosDaLoja(7L)).thenReturn(List.of(dono, socio));
+        when(usuarios.donosDaLojaParaAtualizar(7L)).thenReturn(List.of(dono, socio));
 
         assertDoesNotThrow(() -> s.definirAtivo(9L, false));
 
@@ -139,8 +140,8 @@ class LojaNaoFicaSemDonoTest {
         v.setLojaId(7L);
         Usuario socioDaOutra = conta(11L, Papel.ADMINISTRADOR_LOJA, 99L, true);
         when(vinculos.findByUsuarioId(9L)).thenReturn(List.of(v));
-        when(usuarios.donosDaLoja(99L)).thenReturn(List.of(donoDeRede, socioDaOutra));
-        when(usuarios.donosDaLoja(7L)).thenReturn(List.of(donoDeRede)); // só ele, pelo vínculo
+        when(usuarios.donosDaLojaParaAtualizar(99L)).thenReturn(List.of(donoDeRede, socioDaOutra));
+        when(usuarios.donosDaLojaParaAtualizar(7L)).thenReturn(List.of(donoDeRede)); // só ele, pelo vínculo
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
                 () -> s.definirAtivo(9L, false));
@@ -164,7 +165,7 @@ class LojaNaoFicaSemDonoTest {
         UsuariosDaPlataformaService s = servico();
         Usuario dono = usuario(9L, Papel.ADMINISTRADOR_LOJA, 7L, true);
         when(vinculos.findByUsuarioId(9L)).thenReturn(List.of());
-        when(usuarios.donosDaLoja(7L)).thenReturn(List.of(dono));
+        when(usuarios.donosDaLojaParaAtualizar(7L)).thenReturn(List.of(dono));
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class, () -> s.excluir(9L));
 
@@ -341,6 +342,44 @@ class LojaNaoFicaSemDonoTest {
         @SuppressWarnings("unchecked")
         List<String> impedimentos = (List<String>) p.get("impedimentos");
         assertTrue(impedimentos.get(0).contains("último administrador ativo"), impedimentos.get(0));
+    }
+
+    /**
+     * A PRÉVIA NÃO PODE TRAVAR LINHA, pelo mesmo motivo do caso dos administradores de
+     * plataforma: ela roda fora de transação e só informa. Travar aqui repetiria o defeito de
+     * 17/11 ("Query requires transaction be in progress"), agora na outra guarda.
+     */
+    @Test
+    void previaNaoUsaConsultaComTrava() {
+        UsuariosDaPlataformaService s = servico();
+        Usuario dono = usuario(9L, Papel.ADMINISTRADOR_LOJA, 7L, true);
+        when(vinculos.findByUsuarioId(9L)).thenReturn(List.of());
+        when(usuarios.donosDaLoja(7L)).thenReturn(List.of(dono));
+
+        Map<String, Object> p = s.previaDaExclusao(9L);
+
+        assertEquals(false, p.get("podeExcluir"));
+        verify(usuarios).donosDaLoja(7L);
+        verify(usuarios, never()).donosDaLojaParaAtualizar(any());
+    }
+
+    /**
+     * E o caminho que ALTERA tem de travar. Sem o lock, duas desativações simultâneas leem "o
+     * outro ainda está ativo" e passam as duas -- reproduzido em 17/11, 1 em 6 rodadas deixou uma
+     * loja com ZERO administradores ativos.
+     */
+    @Test
+    void desativarUsaConsultaComTrava() {
+        UsuariosDaPlataformaService s = servico();
+        Usuario dono = usuario(9L, Papel.ADMINISTRADOR_LOJA, 7L, true);
+        Usuario socio = conta(10L, Papel.ADMINISTRADOR_LOJA, 7L, true);
+        when(vinculos.findByUsuarioId(9L)).thenReturn(List.of());
+        when(usuarios.donosDaLojaParaAtualizar(7L)).thenReturn(List.of(dono, socio));
+
+        s.definirAtivo(9L, false);
+
+        verify(usuarios).donosDaLojaParaAtualizar(7L);
+        verify(usuarios, never()).donosDaLoja(any());
     }
 
     @Test

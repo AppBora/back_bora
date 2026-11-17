@@ -47,6 +47,10 @@ public class LicencaModulo {
     @Column(name = "desativado_em")
     private OffsetDateTime desativadoEm;
 
+    /** Quem desligou. O motivo sozinho não diz quem decidiu, e isso é parte da conversa com o cliente. */
+    @Column(name = "desativado_por")
+    private Long desativadoPor;
+
     /**
      * Por que foi desligado.
      *

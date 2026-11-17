@@ -168,7 +168,17 @@ public class PlataformaController {
     @Transactional
     public Map<String, Object> ativarAdmin(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         ctx.requireAdminBora();
-        boolean ativo = body != null && Boolean.parseBoolean(String.valueOf(body.get("ativo")));
+        // A chave e obrigatoria e tem de ser booleana. `Boolean.parseBoolean(String.valueOf(null))`
+        // devolve false para ausente, nulo e qualquer texto -- entao um corpo `{}` ou um
+        // `{"ativa": true}` escrito errado DESATIVAVA o administrador e respondia 200 como se
+        // tivesse feito o que foi pedido. Interpretar ausencia como a acao destrutiva e o pior
+        // padrao possivel; 400 devolve o erro a quem pode corrigi-lo.
+        Object valorAtivo = body == null ? null : body.get("ativo");
+        if (!(valorAtivo instanceof Boolean)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Informe \"ativo\": true ou false no corpo da requisição.");
+        }
+        boolean ativo = (Boolean) valorAtivo;
         // Trava a lista inteira (FOR UPDATE) ANTES de decidir: a conta que sobra tem de ser contada
         // com o estado ja congelado, senao duas desativacoes simultaneas zeram a plataforma.
         List<Usuario> daPlataforma = usuarios.findByPapelParaAtualizar(Papel.ADMINISTRADOR_BORA);

@@ -62,10 +62,24 @@ public class UsuariosPlataformaController {
                 numero(b.get("lojaId")));
     }
 
-    /** Liga/desliga. Vale no request seguinte — o filtro reconsulta {@code ativo} a cada requisição. */
+    /**
+     * Liga/desliga. Vale no request seguinte — o filtro reconsulta {@code ativo} a cada requisição.
+     *
+     * <p><b>A chave {@code ativo} é obrigatória e tem de ser booleana.</b> A primeira versão fazia
+     * {@code Boolean.parseBoolean(String.valueOf(body.get("ativo")))}, que devolve {@code false}
+     * para ausente, nulo e qualquer texto — então um PUT sem corpo, ou com {@code {"ativa": true}}
+     * escrito errado, <b>desativava a conta</b> e respondia 200 como se tivesse feito o que foi
+     * pedido. Interpretar ausência como a ação destrutiva é o pior padrão possível: falhar com 400
+     * devolve o erro a quem pode corrigi-lo.</p>
+     */
     @PutMapping("/{id}/ativo")
-    public Map<String, Object> ativo(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        boolean ativo = body != null && Boolean.parseBoolean(String.valueOf(body.get("ativo")));
+    public Map<String, Object> ativo(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body) {
+        Object valor = body == null ? null : body.get("ativo");
+        if (!(valor instanceof Boolean ativo)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Informe \"ativo\": true ou false no corpo da requisição.");
+        }
         return service.definirAtivo(id, ativo);
     }
 

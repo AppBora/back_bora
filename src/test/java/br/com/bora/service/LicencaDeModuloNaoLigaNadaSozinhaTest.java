@@ -8,6 +8,8 @@ import br.com.bora.repository.ConfigPlataformaRepository;
 import br.com.bora.repository.LicencaModuloRepository;
 import br.com.bora.repository.LojaRepository;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 import java.util.Optional;
@@ -71,8 +73,37 @@ class LicencaDeModuloNaoLigaNadaSozinhaTest {
 
     @Test
     void naoDaParaDesligarOqueFazParteDoPrincipal() {
-        assertThrows(IllegalArgumentException.class,
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
                 () -> servico.definir(7L, Modulo.PEDIDOS, false, 1L, "teste"));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode(),
+                "tem de virar 400 na API, e n\u00e3o 500 -- IllegalArgumentException virava 500");
+        verify(licencas, never()).save(any());
+    }
+
+    /**
+     * FISCAL e IA ainda s\u00e3o governados pelos mecanismos antigos. Gravar linha aqui criaria uma
+     * TERCEIRA opini\u00e3o -- e em dinheiro: o {@code IaService} e a cobran\u00e7a leem
+     * {@code loja.modulo_ia}, ent\u00e3o uma licen\u00e7a ativa diria "ligado" para um add-on que ningu\u00e9m
+     * est\u00e1 cobrando.
+     */
+    @Test
+    void naoGravaLicencaDeModuloQueOmecanismoAntigoAindaGoverna() {
+        for (Modulo m : new Modulo[]{Modulo.FISCAL, Modulo.IA}) {
+            ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                    () -> servico.definir(7L, m, true, 1L, null), m.name());
+            assertEquals(HttpStatus.CONFLICT, e.getStatusCode(), m.name());
+        }
+        verify(licencas, never()).save(any());
+        verify(lojas, never()).findById(any());
+    }
+
+    @Test
+    void lojaQueNaoExisteNaoRecebeLicenca() {
+        when(lojas.findById(777L)).thenReturn(Optional.empty());
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> servico.definir(777L, Modulo.ESTOQUE, true, 1L, null));
+        assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode(),
+                "sem isto vira 500 por viola\u00e7\u00e3o de chave estrangeira");
         verify(licencas, never()).save(any());
     }
 
@@ -170,6 +201,7 @@ class LicencaDeModuloNaoLigaNadaSozinhaTest {
     void ligarGravaQuemLigouEquando() {
         when(licencas.findByLojaIdAndModulo(7L, Modulo.ESTOQUE)).thenReturn(Optional.empty());
         when(licencas.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lojas.findById(7L)).thenReturn(Optional.of(new Loja()));
 
         LicencaModulo l = servico.definir(7L, Modulo.ESTOQUE, true, 42L, null);
 
@@ -191,12 +223,14 @@ class LicencaDeModuloNaoLigaNadaSozinhaTest {
         existente.setAtivo(true);
         when(licencas.findByLojaIdAndModulo(7L, Modulo.ESTOQUE)).thenReturn(Optional.of(existente));
         when(licencas.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lojas.findById(7L)).thenReturn(Optional.of(new Loja()));
 
         LicencaModulo l = servico.definir(7L, Modulo.ESTOQUE, false, 42L, "cliente cancelou");
 
         assertFalse(l.getAtivo());
         assertEquals("cliente cancelou", l.getMotivoDesativacao());
         assertNotNull(l.getDesativadoEm());
+        assertEquals(42L, l.getDesativadoPor(), "o motivo sem o quem n\u00e3o fecha a conversa");
     }
 
     // ------------------------------------------------- enum x banco
@@ -217,14 +251,29 @@ class LicencaDeModuloNaoLigaNadaSozinhaTest {
         assertTrue(java.nio.file.Files.exists(sql), "a V74 mudou de nome? " + sql);
         String texto = java.nio.file.Files.readString(sql, java.nio.charset.StandardCharsets.UTF_8);
 
-        int i = texto.indexOf("modulo             TEXT        NOT NULL CHECK (modulo IN");
-        assertTrue(i > 0, "nao achei o CHECK da coluna modulo na V74");
-        String lista = texto.substring(i, texto.indexOf(')', texto.indexOf('(', i + 40)));
+        // Por REGEX, e n\u00e3o por espa\u00e7amento exato: a primeira vers\u00e3o casava a linha inteira
+        // ("modulo             TEXT        NOT NULL CHECK...") e qualquer reformata\u00e7\u00e3o da V74 a
+        // quebrava -- um teste que quebra por indenta\u00e7\u00e3o ensina a desligar o teste.
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("modulo\\s+TEXT\\s+NOT NULL\\s+CHECK\\s*\\(\\s*modulo\\s+IN\\s*\\(([^)]*)\\)")
+                .matcher(texto);
+        assertTrue(m.find(), "nao achei o CHECK da coluna modulo na V74");
+        String lista = m.group(1);
 
-        for (Modulo m : Modulo.values()) {
-            assertTrue(lista.contains("'" + m.name() + "'"),
-                    "o modulo " + m + " existe no enum e NAO esta no CHECK da V74 -- ligar ele "
+        for (Modulo mod : Modulo.values()) {
+            assertTrue(lista.contains("'" + mod.name() + "'"),
+                    "o modulo " + mod + " existe no enum e NAO esta no CHECK da V74 -- ligar ele "
                             + "para um cliente estouraria violacao de constraint em producao");
+        }
+        // O OUTRO SENTIDO, que faltava: valor no banco que o enum n\u00e3o conhece faz o
+        // Enumerated(STRING) estourar IllegalArgumentException ao LER a linha -- e a\u00ed a tela
+        // quebra na leitura, n\u00e3o na escrita.
+        for (String noBanco : lista.replace("'", "").split(",")) {
+            String v = noBanco.trim();
+            if (v.isEmpty()) continue;
+            assertDoesNotThrow(() -> Modulo.valueOf(v),
+                    "o CHECK da V74 aceita \"" + v + "\", que o enum Modulo n\u00e3o tem -- ler essa "
+                            + "linha estouraria na convers\u00e3o");
         }
     }
 

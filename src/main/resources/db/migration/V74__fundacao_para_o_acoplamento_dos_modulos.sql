@@ -16,6 +16,18 @@
 --   schema "public" .................... versao 73, 73 migracoes validadas
 --   os oito nomes abaixo ............... nenhum existe em migracao nenhuma
 --
+-- LOCK_TIMEOUT, E POR QUE ELE ESTA AQUI
+-- Cada REFERENCES para uma tabela que ja existe cria trigger de FK NELA. Isso pega
+-- ShareRowExclusiveLock em `loja`, `usuario` e `empresa` durante a transacao -- bloqueia INSERT,
+-- UPDATE e DELETE nessas tabelas (SELECT nao). Com as tabelas novas vazias isso e questao de
+-- milissegundos, mas se houver uma transacao longa aberta numa delas, a migracao ESPERA e todas as
+-- gravacoes seguintes ficam na fila atras dela -- com 23 lojas vendendo.
+--
+-- Com o teto abaixo, o pior caso vira "a migracao falha em 5 segundos, limpa, e se repete depois",
+-- em vez de "o painel das 23 lojas trava por tempo indeterminado". SET LOCAL vale so nesta
+-- transacao, entao nao vaza para o resto da aplicacao.
+SET LOCAL lock_timeout = '5s';
+
 -- POR QUE AS TABELAS NASCEM VAZIAS
 -- Nenhuma linha e semeada aqui, de proposito. `licenca_modulo` sem linha quer dizer "modulo
 -- desligado", que e o estado correto para as 23 lojas hoje; quem traduz os dois mecanismos que JA
@@ -37,8 +49,13 @@ CREATE TABLE tenant (
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- CUIDADO COM O NOME: no codigo que ja existe, "tenant" sempre quis dizer LOJA -- e o que o token
+-- carrega e o que o JwtAuthFilter isola. Esta tabela e outra coisa: o nivel ACIMA de empresa. O
+-- isolamento multi-tenant continua sendo por loja_id/empresa_id (decisao D-02 da modelagem); nada
+-- transacional ganha tenant_id.
 COMMENT ON TABLE tenant IS
-  'Grupo economico: o nivel acima de empresa (CNPJ). Uma rede com varias empresas tem um tenant.';
+  'Grupo economico: o nivel ACIMA de empresa (CNPJ). NAO confundir com o "tenant" do token, que no '
+  'codigo existente quer dizer loja. O isolamento continua por loja_id/empresa_id.';
 
 -- ---------------------------------------------------------------------------------------------
 -- 2. licenca_modulo -- que modulo esta ligado em que loja
@@ -61,13 +78,24 @@ CREATE TABLE licenca_modulo (
                       'FINANCEIRO','CONTABIL','GESTAO','LOGISTICA','IA')),
   ativo              BOOLEAN     NOT NULL DEFAULT false,
   ativado_em         TIMESTAMPTZ,
-  ativado_por        BIGINT      REFERENCES usuario (id),
+  -- ON DELETE SET NULL, e isto NAO e detalhe: o painel da plataforma APAGA usuario de verdade
+  -- (DELETE /admin-bora/usuarios/{id}, no ar desde 17/11). Sem o ON DELETE, no dia em que alguem
+  -- ligasse um modulo e depois a conta dele fosse excluida, a exclusao estouraria violacao de FK e
+  -- -- por ser Postgres -- derrubaria a transacao inteira, devolvendo 500 sem mensagem.
+  -- A conta mais provavel de ser apagada e justamente a de quem opera a plataforma, que e quem liga
+  -- modulo. Perder o "quem ligou" e aceitavel; travar a exclusao nao e.
+  ativado_por        BIGINT      REFERENCES usuario (id) ON DELETE SET NULL,
   desativado_em      TIMESTAMPTZ,
+  -- Mesma razao do ativado_por. E existe porque o motivo sozinho nao basta: "falta de pagamento"
+  -- volta sozinho quando o cliente paga, "cliente cancelou" nao -- e saber QUEM decidiu e parte da
+  -- conversa com o cliente depois.
+  desativado_por     BIGINT      REFERENCES usuario (id) ON DELETE SET NULL,
   motivo_desativacao TEXT,
   UNIQUE (loja_id, modulo)
 );
 
-CREATE INDEX ix_licenca_modulo_loja ON licenca_modulo (loja_id);
+-- NAO ha indice separado por loja_id: o UNIQUE (loja_id, modulo) acima ja atende qualquer busca
+-- por loja_id, porque ela e o PREFIXO do indice. Um indice a mais so custaria escrita.
 
 COMMENT ON TABLE licenca_modulo IS
   'Modulos do ERP liberados por loja. SEM LINHA = DESLIGADO. Generaliza config_plataforma'
@@ -91,6 +119,13 @@ CREATE TABLE deposito (
 );
 
 CREATE INDEX ix_deposito_loja ON deposito (loja_id);
+
+-- UM padrao por loja, e nome unico por loja. Sem estes dois, a tabela aceitava dois depositos
+-- `eh_padrao = true` na mesma loja (medido: aceitou) -- e ai "onde entra a mercadoria quando
+-- ninguem escolhe" passa a depender da ordem da consulta. Entram agora porque a tabela esta vazia;
+-- depois do primeiro dado, cada um destes vira uma limpeza antes da constraint.
+CREATE UNIQUE INDEX ux_deposito_padrao ON deposito (loja_id) WHERE eh_padrao AND ativo;
+CREATE UNIQUE INDEX ux_deposito_nome   ON deposito (loja_id, nome);
 
 COMMENT ON TABLE deposito IS
   'Local fisico do estoque dentro da loja. Sem linha, o modulo de Estoque usa um deposito implicito.';
@@ -168,7 +203,11 @@ CREATE TABLE evento_outbox (
 
 -- O indice PARCIAL e o que faz o publicador varrer so o que falta publicar. Sem o `WHERE`, ele
 -- cresceria junto com o historico inteiro da fila e a varredura ficaria mais lenta a cada mes.
-CREATE INDEX ix_outbox_pendente ON evento_outbox (publicado_em) WHERE publicado_em IS NULL;
+-- O indice e por `id`, nao por `publicado_em`: dentro do filtro parcial a coluna `publicado_em` e
+-- sempre NULL, entao indexa-la nao ordena nada. Por `id` o publicador le a fila em ordem de
+-- chegada (`WHERE publicado_em IS NULL ORDER BY id LIMIT n`) sem passo de ordenacao -- e evento
+-- fora de ordem e um dos casos que mais dao trabalho do lado de quem consome.
+CREATE INDEX ix_outbox_pendente ON evento_outbox (id) WHERE publicado_em IS NULL;
 CREATE INDEX ix_outbox_agregado ON evento_outbox (agregado_tipo, agregado_id);
 
 COMMENT ON TABLE evento_outbox IS
@@ -207,7 +246,10 @@ CREATE TABLE auditoria (
   id          BIGSERIAL PRIMARY KEY,
   empresa_id  BIGINT,
   loja_id     BIGINT,
-  usuario_id  BIGINT      REFERENCES usuario (id),
+  -- ON DELETE SET NULL pela mesma razao do licenca_modulo.ativado_por: a trilha NAO pode impedir
+  -- a exclusao de um usuario, e tem de sobreviver a ela. Null aqui significa "a conta que fez isto
+  -- nao existe mais", que e honesto; um id pendurado apontando para nada so pareceria resolvivel.
+  usuario_id  BIGINT      REFERENCES usuario (id) ON DELETE SET NULL,
   entidade    TEXT        NOT NULL,
   entidade_id BIGINT      NOT NULL,
   acao        TEXT        NOT NULL,

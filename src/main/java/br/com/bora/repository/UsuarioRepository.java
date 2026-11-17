@@ -43,6 +43,29 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
     List<Usuario> donosDaLoja(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
 
     /**
+     * Os mesmos donos, com {@code SELECT ... FOR UPDATE} — para quem vai DECIDIR em cima da
+     * contagem, não só exibi-la.
+     *
+     * <p><b>Defeito reproduzido em 17/11/2026:</b> {@code impedirDeixarLojaSemDono} contava os donos
+     * sem lock. Disparando duas desativações em paralelo numa loja com dois administradores, em 6
+     * rodadas uma passou os dois — e a loja ficou com <b>zero</b> administradores ativos. É o dano
+     * que a própria trava existe para impedir: sem dono ativo, {@code donosDaLoja} não acha e-mail,
+     * e a cobrança do Asaas sai sem destinatário.</p>
+     *
+     * <p>O lock tem de vir ANTES de contar, e a transação tem de segurar as linhas até o commit —
+     * é a mesma receita do {@link #findByPapelParaAtualizar}, que já protegia os administradores da
+     * plataforma.</p>
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("""
+            select u from Usuario u
+            where u.papel = br.com.bora.entity.Papel.ADMINISTRADOR_LOJA and u.ativo = true
+              and (u.lojaId = :lojaId
+                   or exists (select 1 from UsuarioLoja v where v.usuarioId = u.id and v.lojaId = :lojaId))
+            order by u.id""")
+    List<Usuario> donosDaLojaParaAtualizar(@org.springframework.data.repository.query.Param("lojaId") Long lojaId);
+
+    /**
      * Todos os usuários que ENXERGAM esta loja — pela coluna {@code loja_id} ou por vínculo.
      *
      * <p>Mesmo defeito que o {@link #donosDaLoja} descreve, no lugar seguinte: a tela de Usuários e o

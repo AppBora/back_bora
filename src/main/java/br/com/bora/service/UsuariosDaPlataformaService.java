@@ -66,7 +66,17 @@ import java.util.stream.Collectors;
  *       auditoria, e é por isso que a prévia da exclusão conta quantas linhas perdem o nome.</b></li>
  *   <li>{@code ia_analise_rede.usuario_id} — sem FK; sobra linha órfã no teto de custo diário da IA,
  *       sem efeito prático.</li>
+ *   <li>{@code licenca_modulo.ativado_por} e {@code .desativado_por}, e {@code auditoria.usuario_id}
+ *       (V74) — FK com <b>{@code ON DELETE SET NULL}</b>: não impedem a exclusão, e a linha
+ *       sobrevive sem o nome de quem agiu.</li>
  * </ul>
+ *
+ * <p><b>Esta lista é manutenção obrigatória, e já falhou uma vez.</b> Ela foi escrita medindo o
+ * schema de manhã; à tarde a V74 criou duas FKs novas para {@code usuario} e a lista ficou errada
+ * no mesmo dia. Com elas em {@code NO ACTION}, como nasceram, o teste reproduziu: a prévia dizia
+ * {@code podeExcluir: true} e o DELETE devolvia <b>500</b> por violação de integridade. <b>Toda
+ * coluna nova que apontar para {@code usuario} entra aqui e decide o seu {@code ON DELETE} na
+ * mesma migração em que nasce.</b></p>
  *
  * <p><b>Desativar é o caminho normal:</b> é reversível, mantém o histórico legível e corta o acesso
  * no request seguinte, porque o {@code JwtAuthFilter} reconsulta {@code ativo} a cada requisição —
@@ -193,6 +203,13 @@ public class UsuariosDaPlataformaService {
         if (nome == null || nome.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Informe o nome");
         }
+        // Os tetos sao os das colunas (usuario.nome varchar(120), usuario.email varchar(180)).
+        // Sem esta checagem o insert estoura la embaixo e vira 500 -- e o corpo do 500 carrega o
+        // SQL inteiro para quem chamou. 400 com a razao e a resposta certa para dado longo demais.
+        if (nome.trim().length() > 120) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Nome longo demais: " + nome.trim().length() + " caracteres, o limite é 120.");
+        }
         if (senha == null || senha.length() < 8) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "A senha precisa ter ao menos 8 caracteres");
@@ -201,6 +218,10 @@ public class UsuariosDaPlataformaService {
         if (!EMAIL_ACEITAVEL.matcher(limpo).matches()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "E-mail inválido: \"" + (email == null ? "" : email.trim()) + "\"");
+        }
+        if (limpo.length() > 180) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "E-mail longo demais: " + limpo.length() + " caracteres, o limite é 180.");
         }
         if (usuarios.findByEmail(limpo).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -313,9 +334,10 @@ public class UsuariosDaPlataformaService {
         r.put("linhasDeHistoricoQuePerdemONome", mexeuEmPedidos);
         List<String> impedimentos = new ArrayList<>();
         try { impedirAlvoProprio(alvo, "excluir"); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
-        // SemTravar: a previa roda fora de transacao. Ver o javadoc do metodo.
+        // SemTravar / travando=false: a previa roda fora de transacao e nao decide nada, entao nao
+        // pode segurar linha do banco. Ver o javadoc dos metodos.
         try { impedirUltimoAdminDaPlataformaSemTravar(alvo, "excluir"); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
-        try { impedirDeixarLojaSemDono(alvo, "Excluir"); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
+        try { impedirDeixarLojaSemDono(alvo, "Excluir", false); } catch (ResponseStatusException e) { impedimentos.add(e.getReason()); }
         r.put("impedimentos", impedimentos);
         r.put("podeExcluir", impedimentos.isEmpty());
         r.put("recomendacao", mexeuEmPedidos > 0
@@ -445,6 +467,14 @@ public class UsuariosDaPlataformaService {
      * tem uma conta só, ligada às outras lojas por {@code usuario_loja}.</p>
      */
     private void impedirDeixarLojaSemDono(Usuario alvo, String acao) {
+        impedirDeixarLojaSemDono(alvo, acao, true);
+    }
+
+    /**
+     * @param travando {@code true} para quem vai ALTERAR (usa {@code SELECT ... FOR UPDATE});
+     *                 {@code false} para a prévia, que só informa e roda fora de transação.
+     */
+    private void impedirDeixarLojaSemDono(Usuario alvo, String acao, boolean travando) {
         if (alvo.getPapel() != Papel.ADMINISTRADOR_LOJA) return;
         if (!Boolean.TRUE.equals(alvo.getAtivo())) return; // já inativo: a loja já está sem ele
         Set<Long> lojasDele = new LinkedHashSet<>();
@@ -454,7 +484,12 @@ public class UsuariosDaPlataformaService {
         Map<Long, String> nomes = nomesDasLojas();
         List<String> ficariamSemDono = new ArrayList<>();
         for (Long l : lojasDele) {
-            List<Usuario> donos = usuarios.donosDaLoja(l);
+            // Com lock quando a chamada vai decidir: contar sem travar deixa duas desativações
+            // simultâneas lerem "o outro ainda está ativo" e passarem as duas. Reproduzido em
+            // 17/11/2026 — 1 em 6 rodadas zerou os administradores de uma loja.
+            List<Usuario> donos = travando
+                    ? usuarios.donosDaLojaParaAtualizar(l)
+                    : usuarios.donosDaLoja(l);
             boolean soEle = donos.size() == 1 && donos.get(0).getId().equals(alvo.getId());
             if (soEle) ficariamSemDono.add(nomes.getOrDefault(l, "loja #" + l) + " (#" + l + ")");
         }

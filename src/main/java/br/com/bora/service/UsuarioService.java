@@ -71,12 +71,50 @@ public class UsuarioService {
         return view(u);
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public UsuarioView atualizarPapel(Long id, String papel) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         impedirAlvoProprio(id, "Você não pode alterar o seu próprio papel");
         Usuario u = buscar(id);
-        u.setPapel(parsePapel(papel));
+        Papel novo = parsePapel(papel);
+        // Rebaixar o último administrador deixa a loja sem ninguém que possa administrá-la --
+        // inclusive sem ninguém que consiga desfazer o rebaixamento. Ver impedirDeixarLojaSemDono.
+        if (u.getPapel() == Papel.ADMINISTRADOR_LOJA && novo != Papel.ADMINISTRADOR_LOJA) {
+            impedirDeixarLojaSemDono(u, "Rebaixar");
+        }
+        u.setPapel(novo);
         return view(repo.save(u));
+    }
+
+    /**
+     * A loja não pode ficar sem {@code ADMINISTRADOR_LOJA} ativo.
+     *
+     * <h2>Isto estava faltando, e o efeito é de ida só</h2>
+     * <p>Até 17/11/2026 esta tela deixava o administrador desativar ou rebaixar o último
+     * administrador da própria loja. O resultado é uma loja que <b>ninguém consegue administrar</b>:
+     * não há quem crie usuário, quem redefina senha, nem quem desfaça o que acabou de ser feito.
+     * Só o {@code ADMINISTRADOR_BORA} tira a loja desse estado.</p>
+     *
+     * <p>E tem efeito em dinheiro: {@code donosDaLoja} é a consulta que informa o e-mail do lojista
+     * na cobrança do Asaas, e ela filtra {@code ativo = true}. Loja sem dono ativo gera cobrança
+     * <b>sem e-mail</b>, e o lojista não recebe a fatura.</p>
+     *
+     * <p>A contagem usa {@code SELECT ... FOR UPDATE}: sem o lock, dois administradores se
+     * desativando ao mesmo tempo leem "o outro ainda está ativo" e passam os dois. Foi reproduzido
+     * no serviço da plataforma, que tinha o mesmo buraco.</p>
+     */
+    private void impedirDeixarLojaSemDono(Usuario alvo, String acao) {
+        if (alvo.getPapel() != Papel.ADMINISTRADOR_LOJA) return;
+        if (!Boolean.TRUE.equals(alvo.getAtivo())) return; // já inativo: a loja já está sem ele
+        Long lojaId = ctx.lojaId();
+        List<Usuario> donos = repo.donosDaLojaParaAtualizar(lojaId);
+        boolean soEle = donos.size() == 1 && donos.get(0).getId().equals(alvo.getId());
+        if (soEle) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    acao + " esta conta deixaria a loja sem nenhum administrador — e ninguém "
+                            + "conseguiria desfazer isso daqui. Promova outra pessoa a Administrador "
+                            + "da loja primeiro.");
+        }
     }
 
     /** O que ainda nao foi atendido na loja de quem esta olhando. So o admin: e ele quem resolve. */
@@ -111,10 +149,20 @@ public class UsuarioService {
         return v;
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public UsuarioView definirAtivo(Long id, boolean ativo) {
         ctx.requirePapel("ADMINISTRADOR_LOJA");
         impedirAlvoProprio(id, "Você não pode desativar a si mesmo");
         Usuario u = buscar(id);
+        if (!ativo) {
+            impedirDeixarLojaSemDono(u, "Desativar");
+        } else if (!Boolean.TRUE.equals(u.getAtivo())) {
+            // O TETO DO PLANO VALIA SO NA CRIACAO. Com a loja em 15 ativos, reativar um inativo
+            // passava para 16 e respondia 200 -- o limite comercial era burlavel sem querer, so
+            // desativando e reativando. Reproduzido em 17/11/2026. Reativar e uma ENTRADA no
+            // teto tanto quanto criar.
+            planos.checarLimiteUsuarios(ctx.lojaId()); // RN09
+        }
         u.setAtivo(ativo);
         return view(repo.save(u));
     }
