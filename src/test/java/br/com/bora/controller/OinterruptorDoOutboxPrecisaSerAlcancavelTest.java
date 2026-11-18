@@ -46,6 +46,24 @@ import static org.mockito.Mockito.*;
  */
 class OinterruptorDoOutboxPrecisaSerAlcancavelTest {
 
+    /**
+     * Gerente de transacao de verdade, porem SEM transacao -- a semantica que o unitario quer.
+     *
+     * <p>Um mock cru nao serve: o {@code TransactionTemplate} chama {@code getTransaction} e
+     * {@code commit}, e um status nulo estouraria. Aqui tambem fica explicito o LIMITE deste
+     * arquivo: sem proxy transacional de verdade, ele nao ve o defeito de rollback-only que o
+     * {@code AchaveDoOutboxNAOpodeDERRUBARaVENDAIT} mede.</p>
+     */
+    private static final org.springframework.transaction.PlatformTransactionManager SEM_TRANSACAO =
+            new org.springframework.transaction.PlatformTransactionManager() {
+                @Override public org.springframework.transaction.TransactionStatus getTransaction(
+                        org.springframework.transaction.TransactionDefinition d) {
+                    return new org.springframework.transaction.support.SimpleTransactionStatus(false);
+                }
+                @Override public void commit(org.springframework.transaction.TransactionStatus s) { }
+                @Override public void rollback(org.springframework.transaction.TransactionStatus s) { }
+            };
+
     private static final long EU = 99L;
 
     private Map<String, ConfigPlataforma> tabela;
@@ -67,7 +85,7 @@ class OinterruptorDoOutboxPrecisaSerAlcancavelTest {
         });
 
         jdbc = mock(JdbcTemplate.class);
-        publicador = new PublicadorDeEventos(jdbc, configs, new ObjectMapper());
+        publicador = new PublicadorDeEventos(jdbc, configs, new ObjectMapper(), SEM_TRANSACAO);
 
         AuthContext ctx = mock(AuthContext.class);
         when(ctx.atual()).thenReturn(new BoraPrincipal(EU, null, "ADMINISTRADOR_BORA", "adm@borahapp.com.br"));

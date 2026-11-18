@@ -69,6 +69,14 @@ public class PublicadorDeEventos {
     private final br.com.bora.repository.ConfigPlataformaRepository configs;
     private final ObjectMapper json;
 
+    /**
+     * Para ler a chave com a transacao da venda SUSPENSA.
+     *
+     * <p>Ver o javadoc de {@link #ligado()}: sem isto, uma excecao ao ler a chave marca a transacao
+     * da venda como rollback-only, e nenhum {@code catch} desfaz essa marca.</p>
+     */
+    private final org.springframework.transaction.support.TransactionTemplate foraDaTransacaoDaVenda;
+
     private volatile boolean ligado = false;
     private volatile long lidaEm = 0L;
 
@@ -103,27 +111,76 @@ public class PublicadorDeEventos {
 
     public PublicadorDeEventos(JdbcTemplate jdbc,
                                br.com.bora.repository.ConfigPlataformaRepository configs,
-                               ObjectMapper json) {
+                               ObjectMapper json,
+                               org.springframework.transaction.PlatformTransactionManager transacoes) {
         this.jdbc = jdbc;
         this.configs = configs;
         this.json = json;
+        this.foraDaTransacaoDaVenda =
+                new org.springframework.transaction.support.TransactionTemplate(transacoes);
+        this.foraDaTransacaoDaVenda.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
     }
 
-    /** A chave global, com cache curto. Ausente = desligado. */
+    /**
+     * A chave global, com cache curto. Ausente = desligado.
+     *
+     * <h3>POR QUE A LEITURA ACONTECE COM A TRANSACAO DA VENDA SUSPENSA</h3>
+     *
+     * <p>Aqui havia um {@code try/catch} e um comentario meu dizendo "nao achar a chave nao pode
+     * derrubar venda; na duvida, desligado". <b>A frase era falsa, e foi medida como falsa em
+     * 18/11/2026</b> (ver {@code AchaveDoOutboxNAOpodeDERRUBARaVENDAIT}).</p>
+     *
+     * <p>O {@code configs.findById} passa pelo proxy transacional do Spring Data. Quando a excecao
+     * sai de dentro dele, o Spring marca a transacao CORRENTE como rollback-only <b>antes</b> de o
+     * meu {@code catch} existir. Engolir a excecao depois nao desfaz a marca: a venda rodava
+     * inteira e morria no commit com {@code UnexpectedRollbackException} -- um erro que nao aponta
+     * para a chave de cifragem em lugar nenhum.</p>
+     *
+     * <p><b>Quando a leitura estoura de verdade:</b> o valor de {@code config_plataforma.valor} e
+     * cifrado em repouso, e {@code SegredoGuardado.convertToEntityAttribute} lanca em dois casos
+     * reais -- {@code BORA_SEGREDO_COLUNAS} ausente, e a chave TROCADA (o GCM autentica o
+     * conteudo). Ou seja: perder a chave de cifragem derrubava TODA VENDA enquanto o outbox
+     * estivesse ligado, uma vez a cada {@value #VALIDADE_DA_CHAVE_MS} ms.</p>
+     *
+     * <p>Com {@code PROPAGATION_NOT_SUPPORTED} a transacao da venda e suspensa durante a leitura.
+     * A excecao, se vier, pertence a uma transacao propria e descartavel; a da venda e retomada
+     * intacta. E so entao o {@code catch} faz o que o comentario sempre prometeu.</p>
+     *
+     * <p><b>Por que o teste unitario nao via:</b> ele usa mock de repositorio, e num mock a excecao
+     * nasce fora de qualquer proxy -- ali o {@code catch} realmente resolvia. Esta e a classe de
+     * defeito que so um banco de verdade mostra.</p>
+     *
+     * <p>Custo: uma suspensao e retomada de transacao por releitura, ou seja no maximo uma a cada 30
+     * segundos por processo. Nao entra no caminho de toda venda.</p>
+     */
     public boolean ligado() {
         long agora = System.currentTimeMillis();
         if (agora - lidaEm > VALIDADE_DA_CHAVE_MS) {
-            try {
-                ligado = configs.findById(CHAVE_LIGA)
-                        .map(c -> Boolean.parseBoolean(c.getValor()))
-                        .orElse(false);
-            } catch (RuntimeException e) {
-                // Não achar a chave não pode derrubar venda. Na dúvida, desligado.
-                ligado = false;
-            }
+            ligado = lerAchave();
             lidaEm = agora;
         }
         return ligado;
+    }
+
+    /** A leitura em si, fora da transacao da venda. Na duvida, DESLIGADO -- e agora e verdade. */
+    private boolean lerAchave() {
+        try {
+            return Boolean.TRUE.equals(foraDaTransacaoDaVenda.execute(st ->
+                    configs.findById(CHAVE_LIGA)
+                            .map(c -> Boolean.parseBoolean(c.getValor()))
+                            .orElse(false)));
+        } catch (RuntimeException e) {
+            // Agora isto protege de verdade: a transacao da venda estava suspensa.
+            //
+            // Sai em ERROR porque o motivo mais provavel e a chave de cifragem (BORA_SEGREDO_COLUNAS
+            // ausente ou trocada), e isso tambem afeta as credenciais de Asaas e marketplace. Ficar
+            // calado aqui foi o que fez o defeito original passar.
+            log.error("Outbox: nao consegui LER a chave '{}'. A fila fica DESLIGADA e a venda segue. "
+                    + "O motivo mais provavel e a chave de cifragem das colunas: confira "
+                    + "BORA_SEGREDO_COLUNAS.", CHAVE_LIGA, e);
+            return false;
+        }
     }
 
     /**

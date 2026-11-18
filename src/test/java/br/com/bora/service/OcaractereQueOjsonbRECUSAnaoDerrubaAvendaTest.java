@@ -45,6 +45,24 @@ import static org.mockito.Mockito.*;
  */
 class OcaractereQueOjsonbRECUSAnaoDerrubaAvendaTest {
 
+    /**
+     * Gerente de transacao de verdade, porem SEM transacao -- a semantica que o unitario quer.
+     *
+     * <p>Um mock cru nao serve: o {@code TransactionTemplate} chama {@code getTransaction} e
+     * {@code commit}, e um status nulo estouraria. Aqui tambem fica explicito o LIMITE deste
+     * arquivo: sem proxy transacional de verdade, ele nao ve o defeito de rollback-only que o
+     * {@code AchaveDoOutboxNAOpodeDERRUBARaVENDAIT} mede.</p>
+     */
+    private static final org.springframework.transaction.PlatformTransactionManager SEM_TRANSACAO =
+            new org.springframework.transaction.PlatformTransactionManager() {
+                @Override public org.springframework.transaction.TransactionStatus getTransaction(
+                        org.springframework.transaction.TransactionDefinition d) {
+                    return new org.springframework.transaction.support.SimpleTransactionStatus(false);
+                }
+                @Override public void commit(org.springframework.transaction.TransactionStatus s) { }
+                @Override public void rollback(org.springframework.transaction.TransactionStatus s) { }
+            };
+
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final ConfigPlataformaRepository configs = mock(ConfigPlataformaRepository.class);
     private final ObjectMapper json = new ObjectMapper();
@@ -54,7 +72,7 @@ class OcaractereQueOjsonbRECUSAnaoDerrubaAvendaTest {
         c.setChave(PublicadorDeEventos.CHAVE_LIGA);
         c.setValor("true");
         when(configs.findById(PublicadorDeEventos.CHAVE_LIGA)).thenReturn(Optional.of(c));
-        return new PublicadorDeEventos(jdbc, configs, json);
+        return new PublicadorDeEventos(jdbc, configs, json, SEM_TRANSACAO);
     }
 
     private Pedido pedido() {
