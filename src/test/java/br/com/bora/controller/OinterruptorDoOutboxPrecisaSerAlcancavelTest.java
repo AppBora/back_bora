@@ -21,6 +21,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -239,8 +240,12 @@ class OinterruptorDoOutboxPrecisaSerAlcancavelTest {
     @Test
     void oTEMPOdeUMAfalhaNAOentraNAmedia() {
         controller.definirOutbox(Map.of("habilitado", true));
+        // OITO `any()`, nao sete: a empresa entrou como subconsulta em 18/11/2026 e `lojaId` passou
+        // a ir duas vezes. Com sete, o stub nao casa com a chamada, nada estoura, e este teste
+        // passaria MEDINDO NADA -- foi assim que ele falhou quando a mudanca entrou, e e por isso
+        // que a contagem de parametros esta escrita aqui de proposito.
         doThrow(new org.springframework.dao.DataIntegrityViolationException("coluna curta"))
-                .when(jdbc).update(anyString(), any(), any(), any(), any(), any(), any(), any());
+                .when(jdbc).update(anyString(), any(), any(), any(), any(), any(), any(), any(), any());
 
         assertThrows(RuntimeException.class,
                 () -> publicador.dePedido("PedidoRecebido", pedido(), Map.of()),
@@ -250,13 +255,39 @@ class OinterruptorDoOutboxPrecisaSerAlcancavelTest {
         assertNull(controller.estadoDoOutbox().get("mediaMs"));
     }
 
-    /** Com a chave desligada a medicao tambem fica parada: nada a medir, nada inventado. */
+    /**
+     * Com a chave desligada a medicao tambem fica parada: nada a medir, nada inventado.
+     *
+     * <p><b>A ORDEM DESTE TESTE E O TESTE.</b> Ele juntava duas promessas diferentes num
+     * {@code verifyNoInteractions} no fim, e em 18/11/2026 isso virou falha: a TELA passou a fazer
+     * uma consulta de proposito (a contagem de eventos sem empresa). As duas promessas sao:</p>
+     * <ul>
+     *   <li><b>a venda desligada nao toca o banco</b> — esta vale dinheiro, e e medida ANTES de
+     *       olhar a tela;</li>
+     *   <li>a tela responde zero — que nao exige banco intocado, exige numero honesto.</li>
+     * </ul>
+     */
     @Test
     void comAchaveDESLIGADAnaoHAmedicao() {
         publicador.dePedido("PedidoRecebido", pedido(), Map.of());
+        verifyNoInteractions(jdbc);   // a VENDA: antes de a tela entrar e consultar
 
         assertEquals(0L, controller.estadoDoOutbox().get("gravacoes"));
-        verifyNoInteractions(jdbc);
+    }
+
+    /**
+     * A TELA custa UMA consulta, e so uma.
+     *
+     * <p>Ela e recarregada a cada 15 segundos enquanto o bloco esta aberto. Uma consulta de contagem
+     * sobre um indice parcial vazio e barata; tres consultas que alguem acrescentar sem pensar, no
+     * mesmo laco, deixam de ser. Este teste fixa o custo para a proxima pessoa.</p>
+     */
+    @Test
+    void aTELAcustaUMAconsultaSOeAvendaNENHUMA() {
+        controller.estadoDoOutbox();
+
+        verify(jdbc, times(1)).queryForObject(anyString(), eq(Long.class));
+        verifyNoMoreInteractions(jdbc);
     }
 
     /** O limite de "lenta" sai na resposta: quem le a media precisa saber contra o que comparar. */

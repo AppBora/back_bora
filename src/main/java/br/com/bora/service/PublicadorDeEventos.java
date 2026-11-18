@@ -155,7 +155,37 @@ public class PublicadorDeEventos {
         m.put("ultimaGravacao", ultimaGravacao == null ? null : ultimaGravacao.toString());
         m.put("versaoSchema", VERSAO_SCHEMA);
         m.put("lentaAcimaDeMs", LENTA_MS);
+        m.put("eventosSemEmpresa", eventosSemEmpresa());
         return m;
+    }
+
+    /**
+     * Quantos eventos da fila estão sem empresa. <b>No estado saudável isto é sempre zero.</b>
+     *
+     * <h3>Por que isto está na tela, e não só num comentário</h3>
+     * <p>A empresa do evento vem de uma subconsulta em {@code loja} que devolve NULL em silêncio
+     * quando não acha -- e silêncio é exatamente o que essa coluna fez até hoje: ela nasceu na V74 e
+     * ficou gravada como {@code null} literal, sem ninguém notar, porque nada reclama de uma coluna
+     * opcional vazia. Trocar um NULL silencioso por outro não seria conserto.</p>
+     *
+     * <p>Com este número na tela, a pergunta "a coluna está sendo preenchida?" tem resposta medida em
+     * vez de afirmação minha. Se ele sair de zero, o que há é uma loja sem empresa no cadastro -- e
+     * aí o lugar de consertar é o cadastro, não a fila.</p>
+     *
+     * <p>A contagem é barata porque o índice {@code ix_outbox_sem_empresa} (V76) é PARCIAL em
+     * {@code empresa_id is null}: no estado saudável ele está vazio, então contar é instantâneo e
+     * continua instantâneo com a fila crescendo. É o mesmo desenho do {@code ix_outbox_pendente}.</p>
+     *
+     * <p><b>Nunca derruba a tela:</b> na dúvida devolve {@code null}, que a tela mostra como "não
+     * medido". Esta classe já segue a regra de que medir não pode ser o que quebra.</p>
+     */
+    private Long eventosSemEmpresa() {
+        try {
+            return jdbc.queryForObject(
+                    "select count(*) from evento_outbox where empresa_id is null", Long.class);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /**
@@ -181,13 +211,49 @@ public class PublicadorDeEventos {
         }
         long t0 = System.nanoTime();
         try {
+            // A EMPRESA SAI DA LOJA, POR SUBCONSULTA DENTRO DESTE MESMO INSERT.
+            //
+            // Por que a coluna importa: `loja_id` diz em qual unidade a venda aconteceu, e
+            // `empresa_id` diz de quem é a unidade. O isolamento do ERP é por empresa (decisão D-02
+            // da modelagem), e sem essa coluna o consumidor teria de fazer um JOIN com `loja` em
+            // todo evento só para saber de quem é a venda -- ou, pior, tratar cada loja como um
+            // cliente separado. MEDIDO em 18/11/2026 no dump de produção das 18:26 UTC: 8 lojas, 4
+            // empresas, 0 lojas sem empresa, 0 apontando para empresa inexistente -- e as lojas
+            // 18, 19, 20, 21 e 22 (a rede da Zirá) são UMA empresa só, a 3. É exatamente esse caso
+            // que a coluna existe para representar.
+            //
+            // POR QUE SUBCONSULTA, E NÃO UM SELECT EM JAVA. O custo que o outbox acrescenta a uma
+            // venda é uma ida e volta ao banco -- é isso que `estado()` mede e que a tela mostra.
+            // Ler a empresa em Java antes do INSERT seria uma ida e volta a MAIS: o dobro do custo
+            // desta classe, no caminho de toda venda, para buscar um dado que o banco já tem ao
+            // lado. Assim é uma busca por chave primária dentro da instrução que já ia acontecer.
+            //
+            // POR QUE ISSO NÃO PODE DERRUBAR A VENDA. A V74 deixou esta coluna sem NOT NULL e sem
+            // chave estrangeira de propósito: fila não pode recusar venda por integridade
+            // referencial. A subconsulta mantém essa garantia -- loja inexistente ou loja sem
+            // empresa devolvem NULL, não erro, e a venda segue. Fazer a coluna NOT NULL agora seria
+            // trocar uma lacuna de cadastro por uma venda perdida, que é o pior dos dois.
+            //
+            // CUIDADO AO MEXER AQUI: `p.lojaId` vai DUAS vezes, uma para a subconsulta e uma para a
+            // coluna `loja_id`. Trocar essas duas entre si é inócuo (são o mesmo valor); o que
+            // machuca é mais fácil de fazer:
+            //
+            //  - pôr `p.id` numa das duas posições de loja -- o evento sai na loja errada, ou com a
+            //    empresa de outra loja, EM SILÊNCIO (nada reclama: são dois BIGINT);
+            //  - esquecer que a lista cresceu de 7 para 8 parâmetros -- quem lê por posição (os
+            //    testes leem) passa a medir outra coisa.
+            //
+            // Os dois estão medidos: em 18/11/2026 rodei quatro mutantes contra os testes desta
+            // classe -- voltar o `null` literal (morto por 4 testes), `p.id` na coluna `loja_id`
+            // (1), `p.id` na subconsulta (1) e tirar a contagem da tela (2). Nenhum sobreviveu.
             jdbc.update("""
                     insert into evento_outbox
                       (tipo, versao_schema, empresa_id, loja_id, agregado_tipo, agregado_id,
                        payload, ocorrido_em, data_operacao)
-                    values (?, ?, null, ?, 'pedido', ?, ?::jsonb, ?, ?)
+                    values (?, ?, (select empresa_id from loja where id = ?), ?, 'pedido', ?,
+                            ?::jsonb, ?, ?)
                     """,
-                    tipo, VERSAO_SCHEMA, p.lojaId, p.id, corpo,
+                    tipo, VERSAO_SCHEMA, p.lojaId, p.lojaId, p.id, corpo,
                     java.sql.Timestamp.from(java.time.Instant.now()),
                     java.sql.Date.valueOf(dataDeOperacao(p)));
         } catch (RuntimeException e) {

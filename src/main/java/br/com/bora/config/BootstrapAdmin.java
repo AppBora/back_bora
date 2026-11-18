@@ -43,6 +43,7 @@ public class BootstrapAdmin implements CommandLineRunner {
     private final LojaRepository lojas;
     private final PasswordEncoder encoder;
     private final br.com.bora.repository.UsuarioLojaRepository vinculos;
+    private final br.com.bora.service.EmpresaService empresas;
     private final String email;
     private final String senha;
     private final String superEmail;
@@ -50,6 +51,7 @@ public class BootstrapAdmin implements CommandLineRunner {
 
     public BootstrapAdmin(UsuarioRepository usuarios, LojaRepository lojas, PasswordEncoder encoder,
                           br.com.bora.repository.UsuarioLojaRepository vinculos,
+                          br.com.bora.service.EmpresaService empresas,
                           @Value("${bora.bootstrap.admin-email:admin@bora.app}") String email,
                           @Value("${bora.bootstrap.admin-senha:bora123}") String senha,
                           @Value("${bora.bootstrap.superadmin-email:}") String superEmail,
@@ -58,6 +60,7 @@ public class BootstrapAdmin implements CommandLineRunner {
         this.lojas = lojas;
         this.encoder = encoder;
         this.vinculos = vinculos;
+        this.empresas = empresas;
         this.email = email.trim().toLowerCase();
         this.senha = senha;
         this.superEmail = superEmail == null ? "" : superEmail.trim().toLowerCase();
@@ -94,9 +97,21 @@ public class BootstrapAdmin implements CommandLineRunner {
             return; // já há admin de loja
         }
 
+        // A LOJA DE BOOTSTRAP NASCE COM EMPRESA.
+        //
+        // Este era o ultimo dos tres caminhos que criam loja a deixar `empresa_id` nulo -- o
+        // `criarLoja` do painel e o cadastro publico ja preenchem. Em producao ele nunca roda (so
+        // entra quando NAO existe nenhuma loja), e por isso as 8 lojas de producao estao com
+        // empresa; mas numa instalacao nova a loja demo nascia orfa, e como a fila de eventos tira
+        // a empresa da loja, TODO evento dessa instalacao sairia sem empresa, para sempre.
+        //
+        // Sem CNPJ: aqui nao ha documento para consultar, e `paraDocumento(null, ...)` cria uma
+        // empresa propria em vez de adivinhar dona -- que e a mesma regra do resto do sistema
+        // ("nao sei" responde nao, nunca junta clientes diferentes).
         Loja loja = lojas.findAll().stream().findFirst().orElseGet(() -> {
             Loja l = new Loja();
             l.setNome("Loja Demo");
+            l.empresaId = empresas.paraDocumento(null, "Loja Demo").getId();
             return lojas.save(l);
         });
 

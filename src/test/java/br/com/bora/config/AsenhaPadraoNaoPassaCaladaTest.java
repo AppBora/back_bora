@@ -51,6 +51,7 @@ class AsenhaPadraoNaoPassaCaladaTest {
     private LojaRepository lojas;
     private UsuarioLojaRepository vinculos;
     private PasswordEncoder encoder;
+    private br.com.bora.service.EmpresaService empresas;
 
     @BeforeEach
     void montar() {
@@ -58,6 +59,16 @@ class AsenhaPadraoNaoPassaCaladaTest {
         lojas = mock(LojaRepository.class);
         vinculos = mock(UsuarioLojaRepository.class);
         encoder = new BCryptPasswordEncoder();   // o de verdade: o que se mede aqui e a comparacao
+
+        // A loja de bootstrap passou a nascer com empresa (18/11/2026), entao o caminho que cria a
+        // "Loja Demo" chama o EmpresaService. Um mock cru devolveria null e estouraria -- o que de
+        // fato aconteceu aqui quando a mudanca entrou. Este arquivo nao mede a empresa; quem mede e
+        // o AlojaDEbootstrapNASCEcomEMPRESATest.
+        empresas = mock(br.com.bora.service.EmpresaService.class);
+        br.com.bora.entity.Empresa demo = new br.com.bora.entity.Empresa();
+        demo.setId(1L);
+        demo.setRazaoSocial("Loja Demo");
+        when(empresas.paraDocumento(any(), anyString())).thenReturn(demo);
         when(usuarios.findByEmail(anyString())).thenReturn(Optional.empty());
         when(usuarios.count()).thenReturn(1L);
         when(usuarios.findAll()).thenReturn(List.of(comPapel(Papel.ADMINISTRADOR_LOJA, "ja@existe.com")));
@@ -83,7 +94,11 @@ class AsenhaPadraoNaoPassaCaladaTest {
     }
 
     private BootstrapAdmin bootstrap(String senhaConfigurada, String superEmail, String superSenha) {
-        return new BootstrapAdmin(usuarios, lojas, encoder, vinculos,
+        // O EmpresaService entrou no construtor em 18/11/2026: a loja de bootstrap passou a nascer
+        // com empresa, porque era o ultimo dos tres caminhos que criam loja a deixar `empresa_id`
+        // nulo -- e a fila de eventos tira a empresa da loja. Este arquivo nao mede isso, so precisa
+        // do argumento; quem mede e o AlojaDEbootstrapNASCEcomEMPRESATest.
+        return new BootstrapAdmin(usuarios, lojas, encoder, vinculos, empresas,
                 "admin@bora.app", senhaConfigurada, superEmail, superSenha);
     }
 

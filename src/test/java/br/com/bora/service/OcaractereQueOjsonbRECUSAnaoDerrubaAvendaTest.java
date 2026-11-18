@@ -68,12 +68,19 @@ class OcaractereQueOjsonbRECUSAnaoDerrubaAvendaTest {
         return p;
     }
 
-    /** O corpo JSON que foi para o banco. */
+    /**
+     * O corpo JSON que foi para o banco.
+     *
+     * <p>OITO parametros e o corpo na posicao 6 (indice 5) desde 18/11/2026: a empresa entrou no
+     * INSERT como subconsulta e `lojaId` passou a ir duas vezes. Este arquivo foi um dos tres que
+     * travavam a forma antiga, e os tres falharam quando a mudanca entrou -- que e o que se quer de
+     * um teste que le argumento por posicao.</p>
+     */
     private String corpoGravado() {
         var args = org.mockito.ArgumentCaptor.forClass(Object.class);
         verify(jdbc).update(anyString(), args.capture(), args.capture(), args.capture(),
-                args.capture(), args.capture(), args.capture(), args.capture());
-        return (String) args.getAllValues().get(4);
+                args.capture(), args.capture(), args.capture(), args.capture(), args.capture());
+        return (String) args.getAllValues().get(5);
     }
 
     // ------------------------------------------------------------- o saneador
@@ -196,6 +203,6 @@ class OcaractereQueOjsonbRECUSAnaoDerrubaAvendaTest {
     void aVENDAnaoCAIcomTextoSUJO() {
         assertDoesNotThrow(() -> ligado().dePedido("PedidoCancelado", pedido(),
                 Map.of("motivo", "\u0000\ud800meio de emoji\udc00\u0000")));
-        verify(jdbc).update(anyString(), any(), any(), any(), any(), any(), any(), any());
+        verify(jdbc).update(anyString(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 }
