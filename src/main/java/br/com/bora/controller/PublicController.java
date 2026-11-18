@@ -64,6 +64,17 @@ public class PublicController {
     /** A ordem das secoes escolhida pela loja. Ver V64 e {@code CategoriaOrdemService}. */
     private final br.com.bora.service.CategoriaOrdemService ordemDasCategorias;
 
+    /**
+     * A fila de eventos do ERP (entrega A2). Nasce desligada por chave global.
+     *
+     * <p><b>Por que este controller precisa dela, e nao bastava o PedidoService.</b> Os cinco pontos
+     * de gravacao do outbox moram no {@code PedidoService}, e o checkout do cardapio proprio NAO
+     * passa por ele: monta o Pedido aqui mesmo, dentro do {@code tx.execute}. O resultado era que a
+     * venda do canal proprio -- QR, cashback, PIX -- nao emitia evento nenhum, e ficaria invisivel
+     * para os modulos de estoque e fiscal no dia do acoplamento.</p>
+     */
+    private final br.com.bora.service.PublicadorDeEventos eventos;
+
     public PublicController(LojaRepository lojas, ProdutoRepository produtos, PedidoRepository pedidos,
                             PedidoItemRepository itens, IntegracaoCanalRepository integracoes, PixService pix,
                             br.com.bora.repository.ComplementoGrupoRepository compGrupos,
@@ -81,8 +92,10 @@ public class PublicController {
                             br.com.bora.repository.ConfiguracaoLojaRepository configuracoes,
                             br.com.bora.service.RepetirPedidoService repetir,
                             br.com.bora.service.CategoriaOrdemService ordemDasCategorias,
+                            br.com.bora.service.PublicadorDeEventos eventos,
                             org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                             @org.springframework.beans.factory.annotation.Value("${bora.cardapio.respeitar-horario:false}") boolean respeitarHorario) {
+        this.eventos = eventos;
         this.respeitarHorario = respeitarHorario;
         this.repetir = repetir;
         this.ordemDasCategorias = ordemDasCategorias;
@@ -837,6 +850,30 @@ public class PublicController {
             }
             resp.put("cashbackNovo", fidelidade.saldo(lojaId, clienteId));
             resp.put("aguardandoPagamento", comPix);
+
+            // OUTBOX (A2) -- A VENDA DO CANAL PROPRIO PASSA A EMITIR EVENTO.
+            //
+            // Aqui dentro, de proposito: este `tx.execute` E a transacao da venda. O evento gravado
+            // nela ou existe com o pedido, ou volta atras junto com ele -- que e a unica razao de o
+            // outbox existir. Gravado depois do commit, bastaria o processo morrer no meio para a
+            // venda ficar sem evento; gravado antes, um rollback deixaria o modulo processando uma
+            // venda que nao aconteceu.
+            //
+            // E o ULTIMO passo do bloco, tambem de proposito: `valorTotal`, `codigo` e
+            // `aguardandoPagamento` so ficam com o valor final aqui. Emitir antes mandaria o total
+            // sem frete, sem cupom e sem cashback.
+            //
+            // `aguardandoPagamento` vai no payload porque muda o que o consumidor pode fazer: PIX
+            // pendente e venda que AINDA NAO TEM DINHEIRO. Modulo financeiro que criar recebivel a
+            // partir disto sem olhar o campo lanca receita que pode nunca entrar.
+            eventos.dePedido("PedidoRecebido", p, java.util.Map.of(
+                    "canal", "CARDAPIO",
+                    "aguardandoPagamento", comPix,
+                    "retirada", retirada,
+                    "desconto", descontoAplicado,
+                    "cashbackUsado", resgate,
+                    "taxaEntrega", taxaEntrega));
+
             return new Rascunho(p, resp, clienteId, resgate, descontoUsado);
         });
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
@@ -909,6 +946,20 @@ public class PublicController {
             // PIX, entao nao ha reabertura possivel -- mas deixar um cancelamento sem linha e o
             // mesmo descuido que custou o estoque no caminho do PIX expirado.
             devolucaoDeEstoque.registrarCancelamentoNoHistorico(p, anterior);
+
+            // OUTBOX (A2) -- E ESTE EVENTO E OBRIGATORIO, nao um extra.
+            //
+            // O `PedidoRecebido` deste pedido JA FOI GRAVADO e ja commitou: a fila esta com uma
+            // venda que acabou de deixar de existir. Sem o cancelamento, um modulo de estoque
+            // guardaria baixa que foi devolvida e o financeiro, recebivel de venda que nunca houve
+            // -- exatamente o estrago que o javadoc do PublicadorDeEventos descreve como "evento
+            // publicado de uma venda que deu rollback", sem o rollback poder ajudar, porque aqui a
+            // venda foi desfeita por uma transacao POSTERIOR.
+            eventos.dePedido("PedidoCancelado", p, java.util.Map.of(
+                    "canal", "CARDAPIO",
+                    "statusAnterior", anterior == null ? "" : anterior.name(),
+                    "motivo", "Nao foi possivel gerar o PIX",
+                    "solicitante", "SISTEMA"));
         }));
     }
     /**
@@ -1091,6 +1142,27 @@ public class PublicController {
                     //
                     // `true` no ultimo argumento: a venda foi paga, entao nao e PIX pendente.
                     devolucaoDeEstoque.rebaixarDeNovo(p);
+                }
+                // OUTBOX (A2) -- a REABERTURA tem de chegar ao modulo.
+                //
+                // Este metodo e @Transactional, entao a gravacao entra na transacao do pagamento.
+                //
+                // So emite quando o pedido REABRIU (CANCELADO -> RECEBIDO). Aqui o consumidor tem na
+                // fila um `PedidoCancelado`: sem esta linha ele trataria como morta uma venda que
+                // voltou a valer, com o cliente pagando e esperando comida.
+                //
+                // O PIX pago de um pedido que NAO estava cancelado nao emite nada, e isto e uma
+                // lacuna conhecida, nao um esquecimento: "o dinheiro entrou" nao tem nome no
+                // catalogo de eventos. O que existe e `PedidoFinalizado`, que no codigo quer dizer
+                // ENTREGUE -- e um PIX pago nao e uma entrega. Inventar `PedidoPago` aqui seria
+                // publicar contrato que ninguem leu; o lugar disso e a entrega A5, e vale para todos
+                // os canais, nao so para este. Fica em PENDENCIAS.md.
+                if (jaCancelado) {
+                    eventos.dePedido("PedidoRecebido", p, java.util.Map.of(
+                            "canal", "CARDAPIO",
+                            "reabertoAposCancelamento", true,
+                            "aguardandoPagamento", false,
+                            "motivo", "PIX pago depois do cancelamento"));
                 }
                 if (primeiraConfirmacao && p.clienteId != null) {
                     if (jaCancelado) {

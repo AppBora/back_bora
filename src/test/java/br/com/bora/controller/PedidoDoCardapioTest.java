@@ -43,11 +43,14 @@ class PedidoDoCardapioTest {
     private ComplementoService complementos;
     private CupomRepository cupons;
     private br.com.bora.repository.PromocaoRepository promocoes;
+    /** A fila de eventos do ERP: a venda do cardapio proprio tem de emitir. */
+    private br.com.bora.service.PublicadorDeEventos publicador;
     private PublicController controller;
     private Produto acai;
 
     @BeforeEach
     void montar() {
+        publicador = mock(br.com.bora.service.PublicadorDeEventos.class);
         lojas = mock(LojaRepository.class);
         produtos = mock(ProdutoRepository.class);
         pedidos = mock(PedidoRepository.class);
@@ -73,6 +76,7 @@ class PedidoDoCardapioTest {
                 devolucaoDeEstoque,
                 new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class),
                 mock(br.com.bora.service.RepetirPedidoService.class), mock(br.com.bora.service.CategoriaOrdemService.class),
+                publicador,
                 gerenciadorFalso(), false);
 
         Loja l = new Loja();
@@ -377,6 +381,7 @@ class PedidoDoCardapioTest {
                 devolucaoDeEstoque,
                 new RegraDeAcesso(false), mock(ConfiguracaoLojaRepository.class),
                 mock(br.com.bora.service.RepetirPedidoService.class), mock(br.com.bora.service.CategoriaOrdemService.class),
+                publicador,
                 gerenciadorFalso(), false);
     }
 

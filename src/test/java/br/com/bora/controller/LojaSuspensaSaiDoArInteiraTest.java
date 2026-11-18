@@ -66,6 +66,7 @@ class LojaSuspensaSaiDoArInteiraTest {
                 new RegraDeAcesso(true), configuracoes,
                 mock(br.com.bora.service.RepetirPedidoService.class),
                 mock(br.com.bora.service.CategoriaOrdemService.class),
+                mock(br.com.bora.service.PublicadorDeEventos.class),
                 mock(PlatformTransactionManager.class), false);
 
         // uma foto de verdade, para o unico motivo de 404 ser a loja

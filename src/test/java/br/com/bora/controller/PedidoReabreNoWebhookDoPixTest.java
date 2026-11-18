@@ -50,6 +50,11 @@ class PedidoReabreNoWebhookDoPixTest {
     private PedidoRepository pedidos;
     private EstornoDaVendaService devolucaoDeEstoque;
     private FidelidadeService fidelidade;
+    /** A fila de eventos: a reabertura do pedido tem de chegar ao modulo. */
+    private br.com.bora.service.PublicadorDeEventos publicador;
+    /** O estado do pedido NO INSTANTE da emissao -- ver o comentario em aREABERTURAemiteEVENTO. */
+    private StatusPedido statusQuandoEmitiu;
+    private OffsetDateTime canceladoEmQuandoEmitiu;
     private RepetirPedidoService repetir;
     private PublicController controller;
 
@@ -73,6 +78,13 @@ class PedidoReabreNoWebhookDoPixTest {
         when(lojas.findById(LOJA)).thenReturn(Optional.of(l));
         when(integracoes.findByLojaIdAndCanal(LOJA, "PIX")).thenReturn(Optional.of(new IntegracaoCanal()));
 
+        publicador = mock(br.com.bora.service.PublicadorDeEventos.class);
+        doAnswer(inv -> {
+            Pedido p = inv.getArgument(1);
+            statusQuandoEmitiu = p.status;
+            canceladoEmQuandoEmitiu = p.canceladoEm;
+            return null;
+        }).when(publicador).dePedido(anyString(), any(Pedido.class), anyMap());
         var gerenciador = mock(org.springframework.transaction.PlatformTransactionManager.class);
 
         controller = new PublicController(lojas, mock(br.com.bora.repository.ProdutoRepository.class),
@@ -90,6 +102,7 @@ class PedidoReabreNoWebhookDoPixTest {
                 mock(br.com.bora.security.RegraDeAcesso.class),
                 mock(br.com.bora.repository.ConfiguracaoLojaRepository.class), repetir,
                 mock(br.com.bora.service.CategoriaOrdemService.class),
+                publicador,
                 gerenciador, false);
     }
 
@@ -128,6 +141,81 @@ class PedidoReabreNoWebhookDoPixTest {
         corpo.put("event", evento);
         corpo.put("payment", pagamento);
         return corpo;
+    }
+
+    // =============================================================== a fila de eventos (A2)
+
+    /**
+     * A REABERTURA TEM DE CHEGAR AO MODULO, e nao chegava.
+     *
+     * <p>O consumidor tem na fila um {@code PedidoCancelado} deste pedido. Se a reabertura nao
+     * emite nada, ele continua tratando como morta uma venda que voltou a valer — com o cliente
+     * tendo pagado e esperando comida. O estoque dele fica sobrando e o fiscal nao emite nota de
+     * uma venda que aconteceu.</p>
+     */
+    @Test
+    void aREABERTURAemiteEVENTO() {
+        noBanco(cancelado());
+
+        controller.pixWebhook(LOJA, TOKEN, aviso("PAYMENT_RECEIVED"));
+
+        var extras = org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        verify(publicador).dePedido(eq("PedidoRecebido"), any(Pedido.class), extras.capture());
+        assertEquals("CARDAPIO", extras.getValue().get("canal"));
+        assertEquals(true, extras.getValue().get("reabertoAposCancelamento"),
+                "sem esta marca o consumidor nao sabe distinguir reabertura de venda nova");
+        assertEquals(false, extras.getValue().get("aguardandoPagamento"),
+                "o dinheiro ENTROU: dizer que ainda aguarda pagamento inverteria o sentido");
+    }
+
+    /** O evento sai com o pedido JA reaberto, nao com o estado de antes. */
+    @Test
+    void oEVENTOdaREABERTURAlevaOpedidoJAvivo() {
+        noBanco(cancelado());
+
+        controller.pixWebhook(LOJA, TOKEN, aviso("PAYMENT_RECEIVED"));
+
+        // INSTANTANEO, nao captor: o captor guarda a REFERENCIA do pedido, que continua sendo
+        // alterado depois da chamada -- entao ele devolve o estado FINAL, e a asserção passaria
+        // mesmo com a emissao antes da reabertura. Medido no teste do cardapio.
+        assertEquals(StatusPedido.RECEBIDO, statusQuandoEmitiu,
+                "o evento saiu antes de o pedido reabrir: o modulo arquivaria a venda de novo");
+        assertNull(canceladoEmQuandoEmitiu,
+                "emitir com canceladoEm preenchido mandaria o modulo arquivar a venda de novo");
+    }
+
+    /**
+     * A LACUNA CONHECIDA, travada aqui de proposito: PIX pago de pedido que NAO estava cancelado
+     * nao emite nada.
+     *
+     * <p>"O dinheiro entrou" nao tem nome no catalogo de eventos. O que existe e
+     * {@code PedidoFinalizado}, que no codigo quer dizer ENTREGUE — e um PIX pago nao e uma
+     * entrega. Inventar {@code PedidoPago} aqui seria publicar contrato que ninguem leu.</p>
+     *
+     * <p>Este teste nao diz que o silencio esta certo: diz que ele e <b>deliberado</b>. Quem for
+     * fechar a lacuna na entrega A5 vai ver este teste falhar, ler o motivo, e decidir de olho
+     * aberto — em vez de descobrir meses depois que o financeiro nunca soube de um pagamento.</p>
+     */
+    @Test
+    void pixPAGOdePedidoVIVOnaoEmiteNADA_eissoEHdeliberado() {
+        noBanco(vivo());
+
+        controller.pixWebhook(LOJA, TOKEN, aviso("PAYMENT_RECEIVED"));
+
+        verifyNoInteractions(publicador);
+    }
+
+    /** Reenvio do mesmo aviso nao pode emitir a reabertura duas vezes. */
+    @Test
+    void oREENVIOdoMESMOavisoNAOemiteDUASvezes() {
+        Pedido p = cancelado();
+        noBanco(p);
+
+        controller.pixWebhook(LOJA, TOKEN, aviso("PAYMENT_RECEIVED"));
+        // Depois do primeiro aviso o pedido ja esta vivo -- e o Asaas reenvia quando nao recebe 200.
+        controller.pixWebhook(LOJA, TOKEN, aviso("PAYMENT_RECEIVED"));
+
+        verify(publicador, times(1)).dePedido(eq("PedidoRecebido"), any(Pedido.class), anyMap());
     }
 
     // =============================================================== o pedido volta a valer

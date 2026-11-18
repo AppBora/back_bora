@@ -65,6 +65,7 @@ class StatusDoPedidoExigeAssinaturaTest {
             mock(br.com.bora.repository.ConfiguracaoLojaRepository.class),
             repetir,
             mock(br.com.bora.service.CategoriaOrdemService.class),
+            mock(br.com.bora.service.PublicadorDeEventos.class),
             mock(org.springframework.transaction.PlatformTransactionManager.class),
             false);
 
