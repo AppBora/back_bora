@@ -45,7 +45,7 @@ class PixPagoDepoisDoPrazoTest {
         integracoes = mock(IntegracaoCanalRepository.class);
         fidelidade = mock(FidelidadeService.class);
         estorno = mock(EstornoDaVendaService.class);
-        cobrador = new CobradorDePixService(pedidos, fidelidade, lojas, integracoes, pix, estorno, GerenciadorDeTransacaoFalso.novo(), 30);
+        cobrador = new CobradorDePixService(pedidos, fidelidade, lojas, integracoes, pix, estorno, mock(br.com.bora.service.PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo(), 30);
         when(pedidos.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
         when(lojas.findById(1L)).thenReturn(Optional.of(new Loja()));
         when(integracoes.findByLojaIdAndCanal(1L, "PIX")).thenReturn(Optional.empty());

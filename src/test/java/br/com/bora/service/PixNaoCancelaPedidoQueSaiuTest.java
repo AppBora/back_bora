@@ -49,7 +49,7 @@ class PixNaoCancelaPedidoQueSaiuTest {
         estorno = mock(EstornoDaVendaService.class);
         cobrador = new CobradorDePixService(pedidos, mock(FidelidadeService.class),
                 mock(LojaRepository.class), mock(IntegracaoCanalRepository.class),
-                mock(PixService.class), estorno, GerenciadorDeTransacaoFalso.novo(), 30);
+                mock(PixService.class), estorno, mock(br.com.bora.service.PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo(), 30);
         when(pedidos.save(any(Pedido.class))).thenAnswer(i -> i.getArgument(0));
     }
 

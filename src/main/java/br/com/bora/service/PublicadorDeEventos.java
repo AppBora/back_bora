@@ -263,8 +263,61 @@ public class PublicadorDeEventos {
         m.put("formaPagamento", p.formaPagamento);
         m.put("tipoEntrega", p.tipoEntrega);
         m.put("criadoEm", p.criadoEm == null ? null : p.criadoEm.toString());
-        if (extras != null) m.putAll(extras);
+        if (extras != null) extras.forEach((k, v) -> m.put(k, saneado(v)));
+        // SANEIA TODO VALOR DE TEXTO, inclusive o que ja estava no mapa: `codigo`, `origem` e
+        // `formaPagamento` vem do banco e podem ter vindo de marketplace.
+        m.replaceAll((k, v) -> saneado(v));
         return m;
+    }
+
+    /**
+     * Tira do valor os DOIS caracteres que o {@code jsonb} do PostgreSQL recusa.
+     *
+     * <h3>O defeito que isto fecha, medido em 18/11/2026</h3>
+     * <p>Medido num PostgreSQL 16 de verdade:</p>
+     * <pre>
+     *   select '{"a":"x\u0000y"}'::jsonb;  -- ERROR: unsupported Unicode escape sequence
+     *   select '{"a":"\ud800"}'::jsonb;     -- ERROR: invalid input syntax for type json
+     *   select '{"a":"Acai 500ml"}'::jsonb;  -- passa (acento nao e problema)
+     * </pre>
+     *
+     * <p>Por que isso era grave: o INSERT desta classe mora na transacao da VENDA, e o javadoc da
+     * classe diz, com razao, que uma instrucao que falha envenena a transacao inteira — nao da para
+     * capturar e seguir. Ou seja: <b>um caractere NUL dentro de um "motivo" de cancelamento ou de um
+     * id externo de marketplace derrubava a venda</b>. E o {@code catch} que protege a serializacao
+     * nao ajudava, porque o Jackson serializa o NUL sem reclamar; quem recusa e o banco, depois.</p>
+     *
+     * <p><b>Por que sanear e nao recusar:</b> NUL dentro de um texto de operacao e lixo de
+     * codificacao, nunca informacao. Perder o lixo e barato; perder a venda, nao.</p>
+     *
+     * <p>Os dois casos:</p>
+     * <ul>
+     *   <li><b>U+0000</b> — o NUL. Chega por copiar e colar, por campo de sistema legado, ou por
+     *       texto que passou por conversao de codificacao torta.</li>
+     *   <li><b>Surrogate solto</b> — meio de um emoji. Aparece quando um texto e CORTADO por
+     *       tamanho no meio de um par (e este sistema corta por largura de coluna em varios
+     *       pontos, justamente para o Postgres nao recusar o INSERT). Um par completo passa: emoji
+     *       inteiro nao e problema.</li>
+     * </ul>
+     */
+    static Object saneado(Object valor) {
+        if (!(valor instanceof String texto) || texto.isEmpty()) return valor;
+        StringBuilder limpo = null;
+        for (int i = 0; i < texto.length(); i++) {
+            char c = texto.charAt(i);
+            boolean recusado = c == '\u0000'
+                    // alto sem baixo depois, ou baixo sem alto antes: meio de par
+                    || (Character.isHighSurrogate(c)
+                        && (i + 1 >= texto.length() || !Character.isLowSurrogate(texto.charAt(i + 1))))
+                    || (Character.isLowSurrogate(c)
+                        && (i == 0 || !Character.isHighSurrogate(texto.charAt(i - 1))));
+            if (recusado) {
+                if (limpo == null) limpo = new StringBuilder(texto.length()).append(texto, 0, i);
+            } else if (limpo != null) {
+                limpo.append(c);
+            }
+        }
+        return limpo == null ? texto : limpo.toString();
     }
 
     /**

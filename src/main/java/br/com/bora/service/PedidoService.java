@@ -614,6 +614,25 @@ public class PedidoService {
         registro.setStatusNovo(novo.name());
         registro.setUsuarioId(null); // quem mexeu foi o marketplace, nao um usuario do painel
         logs.save(registro);
+        // OUTBOX (A2) -- ESTE PONTO FALTAVA, e era o desfecho da venda de marketplace.
+        //
+        // O irmao `cancelarPorMarketplace` logo acima emite; este nao emitia. Esquecimento meu,
+        // achado pela revisao de arquitetura em 18/11/2026.
+        //
+        // O estrago: quando o entregador do iFood marca ENTREGUE, o desfecho acontece POR AQUI --
+        // nao pelo `alterarStatus`, que e o caminho do painel. Sem este evento, pedido de
+        // marketplace nunca produzia `PedidoFinalizado`, e `PedidoFinalizado` e exatamente o que o
+        // Fiscal e o Financeiro assinam. A venda de marketplace inteira ficaria fora da nota e fora
+        // do recebivel, enquanto a venda do painel entraria -- e a diferenca entre as duas nao
+        // apareceria em lugar nenhum.
+        //
+        // O metodo e @Transactional, entao o evento acompanha a mudanca de status.
+        eventos.dePedido(eventoDeStatus(novo), salvo, java.util.Map.of(
+                "canal", canalCodigo == null ? "MARKETPLACE" : canalCodigo,
+                "statusAnterior", anterior == null ? "" : anterior.name(),
+                "statusNovo", novo.name(),
+                "solicitante", "MARKETPLACE",
+                "idExterno", idExterno == null ? "" : idExterno));
         notifCliente.notificarFase(salvo, novo); // o cliente final merece saber que saiu/chegou
         AUDITORIA.info("[{}] loja {}: pedido {} avancou para {} pelo aviso do entregador",
                 canalCodigo, lojaId, idExterno, novo);

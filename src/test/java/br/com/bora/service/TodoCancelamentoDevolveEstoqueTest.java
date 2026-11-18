@@ -47,7 +47,7 @@ class TodoCancelamentoDevolveEstoqueTest {
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
 
         new CobradorDePixService(repo, mock(FidelidadeService.class), mock(LojaRepository.class),
-                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, GerenciadorDeTransacaoFalso.novo(), 30)
+                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, mock(br.com.bora.service.PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo(), 30)
                 .expirarAbandonados();
 
         // false: PIX que expirou nunca foi pago, entao nao ha historico nem cashback novo para desfazer.
@@ -64,7 +64,7 @@ class TodoCancelamentoDevolveEstoqueTest {
         when(repo.findByAguardandoPagamentoTrueAndCriadoEmBefore(any())).thenReturn(List.of(p));
 
         new CobradorDePixService(repo, mock(FidelidadeService.class), mock(LojaRepository.class),
-                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, GerenciadorDeTransacaoFalso.novo(), 30)
+                mock(IntegracaoCanalRepository.class), mock(PixService.class), devolucao, mock(br.com.bora.service.PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo(), 30)
                 .expirarAbandonados();
 
         verify(devolucao, never()).devolver(any(), any(), anyBoolean());

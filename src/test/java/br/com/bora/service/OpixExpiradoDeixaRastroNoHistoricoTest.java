@@ -68,7 +68,7 @@ class OpixExpiradoDeixaRastroNoHistoricoTest {
         new CobradorDePixService(repo, mock(FidelidadeService.class),
                 mock(br.com.bora.repository.LojaRepository.class),
                 mock(br.com.bora.repository.IntegracaoCanalRepository.class), mock(PixService.class),
-                devolucao, GerenciadorDeTransacaoFalso.novo(), 30).expirarAbandonados();
+                devolucao, mock(br.com.bora.service.PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo(), 30).expirarAbandonados();
 
         assertEquals(StatusPedido.CANCELADO, p.status);
         // RECEBIDO: e esse o status que o `rebaixarDeNovo` precisa achar depois, porque e com ele que
@@ -89,7 +89,7 @@ class OpixExpiradoDeixaRastroNoHistoricoTest {
         new CobradorDePixService(repo, mock(FidelidadeService.class),
                 mock(br.com.bora.repository.LojaRepository.class),
                 mock(br.com.bora.repository.IntegracaoCanalRepository.class), mock(PixService.class),
-                devolucao, GerenciadorDeTransacaoFalso.novo(), 30).expirarAbandonados();
+                devolucao, mock(br.com.bora.service.PublicadorDeEventos.class), GerenciadorDeTransacaoFalso.novo(), 30).expirarAbandonados();
 
         assertEquals(StatusPedido.EM_PREPARO, p.status);
         verify(devolucao, org.mockito.Mockito.never())

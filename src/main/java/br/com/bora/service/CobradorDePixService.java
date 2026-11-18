@@ -49,6 +49,7 @@ public class CobradorDePixService {
     public CobradorDePixService(PedidoRepository pedidos, FidelidadeService fidelidade,
                                 LojaRepository lojas, IntegracaoCanalRepository integracoes, PixService pix,
                                 EstornoDaVendaService devolucao,
+                                PublicadorDeEventos eventos,
                                 org.springframework.transaction.PlatformTransactionManager gerenciadorDeTransacao,
                                 @Value("${bora.pix.minutos-para-expirar:30}") int minutosParaExpirar) {
         this.pedidos = pedidos;
@@ -57,6 +58,7 @@ public class CobradorDePixService {
         this.integracoes = integracoes;
         this.pix = pix;
         this.devolucao = devolucao;
+        this.eventos = eventos;
         this.tx = new org.springframework.transaction.support.TransactionTemplate(gerenciadorDeTransacao);
         this.minutosParaExpirar = minutosParaExpirar;
     }
@@ -172,6 +174,16 @@ public class CobradorDePixService {
                 && status != StatusPedido.CANCELADO;
     }
 
+    /**
+     * A fila de eventos do ERP (A2). Aqui ela cobre o cancelamento MAIS COMUM do sistema.
+     *
+     * <p>O checkout abandonado e o caminho normal do cardapio: o cliente gera o PIX e nao paga.
+     * Trinta minutos depois esta rotina cancela. O {@code desfazerPedidoSemPix} do
+     * {@code PublicController} -- que cobre o caso RARO, o Asaas recusar -- chama o mesmo evento de
+     * "obrigatorio" no seu proprio comentario. Faltava justamente no caminho que roda sempre.</p>
+     */
+    private final PublicadorDeEventos eventos;
+
     /** O recado que fica na observacao do pedido, e tambem a chave que evita avisar duas vezes. */
     static final String AVISO_SEM_PAGAMENTO =
             "ATENCAO: o PIX deste pedido NUNCA foi pago. Confira o recebimento com o cliente.";
@@ -234,6 +246,22 @@ public class CobradorDePixService {
             // cancelamento -- o caso para o qual ele foi escrito. Sem ela o estoque devolvido aqui
             // nunca sai outra vez, a comida sai, e um segundo cancelamento devolve em dobro.
             devolucao.registrarCancelamentoNoHistorico(p, anterior);
+            // OUTBOX (A2) -- ESTE PONTO FALTAVA, e e o cancelamento mais frequente do sistema.
+            //
+            // O `PedidoRecebido` deste pedido ja esta na fila e ja commitou. Sem o cancelamento o
+            // consumidor fica com uma venda que deixou de existir: o Estoque guardaria uma baixa
+            // que FOI DEVOLVIDA tres linhas acima, e o Financeiro, recebivel de venda que nunca
+            // houve. E acontece em TODO checkout abandonado -- nao e caso de borda.
+            //
+            // `cancelarVencidos` e chamado dentro de um `tx.execute` (ver expirarAbandonados), que
+            // e a transacao deste bloco: o evento acompanha o cancelamento.
+            //
+            // A `fase` vai no payload porque e ela que decide se o estoque volta ou vira perda
+            // (RN-EST-005 da documentacao do modulo de Estoque).
+            eventos.dePedido("PedidoCancelado", p, java.util.Map.of(
+                    "fase", anterior == null ? "" : anterior.name(),
+                    "solicitante", "SISTEMA",
+                    "motivo", p.motivoCancelamento == null ? "" : p.motivoCancelamento));
             cancelados.add(p);
         }
         return cancelados;
