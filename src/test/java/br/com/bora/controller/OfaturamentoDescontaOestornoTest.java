@@ -69,7 +69,7 @@ class OfaturamentoDescontaOestornoTest {
                 mock(br.com.bora.repository.ConfiguracaoLojaRepository.class),
                 mock(br.com.bora.service.marketplace.CredenciaisMarketplace.class),
                 mock(br.com.bora.service.LimpezaDeTestesService.class),
-                new br.com.bora.service.EnderecoDaLojaService(), "2");
+                new br.com.bora.service.EnderecoDaLojaService(), mock(br.com.bora.service.PublicadorDeEventos.class), "2");
 
         // O segundo argumento e o token do webhook; vazio desliga a conferencia, que nao e o assunto
         // desta classe (ela tem teste proprio no AsaasWebhookPayloadTest).

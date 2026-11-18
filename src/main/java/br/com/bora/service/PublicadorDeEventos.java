@@ -72,6 +72,35 @@ public class PublicadorDeEventos {
     private volatile boolean ligado = false;
     private volatile long lidaEm = 0L;
 
+    /** Acima disto, UMA gravacao sozinha vira WARN: ela entrou no tempo de uma venda de verdade. */
+    public static final long LENTA_MS = 250;
+
+    /** De quantas em quantas gravacoes sai a linha de resumo no log. */
+    static final long RESUMO_A_CADA = 20;
+
+    // ----------------------------------------------------------------- a medicao
+    //
+    // POR QUE A PROPRIA APLICACAO MEDE, e por que isto basta.
+    //
+    // O custo que o outbox acrescenta a uma venda e EXATAMENTE a duracao deste INSERT: com a chave
+    // desligada nao existe INSERT nenhum, entao o "antes" e zero por construcao. Nao e preciso
+    // cronometrar a requisicao inteira para saber o delta -- basta cronometrar o que foi
+    // acrescentado. Cronometrar a requisicao inteira seria ate PIOR: o tempo dela varia com rede,
+    // tamanho do carrinho e concorrencia, e o ruido engoliria um INSERT de poucos milissegundos.
+    //
+    // E tem de ser medido EM PRODUCAO. No ambiente de desenvolvimento o banco fica na mesma
+    // maquina e a diferenca cai no ruido; em producao o banco esta do outro lado da rede, e um
+    // INSERT a mais e uma ida e volta a mais.
+    //
+    // ATENCAO AO LER OS NUMEROS: eles sao DESTE processo, desde que ele subiu. Um deploy ou um
+    // restart zera a conta. "0 gravacoes" NAO quer dizer que a chave esta desligada -- quem diz
+    // isso e o campo `habilitado`.
+    private final java.util.concurrent.atomic.AtomicLong gravacoes = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong somaNanos = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong maiorNanos = new java.util.concurrent.atomic.AtomicLong();
+    private volatile OffsetDateTime primeiraGravacao;
+    private volatile OffsetDateTime ultimaGravacao;
+
     public PublicadorDeEventos(JdbcTemplate jdbc,
                                br.com.bora.repository.ConfigPlataformaRepository configs,
                                ObjectMapper json) {
@@ -98,6 +127,38 @@ public class PublicadorDeEventos {
     }
 
     /**
+     * Esquece o cache da chave, para a proxima venda ja ver o valor novo.
+     *
+     * <p>Quem acabou de gravar a chave pela tela esta DENTRO deste mesmo processo, entao pode
+     * invalidar o cache e o efeito e imediato. Os 30 segundos continuam valendo como rede de
+     * seguranca para quem escrever a chave direto no banco, sem passar pela tela.</p>
+     */
+    public void forcarReleituraDaChave() {
+        lidaEm = 0L;
+    }
+
+    /**
+     * O estado e o CUSTO da fila, para a tela. Nao grava nada.
+     *
+     * <p>Os contadores sao deste processo (ver o comentario em cima dos campos): depois de um
+     * deploy eles voltam a zero mesmo com a chave ligada. Quem responde "esta ligada?" e o campo
+     * {@code habilitado}, nunca a contagem.</p>
+     */
+    public Map<String, Object> estado() {
+        long n = gravacoes.get();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("habilitado", ligado());
+        m.put("gravacoes", n);
+        m.put("mediaMs", n == 0 ? null : arredondado(somaNanos.get() / n));
+        m.put("maiorMs", n == 0 ? null : arredondado(maiorNanos.get()));
+        m.put("primeiraGravacao", primeiraGravacao == null ? null : primeiraGravacao.toString());
+        m.put("ultimaGravacao", ultimaGravacao == null ? null : ultimaGravacao.toString());
+        m.put("versaoSchema", VERSAO_SCHEMA);
+        m.put("lentaAcimaDeMs", LENTA_MS);
+        return m;
+    }
+
+    /**
      * Grava um evento de pedido na transação corrente.
      *
      * <p><b>Chame de dentro da transação que gravou o fato</b> — se não houver transação aberta, o
@@ -118,6 +179,7 @@ public class PublicadorDeEventos {
                     + "A VENDA SEGUE, o evento foi descartado.", tipo, p.id, p.lojaId, e);
             return;
         }
+        long t0 = System.nanoTime();
         try {
             jdbc.update("""
                     insert into evento_outbox
@@ -135,6 +197,54 @@ public class PublicadorDeEventos {
                     + "da venda. DESLIGUE A CHAVE '{}' em config_plataforma.", tipo, p.id, CHAVE_LIGA, e);
             throw e;
         }
+        // Chega aqui so quando gravou: o tempo de uma falha nao entra na media de gravacao.
+        anotar(System.nanoTime() - t0, tipo, p);
+    }
+
+    /**
+     * Guarda quanto custou, e grita quando custa demais.
+     *
+     * <p>Nada aqui pode derrubar a venda: <b>medir nao pode ser o que quebra</b>. Por isso o corpo
+     * inteiro esta dentro de um catch que engole -- se a conta ou o log falharem, o pedido ja esta
+     * gravado, e e isso que importa.</p>
+     */
+    private void anotar(long nanos, String tipo, Pedido p) {
+        try {
+            long n = gravacoes.incrementAndGet();
+            somaNanos.addAndGet(nanos);
+            maiorNanos.accumulateAndGet(nanos, Math::max);
+            OffsetDateTime agora = OffsetDateTime.now();
+            ultimaGravacao = agora;
+
+            // A PRIMEIRA sai sempre no log: e o instante, com hora, em que a chave passou a valer de
+            // verdade. Sem esta linha, "ligamos a chave" seria afirmacao sem prova.
+            if (n == 1) {
+                primeiraGravacao = agora;
+                log.info("Outbox: PRIMEIRA gravacao deste processo -- evento {} do pedido {} (loja {}) "
+                        + "em {} ms. A chave '{}' esta LIGADA e a fila esta recebendo.",
+                        tipo, p.id, p.lojaId, emMs(nanos), CHAVE_LIGA);
+            }
+            if (nanos >= LENTA_MS * 1_000_000L) {
+                log.warn("Outbox: a gravacao do evento {} do pedido {} levou {} ms -- isto entrou no "
+                        + "tempo de uma venda de verdade. Se repetir, desligue a chave '{}'.",
+                        tipo, p.id, emMs(nanos), CHAVE_LIGA);
+            }
+            if (n % RESUMO_A_CADA == 0) {
+                log.info("Outbox: {} gravacoes, media {} ms, maior {} ms. E ESTE o custo que a fila "
+                        + "acrescenta a venda -- com a chave desligada ele e zero.",
+                        n, emMs(somaNanos.get() / n), emMs(maiorNanos.get()));
+            }
+        } catch (RuntimeException e) {
+            // De proposito: o pedido esta gravado. Perder a medicao e barato; perder a venda nao.
+        }
+    }
+
+    private static String emMs(long nanos) {
+        return String.format(java.util.Locale.ROOT, "%.1f", nanos / 1_000_000.0);
+    }
+
+    private static double arredondado(long nanos) {
+        return Math.round(nanos / 1_000_000.0 * 10.0) / 10.0;
     }
 
     /**

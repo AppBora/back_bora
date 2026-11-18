@@ -43,6 +43,8 @@ public class PlataformaController {
     private final String splitPadrao;
     private final br.com.bora.service.LimpezaDeTestesService limpeza;
     private final br.com.bora.service.EnderecoDaLojaService enderecos;
+    /** A fila de eventos do ERP: so para ler o estado e invalidar o cache da chave. */
+    private final br.com.bora.service.PublicadorDeEventos eventos;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
 
@@ -62,7 +64,9 @@ public class PlataformaController {
                                 br.com.bora.service.marketplace.CredenciaisMarketplace credenciais,
                                 br.com.bora.service.LimpezaDeTestesService limpeza,
                                 br.com.bora.service.EnderecoDaLojaService enderecos,
+                                br.com.bora.service.PublicadorDeEventos eventos,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
+        this.eventos = eventos;
         this.enderecos = enderecos;
         this.limpeza = limpeza;
         this.splitPadrao = splitPadrao;
@@ -983,6 +987,60 @@ public class PlataformaController {
         c.setAtualizadoEm(java.time.OffsetDateTime.now());
         configs.save(c);
         return Map.of("fiscal.habilitado", c.getValor());
+    }
+
+    // ============== A fila de eventos do ERP (outbox, entrega A2) ==============
+    //
+    // POR QUE ESTES DOIS ENDPOINTS EXISTEM, e o que estava errado sem eles.
+    //
+    // A v167 subiu com a gravacao da fila desligada por uma chave global, e com o VALOR dessa chave
+    // aparecendo na tela -- justamente para quem precisasse desligar as pressas poder ver em que
+    // estado ela estava. So que ver nao e poder: nao havia NENHUM caminho pela aplicacao para
+    // escrever a chave. O unico jeito de ligar ou desligar era escrever direto no banco de
+    // producao.
+    //
+    // Ou seja: o interruptor de emergencia de uma gravacao que fica no caminho de TODA VENDA so
+    // podia ser alcancado por quem tem acesso ao banco. Numa emergencia, isso e o mesmo que nao
+    // ter interruptor. Estes dois endpoints consertam isso -- e o GET existe para que a decisao de
+    // desligar seja tomada OLHANDO O CUSTO, nao no escuro.
+
+    /**
+     * O estado e o custo da fila de eventos. Nao muda nada.
+     *
+     * <p>{@code habilitado} e a unica resposta para "esta ligada?". A contagem e deste processo e
+     * zera em cada deploy, entao "0 gravacoes" nao quer dizer desligada.</p>
+     */
+    @GetMapping("/config/outbox")
+    public Map<String, Object> estadoDoOutbox() {
+        ctx.requireAdminBora();
+        return eventos.estado();
+    }
+
+    /**
+     * Liga/desliga a gravacao da fila de eventos. Corpo: <code>{ "habilitado": true|false }</code>.
+     *
+     * <p>Grava a chave e <b>invalida o cache na hora</b>: a proxima venda ja ve o valor novo, sem
+     * esperar os 30 segundos e sem deploy. Sai no log como AUDITORIA, porque muda o comportamento
+     * de todas as lojas de uma vez.</p>
+     */
+    @PutMapping("/config/outbox")
+    public Map<String, Object> definirOutbox(@RequestBody Map<String, Boolean> body) {
+        ctx.requireAdminBora();
+        boolean habilitado = body != null && Boolean.TRUE.equals(body.get("habilitado"));
+        br.com.bora.entity.ConfigPlataforma c = configs.findById("outbox.habilitado")
+                .orElseGet(() -> {
+                    br.com.bora.entity.ConfigPlataforma nova = new br.com.bora.entity.ConfigPlataforma();
+                    nova.setChave("outbox.habilitado");
+                    return nova;
+                });
+        c.setValor(String.valueOf(habilitado));
+        c.setAtualizadoEm(java.time.OffsetDateTime.now());
+        configs.save(c);
+        eventos.forcarReleituraDaChave();
+        log.warn("AUDITORIA plataforma: usuario {} deixou a fila de eventos do ERP (outbox) {}. "
+                + "Isto vale para TODAS as lojas e entra no caminho de toda venda.",
+                ctx.atual().userId(), habilitado ? "LIGADA" : "DESLIGADA");
+        return eventos.estado();
     }
 
     private Plano parsePlano(String plano) {
