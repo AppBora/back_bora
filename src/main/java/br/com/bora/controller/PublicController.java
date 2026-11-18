@@ -712,7 +712,32 @@ public class PublicController {
                 // que diz "nao tinha adicional" — diferente de nulo, que diz "nao sei".
                 item.setComplementos(br.com.bora.service.ComplementosDoItem.escrever(escolha.escolhidos()));
                 item.setQuantidade(qtd);
-                BigDecimal unit = (prod.preco == null ? BigDecimal.ZERO : prod.preco).add(extra);
+                // SEM PRECO NAO VENDE. Era `prod.preco == null ? BigDecimal.ZERO : prod.preco`.
+                //
+                // CUIDADO AO LER ISTO: a guarda do total, 70 linhas abaixo
+                // (`if (total <= 0) throw "Pedido sem valor"`), ja pegava o carrinho que tinha SO o
+                // item sem preco. O buraco era o carrinho MISTO, e e pior do que o pedido ser
+                // recusado: com um item sem preco junto de um item pago, o total fica positivo, a
+                // guarda do total deixa passar, e o item sem preco vai embora a R$ 0,00 DENTRO de um
+                // pedido de aparencia normal -- e o PedidoRecebido sai com esse total para o modulo.
+                // O lojista nao tem como notar: ele ve um pedido que fechou.
+                //
+                // MEDIDO em 18/11/2026 (AvendaDoCardapioPROPRIOemiteEventoTest): 2 acais sem preco
+                // + 1 refrigerante de R$ 8,00 gravavam o pedido com total R$ 8,00, sem erro nenhum.
+                // Os dois acais de R$ 20,00 sairam de graca.
+                //
+                // ZERO gravado no cadastro continua valendo (e o "Monte Seu Acai" da Zira, que cobra
+                // pelo complemento); o que nao vale e NULO, que quer dizer "ninguem disse".
+                //
+                // A mensagem aqui e para o CLIENTE, nao para o lojista: ele nao tem como "digitar o
+                // preco", e nao e culpa dele. A guarda do total dizia so "Pedido sem valor", que e
+                // verdadeiro e inutil -- o cliente nao sabia o que tirar do carrinho.
+                if (prod.preco == null) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "O item \"" + prod.nome + "\" está sem preço no cardápio. "
+                                    + "Tire ele do carrinho e avise a loja, por favor.");
+                }
+                BigDecimal unit = prod.preco.add(extra);
                 item.setPrecoUnitario(unit);
                 // Mesma regra do balcao: com ficha tecnica, consome os insumos e usa o custo da ficha;
                 // sem ficha, baixa o estoque do proprio produto. O cardapio nao fazia nem um nem outro,

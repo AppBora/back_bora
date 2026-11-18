@@ -73,6 +73,8 @@ class AvendaDoCardapioPROPRIOemiteEventoTest {
 
     private Produto acai;
     private Loja loja;
+    /** Promovido a campo para o teste do "Monte Seu Acai" trocar o acrescimo do complemento. */
+    private ComplementoService complementosDoCardapio;
 
     @BeforeEach
     void montar() {
@@ -87,9 +89,10 @@ class AvendaDoCardapioPROPRIOemiteEventoTest {
         integracoes = mock(IntegracaoCanalRepository.class);
         publicador = mock(PublicadorDeEventos.class);
 
-        ComplementoService complementos = mock(ComplementoService.class);
-        when(complementos.aplicar(anyLong(), any(), any()))
+        complementosDoCardapio = mock(ComplementoService.class);
+        when(complementosDoCardapio.aplicar(anyLong(), any(), any()))
                 .thenReturn(new ComplementoService.Escolha(BigDecimal.ZERO, List.of()));
+        ComplementoService complementos = complementosDoCardapio;
         OperacaoService operacao = mock(OperacaoService.class);
         when(operacao.abertaAgora(anyLong())).thenReturn(true);
 
@@ -386,5 +389,92 @@ class AvendaDoCardapioPROPRIOemiteEventoTest {
                 "a FASE do cancelamento decide se o estoque volta ou vira perda (RN-EST-005)");
         assertEquals("SISTEMA", e.get("solicitante"),
                 "nao foi o cliente nem o lojista que cancelou: foi o Asaas nao responder");
+    }
+
+    // ================================================== preco: sem preco nao vende (18/11/2026)
+
+    /** Um segundo produto, com preço de verdade, para montar carrinho misto. */
+    private Produto refrigerante(String preco) {
+        Produto r = new Produto();
+        r.id = 11L;
+        r.lojaId = LOJA;
+        r.nome = "Refrigerante";
+        r.preco = new BigDecimal(preco);
+        r.ativo = true;
+        when(produtos.findById(11L)).thenReturn(Optional.of(r));
+        return r;
+    }
+
+    private static Map<String, Object> umItem(int produtoId, int quantidade) {
+        return Map.of("produtoId", produtoId, "quantidade", quantidade);
+    }
+
+    /**
+     * O CASO QUE REALMENTE PERDIA DINHEIRO: carrinho MISTO.
+     *
+     * <h3>Eu diagnostiquei isto errado primeiro, e o teste me corrigiu</h3>
+     * <p>Eu disse que produto sem preço "era vendido por R$ 0,00 no cardápio próprio". Não era —
+     * não sozinho. Existe uma guarda em {@code PublicController} desde antes:
+     * {@code if (total <= 0) throw "Pedido sem valor"}. Um carrinho com <b>só</b> o item sem preço
+     * dava total zero e já era recusado.</p>
+     *
+     * <p>Mas a guarda olha o <b>TOTAL</b>, não o item. Então o buraco de verdade é este, e é pior do
+     * que o pedido ser recusado: com um item sem preço <b>junto</b> de um item pago, o total fica
+     * positivo, a guarda deixa passar, e o item sem preço vai embora a R$ 0,00 <b>dentro de um
+     * pedido de aparência normal</b>. O lojista não tem como notar: ele vê um pedido que fechou.</p>
+     *
+     * <p>Medido: com {@code (prod.preco == null ? ZERO : prod.preco)} de volta, este teste grava o
+     * pedido com total R$ 8,00 — os 2 açaís de graça e o refrigerante pago.</p>
+     */
+    @Test
+    void oITEMsemPRECOnaoVIAJAdeGRACAdentroDEumPEDIDOpago() {
+        acai.preco = null;
+        refrigerante("8.00");
+
+        assertThrows(ResponseStatusException.class, () -> controller.pedirOnline(LOJA,
+                corpo("itens", List.of(umItem(10, 2), umItem(11, 1))), null, requisicao()));
+
+        verify(publicador, never()).dePedido(eq("PedidoRecebido"), any(Pedido.class), anyMap());
+    }
+
+    /**
+     * O item sem preço sozinho também é recusado — e agora com a mensagem que diz QUAL item.
+     *
+     * <p>Antes a recusa vinha da guarda do total, com o texto "Pedido sem valor": verdadeiro e
+     * inútil, porque o cliente não tem como saber o que tirar do carrinho.</p>
+     */
+    @Test
+    void aMENSAGEMdoSEMprecoDIZqualITEMeEHparaOCLIENTE() {
+        acai.preco = null;
+
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> controller.pedirOnline(LOJA, corpo(), null, requisicao()));
+
+        assertTrue(e.getReason().contains("Açaí 500ml"), "o cliente precisa saber qual item tirar");
+        assertFalse(e.getReason().toLowerCase().contains("digite"),
+                "o cliente nao cadastra preco, a mensagem nao e para ele: " + e.getReason());
+    }
+
+    /**
+     * O ZERO CONTINUA VENDENDO NO CARDÁPIO PRÓPRIO — é o "Monte Seu Açaí" da Zirá.
+     *
+     * <p>Medido no cardápio público em 18/11/2026: o item está a 0,00 nas lojas 18, 19 e 20, e o
+     * grupo "Recipientes" tem {@code minimo: 1} com opções de R$ 12,90 a R$ 50,00. O preço sai do
+     * complemento, que é o {@code extra} somado no unitário aqui. Se alguém endurecer a guarda para
+     * {@code preco.signum() <= 0}, este teste reprova antes de chegar ao ar.</p>
+     */
+    @Test
+    void oZEROcomCOMPLEMENTOcontinuaVENDENDOnoCARDAPIO() {
+        acai.nome = "Monte Seu Açaí";
+        acai.preco = BigDecimal.ZERO;
+        // "Copo 500ml Puro", R$ 16,90, do grupo "Recipientes" (minimo 1).
+        when(complementosDoCardapio.aplicar(anyLong(), any(), any()))
+                .thenReturn(new ComplementoService.Escolha(new BigDecimal("16.90"), List.of()));
+
+        controller.pedirOnline(LOJA, corpo(), null, requisicao());
+
+        Instantaneo i = quandoEmitiu("PedidoRecebido");
+        assertEquals(0, new BigDecimal("33.80").compareTo(i.valorTotal()),
+                "2 x (0,00 do item + 16,90 do recipiente)");
     }
 }

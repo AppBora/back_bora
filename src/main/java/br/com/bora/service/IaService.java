@@ -223,22 +223,52 @@ public class IaService {
         // Item 9.5: a transacao comeca AQUI, depois da IA ter respondido. Antes ela abracava a
         // chamada de 64 s e segurava uma conexao do pool o tempo todo.
         final List<Map<String, Object>> lista = itens;
+        // O ITEM SEM PRECO LEGIVEL NAO ENTRA NO CARDAPIO -- E E RELATADO.
+        //
+        // Aqui era `try { new BigDecimal(String.valueOf(it.get("preco"))) } catch { p.preco = ZERO; }`
+        // seguido de save(). O prompt acima pede "ponto decimal", mas pedir nao e garantir: o que
+        // esta IMPRESSO no cardapio que o lojista fotografa e virgula. Esta medido em
+        // OprecoQUEaIAnaoLEUnaoViraZEROTest que "24,90", "R$ 24,90" e preco ausente TODOS estouram o
+        // BigDecimal -- logo todos viravam R$ 0,00 publicados no cardapio, somados em
+        // `produtosCriados` como se tivessem dado certo. O lojista descobria pelo caixa.
+        //
+        // Virgula agora e LIDA (PrecoDoCardapio). O que sobra -- "a partir de 24,90", "sob consulta",
+        // preco ausente -- fica de fora e volta pelo nome em `semPreco`, para a tela dizer quais
+        // linhas precisam de preco digitado a mao. Chutar o menor numero de "24,90 / 34,90" seria o
+        // mesmo defeito com cara de conserto: publicaria o cardapio mais barato que o papel.
+        final java.util.List<String> semPreco = new java.util.ArrayList<>();
         int criados = tx.execute(st -> {
             int n = 0;
             for (Map<String, Object> it : lista) {
                 String nome = String.valueOf(it.get("nome"));
                 if (nome == null || nome.isBlank() || nome.length() > 120) continue;
+                BigDecimal preco = PrecoDoCardapio.lerOuNulo(it.get("preco"));
+                if (preco == null || preco.signum() < 0) {
+                    if (semPreco.size() < 50) semPreco.add(nome.trim());
+                    continue;
+                }
                 Produto p = new Produto();
                 p.lojaId = lojaId;
                 p.nome = nome.trim();
                 p.categoria = it.get("categoria") == null ? "Outros" : String.valueOf(it.get("categoria"));
-                try { p.preco = new BigDecimal(String.valueOf(it.get("preco"))); } catch (Exception e) { p.preco = BigDecimal.ZERO; }
+                p.preco = preco;
                 produtos.save(p);
                 n++;
             }
             return n;
         });
-        return Map.of("produtosCriados", criados);
+        java.util.Map<String, Object> r = new java.util.LinkedHashMap<>();
+        r.put("produtosCriados", criados);
+        r.put("semPreco", semPreco);
+        if (!semPreco.isEmpty()) {
+            r.put("aviso", semPreco.size() == 1
+                    ? "1 item não entrou porque não deu para ler o preço: " + semPreco.get(0)
+                    : semPreco.size() + " itens não entraram porque não deu para ler o preço. "
+                            + "Cadastre-os à mão: " + String.join(", ", semPreco));
+            log.warn("IA importou cardapio da loja {}: {} criados, {} sem preco legivel {}",
+                    lojaId, criados, semPreco.size(), semPreco);
+        }
+        return r;
     }
 
     // ---------- (3) GERENTE VIRTUAL ----------

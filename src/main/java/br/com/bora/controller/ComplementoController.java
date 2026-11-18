@@ -79,7 +79,33 @@ public class ComplementoController {
                         ci.lojaId = lojaId;
                         ci.grupoId = cg.id;
                         ci.nome = ni.trim();
-                        try { ci.preco = new BigDecimal(str(m.get("preco"))); } catch (Exception e) { ci.preco = BigDecimal.ZERO; }
+                        // VAZIO AQUI E ZERO DE VERDADE, e isso tem de continuar.
+                        //
+                        // O campo do painel e um `+R$` opcional: deixar em branco e como o lojista
+                        // diz "esta opcao nao custa nada" ("sem cebola"), e a tela manda "" mesmo.
+                        // Entao ausente/vazio continua virando ZERO de proposito.
+                        //
+                        // O que muda: antes era um `catch (Exception) { ci.preco = ZERO; }` que
+                        // engolia TAMBEM o valor preenchido e ilegivel. Um preco que o lojista
+                        // digitou e que nao da para ler nao e "de graca" -- e um erro que ele precisa
+                        // ver, senao a opcao vai para o cardapio publico a R$ 0,00.
+                        //
+                        // Medido em 18/11/2026: o `<input type="number">` do painel CONVERTE a
+                        // virgula sozinho -- digitar "12,90" chega aqui como "12.90", com
+                        // badInput=false. Ou seja, a virgula nunca foi a causa; quem chega ilegivel
+                        // aqui e chamada direta na API ou colagem de texto.
+                        String precoBruto = str(m.get("preco"));
+                        if (precoBruto == null || precoBruto.isBlank()) {
+                            ci.preco = BigDecimal.ZERO;
+                        } else {
+                            BigDecimal lido = br.com.bora.service.PrecoDoCardapio.lerOuNulo(precoBruto);
+                            if (lido == null || lido.signum() < 0) {
+                                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "O preço \"" + precoBruto + "\" do adicional \"" + ni.trim()
+                                                + "\" não é um valor válido. Deixe em branco se for de graça.");
+                            }
+                            ci.preco = lido;
+                        }
                         // Insumo que o adicional consome (V55, item 2.6). Os dois campos andam
                         // juntos: insumo sem quantidade nao baixa nada, e quantidade sem insumo nao
                         // tem o que baixar -- nesses casos fica nulo nos dois, que e o padrao

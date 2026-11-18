@@ -56,6 +56,10 @@ public class ProdutoService {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         validarNome(p.nome);
         validarCategoria(p.categoria);
+        // Nem criar nem atualizar conferiam o PRECO. Produto sem preco era gravado e os dois
+        // caminhos de venda faziam `preco == null ? ZERO` -- ou seja, vendiam de graca.
+        // ZERO continua passando de proposito: ver PrecoDoCardapio.
+        PrecoDoCardapio.exigirValido(p.preco, p.nome);
         p.lojaId = ctx.lojaId();
         p.id = null;
         p.codigoExterno = codigoLimpo(p.codigoExterno);
@@ -67,6 +71,7 @@ public class ProdutoService {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         validarNome(dados.nome);
         validarCategoria(dados.categoria);
+        PrecoDoCardapio.exigirValido(dados.preco, dados.nome);
         Produto p = buscar(id);
         p.nome = dados.nome;
         p.categoria = dados.categoria;

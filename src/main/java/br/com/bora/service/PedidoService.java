@@ -282,7 +282,12 @@ public class PedidoService {
             int qtd = i.quantidade() == null ? 1 : i.quantidade();
             // mesma regra do cardápio público: valida min/máx do grupo e soma o adicional no unitário
             ComplementoService.Escolha escolha = complementos.aplicar(lojaId, prod, i.complementos());
-            BigDecimal preco = (prod.preco != null ? prod.preco : BigDecimal.ZERO).add(escolha.acrescimo());
+            // SEM PRECO NAO VENDE: era `prod.preco != null ? prod.preco : ZERO`, e o pedido do
+            // painel/PDV saia cobrando R$ 0,00 pelo item. Aqui quem esta na tela e o LOJISTA, entao
+            // a mensagem pode mandar ele corrigir o cadastro. ZERO continua passando: ver
+            // PrecoDoCardapio.
+            PrecoDoCardapio.exigirValido(prod.preco, prod.nome);
+            BigDecimal preco = prod.preco.add(escolha.acrescimo());
             BigDecimal subtotal = preco.multiply(BigDecimal.valueOf(qtd));
             total = total.add(subtotal);
 

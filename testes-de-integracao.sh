@@ -61,8 +61,19 @@ if [ -n "$DONO" ] && [ "$DONO" != "$CONTAINER" ]; then
   echo "Espere ele terminar, ou derrube com: docker rm -f $DONO" >&2
   exit 1
 fi
-if [ -z "$DONO" ] && (netstat -ano 2>/dev/null || ss -ltn 2>/dev/null) | grep -q ":$PORTA "; then
-  echo "ABORTADO: algo fora do docker esta escutando na porta $PORTA." >&2
+# SO "ESCUTANDO" CONTA. Antes era `grep ":$PORTA "` na saida inteira do netstat, e isso casava
+# tambem as conexoes de SAIDA que a rodada anterior deixou em TIME_WAIT -- dezenas delas, do proprio
+# Maven falando com o container. Resultado: logo depois de uma rodada bem-sucedida o script RECUSAVA
+# rodar de novo por ~2 minutos, dizendo que "algo fora do docker esta escutando". Nao estava: nao
+# havia nenhuma linha LISTENING. Medido em 18/11/2026.
+#
+# Um script de teste que recusa rodar sem motivo e um script que as pessoas param de rodar -- e estes
+# 230 testes ja nao rodam em nenhum lugar automaticamente.
+if [ -z "$DONO" ] && (netstat -ano 2>/dev/null | grep -aiE "^ *TCP +[0-9.]+:$PORTA +.*LISTENING" \
+                      || ss -ltn 2>/dev/null | grep -qE ":$PORTA ") >/dev/null 2>&1; then
+  echo "ABORTADO: algo fora do docker esta ESCUTANDO na porta $PORTA." >&2
+  echo "Quem e:" >&2
+  (netstat -ano 2>/dev/null | grep -aiE ":$PORTA +.*LISTENING" || ss -ltnp 2>/dev/null | grep ":$PORTA ") >&2
   exit 1
 fi
 echo "ok"
@@ -109,15 +120,21 @@ trap limpar EXIT
 # limpo e que o mapeamento JPA bate com o schema que elas produzem. E a unica coisa no projeto que
 # prova isso antes de a migracao chegar em producao.
 dizer "4/5 rodando os testes de integracao ($FILTRO)"
+# APAGA OS RELATORIOS *IT ANTES DE RODAR, para o resumo do passo 5 contar SO esta rodada.
+# Antes o passo 5 filtrava por `-newermt '-10 minutes'`, que e um chute, nao um fato -- e o chute
+# errou: uma rodada completa de 8 minutos atras ainda caia na janela, e `--so-uma` (6 testes, 1
+# classe) reportou "26 classes, 236 testes". Numero inflado num relatorio de teste e pior que numero
+# nenhum, que e o que o comentario do passo 5 ja dizia e o codigo nao cumpria. Medido em 18/11/2026.
+rm -f target/surefire-reports/*IT.txt target/surefire-reports/*IT.xml 2>/dev/null || true
 mvn -o test -Dtest="$FILTRO" -DfailIfNoTests=false
 CODIGO=$?
 
 # --------------------------------------------------------------------------- 5
 dizer "5/5 o resultado"
 if [ -d target/surefire-reports ]; then
-  # Conta so os relatorios desta rodada: relatorio velho de corrida anterior inflaria o numero, e
-  # numero inflado num relatorio de teste e pior que numero nenhum.
-  find target/surefire-reports -name "*IT.txt" -newermt '-10 minutes' -exec grep -h "^Tests run" {} \; \
+  # Conta so os relatorios desta rodada. Quem garante isso e o `rm -f` do passo 4, nao uma janela
+  # de tempo: o diretorio comeca vazio de *IT, logo tudo o que esta aqui saiu desta rodada.
+  find target/surefire-reports -name "*IT.txt" -exec grep -h "^Tests run" {} \; \
     | awk -F'[:,]' '{t+=$2; f+=$4; e+=$6; s+=$8; n++}
         END { if (n) printf "   %d classes, %d testes, %d falhas, %d erros, %d pulados\n", n, t, f, e, s;
               else print "   NENHUM relatorio desta rodada -- os testes nao rodaram." }'
