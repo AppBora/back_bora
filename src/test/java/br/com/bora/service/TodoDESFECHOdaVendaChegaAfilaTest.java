@@ -264,88 +264,157 @@ class TodoDESFECHOdaVendaChegaAfilaTest {
     // =========================================================== 3) a trava
 
     /**
+     * Arquivos que escrevem {@code Pedido.status} e NÃO precisam emitir, com o motivo de cada um.
+     *
+     * <p>Lista curta de propósito: cada linha aqui é uma permissão, e permissão sem motivo escrito
+     * é como o defeito volta. Mora num campo só, lido pelos dois testes abaixo.</p>
+     */
+    private static final Map<String, String> LIBERADOS = Map.of(
+            "EstornoDaVendaService.java",
+            "devolve estoque/cashback e registra historico; quem muda o status e chama este "
+                    + "servico e que emite, senao sairiam dois eventos para um cancelamento");
+
+    /**
      * A TRAVA PARA A PRÓXIMA VEZ: quem escreve {@code Pedido.status} tem de emitir evento.
      *
      * <h3>Por que um teste que lê código, e não um que roda um caminho</h3>
      * <p>Os dois buracos acima atravessaram <b>1503 testes</b> sem uma reclamação, porque teste de
      * caminho só cobre o caminho que alguém lembrou de escrever. Oito ganchos conferidos à mão e
-     * dois esquecidos é o resultado normal de conferir à mão — o nono vai ser esquecido do mesmo
+     * dois esquecidos é o resultado normal de conferir à mão — o nono seria esquecido do mesmo
      * jeito.</p>
      *
-     * <p>Então este teste não pergunta "o caminho X emite?". Ele varre o código de produção e
-     * pergunta: <b>existe algum lugar que escreve {@code .status =} num Pedido e cujo arquivo não
-     * conhece o publicador de eventos?</b> Um método novo de mudança de status nasce reprovado, e
-     * quem escrever lê aqui o motivo.</p>
+     * <h3>A PRIMEIRA VERSÃO DESTE TESTE NÃO PEGAVA O DEFEITO QUE ELE EXISTE PARA PEGAR</h3>
+     * <p>Ela casava {@code .status = StatusPedido.}, e os dois caminhos esquecidos escrevem
+     * {@code p.status = novo} e {@code p.status = status} — atribuição a partir de <b>variável</b>.
+     * Ou seja: a trava teria aprovado o {@code avancarPorMarketplace} que motivou escrevê-la.
+     * Achado pela revisão técnica no mesmo dia.</p>
+     *
+     * <h3>Como a detecção funciona agora</h3>
+     * <ol>
+     *   <li><b>Esvazia os literais de texto</b> da linha. Isso descarta de uma vez as consultas
+     *       JPQL dos repositórios, que têm {@code p.status = :novo} dentro de aspas.</li>
+     *   <li>Procura <b>atribuição</b> a {@code .status} (um {@code =} que não é {@code ==}).</li>
+     *   <li><b>Confere o TIPO:</b> só conta quando o lado direito é {@code StatusPedido.ALGO} ou um
+     *       nome declarado <b>neste mesmo arquivo</b> como {@code StatusPedido}. Sem isso o teste
+     *       acusaria os 15 lugares que escrevem {@code IntegracaoCanal.status}, que é um
+     *       {@code String} de integração e não tem nada a ver com venda.</li>
+     * </ol>
+     *
+     * <p>Medido: a regra encontra os 8 pontos que escrevem {@code Pedido.status} — incluindo os dois
+     * por variável — e ignora os 15 de integração.</p>
      *
      * <p>O que esta varredura NÃO prova: que o evento está no ponto certo <i>dentro</i> do método,
-     * nem na transação certa. Isso continua sendo trabalho dos testes de caminho acima. O que ela
-     * garante é que nenhum arquivo passe a mexer em status <b>sem nem saber</b> que a fila
-     * existe.</p>
+     * nem na transação certa, nem que o método específico emite (o arquivo pode conhecer a fila por
+     * outro caminho). Isso continua sendo trabalho dos testes de caminho acima. O que ela garante é
+     * que nenhum arquivo passe a mexer em status <b>sem nem saber</b> que a fila existe.</p>
      */
     @Test
     void nenhumArquivoMEXEemSTATUSsemCONHECERaFILA() throws Exception {
         java.nio.file.Path raiz = java.nio.file.Path.of("src/main/java/br/com/bora");
         assertTrue(java.nio.file.Files.isDirectory(raiz), "nao achei o codigo de producao em " + raiz);
 
-        // Arquivos que escrevem status mas NAO precisam emitir, com o motivo de cada um. Lista
-        // curta de propósito: cada linha aqui é uma permissão, e permissão sem motivo escrito é
-        // como o defeito volta.
-        Map<String, String> liberados = Map.of(
-                "EstornoDaVendaService.java",
-                "devolve estoque/cashback e registra historico; quem muda o status e chama este "
-                        + "servico e que emite, senao sairiam dois eventos para um cancelamento");
-
         var faltando = new java.util.TreeMap<String, Integer>();
+        var conferidos = new java.util.TreeMap<String, Integer>();
         try (var caminhos = java.nio.file.Files.walk(raiz)) {
             for (java.nio.file.Path f : caminhos.filter(x -> x.toString().endsWith(".java")).toList()) {
                 String nome = f.getFileName().toString();
-                if (liberados.containsKey(nome)) continue;
                 String fonte = java.nio.file.Files.readString(f);
-
-                // `.status = StatusPedido.X` — a escrita, nao a leitura/comparacao.
-                int escritas = 0;
-                for (String linha : fonte.split("\n")) {
-                    String l = linha.trim();
-                    if (l.startsWith("//") || l.startsWith("*")) continue;
-                    if (l.matches(".*\\.status\\s*=\\s*StatusPedido\\..*")) escritas++;
-                }
+                int escritas = escritasDeStatusDePedido(fonte);
                 if (escritas == 0) continue;
+                conferidos.put(nome, escritas);
+                if (LIBERADOS.containsKey(nome)) continue;
                 if (fonte.contains("PublicadorDeEventos") || fonte.contains("eventos.dePedido")) continue;
                 faltando.put(nome, escritas);
             }
         }
+
+        // A PREMISSA, antes do veredito: se a deteccao parar de achar nada, o teste fica verde
+        // medindo NADA -- e verde por nao medir e pior que vermelho.
+        assertFalse(conferidos.isEmpty(),
+                "a deteccao nao achou NENHUMA escrita de Pedido.status no codigo de producao. "
+                        + "Isso nao quer dizer que esta tudo bem: quer dizer que este teste parou de medir.");
 
         assertTrue(faltando.isEmpty(),
                 "Estes arquivos escrevem Pedido.status e NAO conhecem a fila de eventos do ERP.\n"
                         + "Um desfecho de venda que nao emite deixa o modulo com uma venda que mudou\n"
                         + "sem ele saber -- foi assim com o PIX abandonado e com o avanco do\n"
                         + "marketplace, e os 1503 testes nao reclamaram.\n"
-                        + "Se o arquivo REALMENTE nao deve emitir, acrescente-o ao mapa `liberados`\n"
+                        + "Se o arquivo REALMENTE nao deve emitir, acrescente-o ao mapa LIBERADOS\n"
                         + "deste teste COM O MOTIVO escrito.\n"
-                        + "  " + faltando);
+                        + "  " + faltando + "\n"
+                        + "(arquivos que a varredura examinou: " + conferidos + ")");
     }
 
     /**
-     * A lista de liberados não pode crescer no escuro: todo liberado tem motivo escrito, e o
-     * arquivo tem de existir. Liberado apontando para arquivo que já foi renomeado é uma permissão
-     * aberta para um nome que ninguém mais usa.
+     * Quantas vezes este fonte ATRIBUI um {@code StatusPedido} a um campo {@code .status}.
+     *
+     * <p>Ver o javadoc do teste acima para o porquê de cada passo. Em resumo: esvazia literais
+     * (mata o JPQL), acha atribuição, e confere que o lado direito é de fato um
+     * {@code StatusPedido} — por constante ou por nome declarado neste arquivo.</p>
+     */
+    private static int escritasDeStatusDePedido(String fonte) {
+        java.util.Set<String> nomesDeStatus = new java.util.HashSet<>();
+        var declaracao = java.util.regex.Pattern.compile("\\bStatusPedido\\s+(\\w+)").matcher(fonte);
+        while (declaracao.find()) nomesDeStatus.add(declaracao.group(1));
+
+        var atribuicao = java.util.regex.Pattern.compile("\\.status\\s*=\\s*([^=\\s;][^;]*)");
+        int quantas = 0;
+        for (String linha : fonte.split("\n")) {
+            String t = linha.strip();
+            if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) continue;
+            var m = atribuicao.matcher(linha.replaceAll("\"[^\"]*\"", "\"\""));
+            if (!m.find()) continue;
+            String direita = m.group(1).strip();
+            // `split` devolve array VAZIO quando o texto comeca com separador (ex.: `(` numa
+            // chamada), e o `[0]` ali estourava. Teste que estoura nao mede nada: pega o prefixo
+            // sem dividir.
+            String primeiro = direita.replaceAll("^([\\w.]*).*$", "$1");
+            if (direita.startsWith("StatusPedido.") || nomesDeStatus.contains(primeiro)) quantas++;
+        }
+        return quantas;
+    }
+
+    /**
+     * A DETECÇÃO AINDA PEGA ATRIBUIÇÃO POR VARIÁVEL. É a regressão que me interessa travar: foi
+     * exatamente isso que a primeira versão deste teste deixou passar.
+     */
+    @Test
+    void aDETECCAOpegaATRIBUICAOporVARIAVEL_naoSOporCONSTANTE() {
+        String porConstante = "class X { void f(Pedido p) { p.status = StatusPedido.CANCELADO; } }";
+        String porVariavel = "class X { void f(Pedido p, StatusPedido novo) { p.status = novo; } }";
+        String comparacao = "class X { boolean f(Pedido p) { return p.status == StatusPedido.PRONTO; } }";
+        String dentroDeJpql = "interface R { @Query(\"update Pedido p set p.status = :novo\") int u(); }";
+        String outroStatus = "class X { void f(IntegracaoCanal i) { i.status = \"CONECTADO\"; } }";
+
+        assertEquals(1, escritasDeStatusDePedido(porConstante));
+        assertEquals(1, escritasDeStatusDePedido(porVariavel),
+                "atribuicao por variavel escapou: era o defeito do avancarPorMarketplace");
+        assertEquals(0, escritasDeStatusDePedido(comparacao), "comparacao nao e escrita");
+        assertEquals(0, escritasDeStatusDePedido(dentroDeJpql), "JPQL dentro de literal nao e escrita Java");
+        assertEquals(0, escritasDeStatusDePedido(outroStatus),
+                "status de integracao e um String e nao tem nada a ver com venda");
+    }
+
+    /**
+     * Todo liberado tem motivo escrito e aponta para arquivo que existe.
+     *
+     * <p>Liberado apontando para arquivo renomeado é uma permissão aberta para um nome que ninguém
+     * mais usa — e ela não apareceria em nenhum lugar, porque a varredura simplesmente nunca
+     * encontraria aquele nome.</p>
+     *
+     * <p>Os dois testes leem o <b>mesmo</b> campo {@link #LIBERADOS}. Na primeira versão deste
+     * arquivo o mapa estava repetido dentro de cada teste, e o javadoc afirmava que isso obrigava
+     * quem acrescentasse um liberado a escrever o motivo. Não obrigava: eram duas listas
+     * independentes, e o segundo teste nunca lia a do primeiro. Corrigido no mesmo dia.</p>
      */
     @Test
     void todoLIBERADOtemMOTIVOeEXISTE() throws Exception {
-        Method m = getClass().getDeclaredMethod("nenhumArquivoMEXEemSTATUSsemCONHECERaFILA");
-        assertFalse(Modifier.isPrivate(m.getModifiers()), "o teste da varredura tem de rodar");
-
-        // A mesma lista do teste acima, repetida aqui de proposito: se alguem acrescentar um
-        // liberado la e nao aqui, este teste reprova e obriga a escrever o motivo.
-        Map<String, String> liberados = Map.of(
-                "EstornoDaVendaService.java",
-                "devolve estoque/cashback e registra historico; quem muda o status e chama este "
-                        + "servico e que emite, senao sairiam dois eventos para um cancelamento");
+        assertFalse(LIBERADOS.isEmpty(), "sem liberado nenhum este teste nao mede nada");
 
         try (var caminhos = java.nio.file.Files.walk(java.nio.file.Path.of("src/main/java/br/com/bora"))) {
             var existentes = caminhos.filter(x -> x.toString().endsWith(".java"))
                     .map(x -> x.getFileName().toString()).toList();
-            liberados.forEach((nome, motivo) -> {
+            LIBERADOS.forEach((nome, motivo) -> {
                 assertTrue(existentes.contains(nome),
                         "liberado aponta para arquivo que nao existe mais: " + nome);
                 assertTrue(motivo != null && motivo.length() > 30,

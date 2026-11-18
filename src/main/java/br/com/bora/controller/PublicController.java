@@ -1095,11 +1095,33 @@ public class PublicController {
             doPagamento.ifPresent(p -> {
                 boolean primeiraConfirmacao = p.pagoEm == null;
                 boolean jaCancelado = p.status == StatusPedido.CANCELADO;
+
+                // REABRIR SO NA PRIMEIRA CONFIRMACAO. (Achado pelo QA em 18/11/2026, e medido:
+                // estoque 100 -> 97 num pedido que o lojista havia cancelado e reembolsado.)
+                //
+                // A reabertura foi escrita para UM caso: o PIX que chega DEPOIS do cancelamento
+                // automatico por falta de pagamento. Ali o cliente pagou, esta esperando comida, e
+                // esconder a venda e pior que qualquer problema de estoque.
+                //
+                // Mas a guarda era so `jaCancelado`, e isso cobre um segundo caso que e o oposto
+                // dele: o pedido foi pago, o LOJISTA cancelou de proposito (sem ingrediente, cliente
+                // desistiu) e devolveu o dinheiro. O Asaas reenvia o mesmo aviso sempre que nao
+                // recebe 200 -- e o reenvio ressuscitava esse pedido: voltava para a cozinha, baixava
+                // estoque de novo, e o cliente ficava com o cashback devolvido E o pedido ativo.
+                //
+                // `pagoEm` e o que separa os dois: na primeira confirmacao ele esta nulo. Num
+                // reenvio, ja esta preenchido -- e um pedido cancelado com `pagoEm` preenchido e,
+                // por definicao, um cancelamento feito DEPOIS do pagamento, ou seja, decisao de
+                // alguem. Decisao de gente nao se desfaz por reenvio de webhook.
+                boolean reabrir = jaCancelado && primeiraConfirmacao;
+                // O TEXTO continua olhando `jaCancelado`, e nao `reabrir`, de proposito: ele conta
+                // um FATO (o dinheiro entrou depois do cancelamento), que vale igual nos dois casos.
+                // No reenvio o texto ja esta assim e reescrever nao muda nada.
                 p.formaPagamento = jaCancelado ? "PIX (pago APOS o cancelamento)" : "PIX (pago)";
                 p.aguardandoPagamento = false;
                 p.pagoEm = OffsetDateTime.now();
                 p.atualizadoEm = OffsetDateTime.now();
-                if (jaCancelado) {
+                if (reabrir) {
                     // O PEDIDO VOLTA A VALER, e isto e uma mudanca de comportamento deliberada
                     // (21/10/2026, varredura 2.7).
                     //
@@ -1135,7 +1157,7 @@ public class PublicController {
                 pedidos.save(p);
                 // O Asaas reenvia o mesmo aviso quando nao recebe 200: sem esta guarda, o cliente
                 // ganharia cashback de novo a cada reenvio.
-                if (jaCancelado) {
+                if (reabrir) {
                     // O cancelamento DEVOLVEU o estoque. O pedido voltou a valer, entao a baixa tem
                     // que acontecer de novo -- senao a comida sai e o estoque segue contando. E o
                     // espelho exato do reconsumo do cashback logo abaixo.
@@ -1157,7 +1179,7 @@ public class PublicController {
                 // ENTREGUE -- e um PIX pago nao e uma entrega. Inventar `PedidoPago` aqui seria
                 // publicar contrato que ninguem leu; o lugar disso e a entrega A5, e vale para todos
                 // os canais, nao so para este. Fica em PENDENCIAS.md.
-                if (jaCancelado) {
+                if (reabrir) {
                     eventos.dePedido("PedidoRecebido", p, java.util.Map.of(
                             "canal", "CARDAPIO",
                             "reabertoAposCancelamento", true,

@@ -974,9 +974,9 @@ public class PlataformaController {
 
     /** Liga/desliga o módulo fiscal (NFC-e) globalmente. Corpo: { "habilitado": true|false }. */
     @PutMapping("/config/fiscal")
-    public Map<String, String> definirFiscal(@RequestBody Map<String, Boolean> body) {
+    public Map<String, String> definirFiscal(@RequestBody Map<String, Object> body) {
         ctx.requireAdminBora();
-        boolean habilitado = body != null && Boolean.TRUE.equals(body.get("habilitado"));
+        boolean habilitado = exigirBooleano(body, "habilitado");
         br.com.bora.entity.ConfigPlataforma c = configs.findById("fiscal.habilitado")
                 .orElseGet(() -> {
                     br.com.bora.entity.ConfigPlataforma nova = new br.com.bora.entity.ConfigPlataforma();
@@ -1024,9 +1024,9 @@ public class PlataformaController {
      * de todas as lojas de uma vez.</p>
      */
     @PutMapping("/config/outbox")
-    public Map<String, Object> definirOutbox(@RequestBody Map<String, Boolean> body) {
+    public Map<String, Object> definirOutbox(@RequestBody Map<String, Object> body) {
         ctx.requireAdminBora();
-        boolean habilitado = body != null && Boolean.TRUE.equals(body.get("habilitado"));
+        boolean habilitado = exigirBooleano(body, "habilitado");
         br.com.bora.entity.ConfigPlataforma c = configs.findById("outbox.habilitado")
                 .orElseGet(() -> {
                     br.com.bora.entity.ConfigPlataforma nova = new br.com.bora.entity.ConfigPlataforma();
@@ -1041,6 +1041,37 @@ public class PlataformaController {
                 + "Isto vale para TODAS as lojas e entra no caminho de toda venda.",
                 ctx.atual().userId(), habilitado ? "LIGADA" : "DESLIGADA");
         return eventos.estado();
+    }
+
+    /**
+     * O booleano do corpo, ou 400. <b>Nunca</b> trata ausencia como "false".
+     *
+     * <h3>O defeito que isto fecha (achado pelo QA em 18/11/2026, medido)</h3>
+     * <p>Os dois PUT de chave global faziam {@code Boolean.TRUE.equals(body.get("habilitado"))}.
+     * Com isso, corpo {@code &#123;&#125;} ou chave digitada errada ({@code "abilitado"}) virava
+     * <b>false</b> e respondia <b>200</b>. Medido com a fila ligada e 10 gravacoes: um PUT com a
+     * chave errada DESLIGOU a fila e devolveu sucesso.</p>
+     *
+     * <p>Por que isso e pior aqui do que em outro lugar: sao os interruptores de <b>todas as
+     * lojas</b>. Um deles fica no caminho de toda venda. Quem digita errado precisa ver o erro, nao
+     * um 200 dizendo que deu certo enquanto o estado virou o contrario do pretendido.</p>
+     *
+     * <p>E o mesmo conserto que o {@code PUT /admin-bora/usuarios/&#123;id&#125;/ativo} ja tinha
+     * recebido, pelo mesmo motivo: corpo vazio desativava a conta respondendo 200. Terceira vez
+     * deste padrao no projeto.</p>
+     *
+     * <p>Texto {@code "true"}/{@code "false"} e aceito de proposito: e o que um {@code curl} de
+     * suporte manda sem pensar, a intencao e inequivoca, e recusar isso seria rigor sem ganho.</p>
+     */
+    private boolean exigirBooleano(Map<String, Object> body, String campo) {
+        Object v = body == null ? null : body.get(campo);
+        if (v instanceof Boolean b) return b;
+        if (v instanceof String texto
+                && ("true".equalsIgnoreCase(texto.trim()) || "false".equalsIgnoreCase(texto.trim()))) {
+            return Boolean.parseBoolean(texto.trim());
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Mande " + campo + " como true ou false. Nada foi alterado.");
     }
 
     private Plano parsePlano(String plano) {

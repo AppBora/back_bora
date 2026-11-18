@@ -154,16 +154,39 @@ class OinterruptorDoOutboxPrecisaSerAlcancavelTest {
         assertFalse(publicador.ligado(), "DESLIGAR e o caminho de emergencia: nao pode demorar");
     }
 
-    /** Corpo vazio ou sem o campo nao pode ser lido como "ligar". Na duvida, desligado. */
+    /**
+     * CORPO SEM O CAMPO NÃO MEXE NA CHAVE. Nem para ligar, nem para desligar.
+     *
+     * <h3>Este teste já existiu TRANCANDO o defeito, e é o pior tipo de teste que existe</h3>
+     * <p>A primeira versão se chamava {@code corpoSemOcampoNaoLIGAnada} e afirmava que corpo
+     * {@code &#123;&#125;} e {@code null} deixavam a chave em {@code "false"}. O nome soava bom —
+     * "não liga nada" é mesmo o que se quer — e por isso ele passou sem ninguém olhar duas vezes.
+     * Mas a chave estava LIGADA antes, e o que o teste estava afirmando, com todas as letras, é que
+     * <b>um corpo vazio DESLIGA a fila de todas as lojas respondendo 200</b>.</p>
+     *
+     * <p>Eu escrevi esse teste no mesmo dia em que escrevi o endpoint. A revisão técnica o apontou
+     * com estas palavras: o nome diz "não liga", mas a asserção é que {@code &#123;&#125;}
+     * desliga.</p>
+     *
+     * <p>"Ausência" nunca foi "false". Ausência é <b>não sei</b> — e quem não sabe não aciona o
+     * interruptor de ninguém. Agora é 400, e a chave não se move. Os casos todos, incluindo chave
+     * digitada errada e valor que não é booleano, estão em
+     * {@code OinterruptorGLOBALnaoDesligaPorDESCUIDOTest}.</p>
+     */
     @Test
-    void corpoSemOcampoNaoLIGAnada() {
+    void corpoSemOcampoNaoMEXEnaCHAVE() {
         controller.definirOutbox(Map.of("habilitado", true));
+        assertTrue(publicador.ligado(), "a premissa: a fila esta LIGADA");
 
-        controller.definirOutbox(Map.of());
-        assertEquals("false", tabela.get("outbox.habilitado").getValor());
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.definirOutbox(Map.of()),
+                "corpo vazio tem de ser 400, nao um 200 que desliga");
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.definirOutbox(null));
 
-        controller.definirOutbox(null);
-        assertEquals("false", tabela.get("outbox.habilitado").getValor());
+        assertEquals("true", tabela.get("outbox.habilitado").getValor(),
+                "a fila foi desligada por um corpo que nao pedia nada");
+        assertTrue(publicador.ligado());
     }
 
     // ------------------------------------------------------------ a medicao

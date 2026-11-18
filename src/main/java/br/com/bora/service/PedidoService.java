@@ -1023,7 +1023,19 @@ public class PedidoService {
         // Excluir e diferente de cancelar: o pedido SOME do banco. Para quem consome eventos,
         // some sem aviso -- e um modulo que ja tivesse baixado estoque por ele nunca saberia que
         // precisa devolver. Por isso o evento sai aqui, com o estado que o pedido tinha.
-        eventos.dePedido("PedidoCancelado", p, java.util.Map.of(
+        //
+        // MAS NAO QUANDO O PEDIDO JA ESTAVA CANCELADO (achado pelo QA em 18/11/2026, medido: a
+        // sequencia cancelar-e-depois-excluir produzia [PedidoRecebido, PedidoCancelado,
+        // PedidoCancelado]).
+        //
+        // E a mesma razao que faz o estorno nao rodar de novo tres linhas acima: o cancelamento ja
+        // aconteceu, ja emitiu, e o modulo de estoque ja devolveu por aquele evento. Um segundo
+        // cancelamento o faria devolver EM DOBRO -- o defeito que o `jaEstornado` existe para
+        // evitar no banco, repetido na fila.
+        //
+        // Cancelar e depois excluir e o caminho natural (cancela o teste, depois apaga), entao isto
+        // nao e caso de borda. Hoje ninguem consome a fila; no dia do acoplamento consome.
+        if (!jaEstornado) eventos.dePedido("PedidoCancelado", p, java.util.Map.of(
                 "fase", p.status == null ? "" : p.status.name(),
                 "solicitante", "LOJA",
                 "motivo", "pedido excluido do painel",
