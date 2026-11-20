@@ -111,6 +111,7 @@ class OinterruptorDoOutboxPrecisaSerAlcancavelTest {
                 mock(br.com.bora.service.LimpezaDeTestesService.class),
                 new br.com.bora.service.EnderecoDaLojaService(),
                 publicador,
+                mock(br.com.bora.service.RetencaoDaFila.class),
                 "0");
     }
 

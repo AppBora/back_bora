@@ -31,7 +31,7 @@ class CashbackNoPixTest {
     @BeforeEach
     void montar() {
         clientes = mock(ClienteRepository.class);
-        fidelidade = new FidelidadeService(clientes, mock(ConfiguracaoLojaRepository.class));
+        fidelidade = new FidelidadeService(clientes, mock(ConfiguracaoLojaRepository.class), new br.com.bora.security.FreioDeTentativas());
         maria = new Cliente();
         maria.id = 42L;
         maria.lojaId = 1L;

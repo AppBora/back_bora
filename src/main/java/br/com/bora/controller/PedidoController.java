@@ -18,10 +18,14 @@ public class PedidoController {
 
     private final PedidoService service;
     private final PedidoIdempotenteService umaVezSo;
+    /** Quem tem a tabela de motoboys: traduz id/nome em cadastro (item 3 da secao 4). */
+    private final br.com.bora.service.EntregadorService entregadores;
 
-    public PedidoController(PedidoService service, PedidoIdempotenteService umaVezSo) {
+    public PedidoController(PedidoService service, PedidoIdempotenteService umaVezSo,
+                            br.com.bora.service.EntregadorService entregadores) {
         this.service = service;
         this.umaVezSo = umaVezSo;
+        this.entregadores = entregadores;
     }
 
     @GetMapping
@@ -65,9 +69,27 @@ public class PedidoController {
         return service.alterarStatus(id, status, motivo);
     }
 
+    /**
+     * Escolhe ou troca o motoboy do pedido.
+     *
+     * <p>Aceita {@code entregadorId} (o que a tela manda desde 20/11/2026) ou {@code nome} (o que
+     * ela mandava antes, e o que chamada antiga da API ainda manda). Ver
+     * {@code EntregadorService.resolver}: id de outra loja e recusado, e nome que nao casa com um
+     * unico cadastro grava texto sem id -- comportamento de antes da V80.</p>
+     *
+     * <p>Os dois em branco apagam o motoboy do pedido.</p>
+     */
     @PatchMapping("/{id}/entregador")
-    public Pedido entregador(@PathVariable Long id, @RequestParam(required = false) String nome) {
-        return service.definirEntregador(id, nome);
+    public Pedido entregador(@PathVariable Long id,
+                             @RequestParam(required = false) String nome,
+                             @RequestParam(required = false) Long entregadorId) {
+        br.com.bora.entity.Entregador cadastro = entregadores.resolver(entregadorId, nome);
+        // O NOME GRAVADO E O DO CADASTRO quando ele existe, nao o texto que veio na requisicao: senao
+        // a tela poderia mandar id de um e nome de outro, e o retrato no pedido mentiria sobre quem
+        // entregou -- o recibo do motoboy le esse texto.
+        return cadastro != null
+                ? service.definirEntregador(id, cadastro.id, cadastro.nome)
+                : service.definirEntregador(id, null, nome);
     }
 
     @DeleteMapping("/{id}")

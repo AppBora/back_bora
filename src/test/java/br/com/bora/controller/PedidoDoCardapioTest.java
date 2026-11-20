@@ -408,7 +408,8 @@ class PedidoDoCardapioTest {
                 .thenThrow(new RuntimeException("Asaas fora do ar"));
         recriarCom(px);
         when(fidelidade.identificarPeloTelefone(anyLong(), any(), any(), any())).thenReturn(42L);
-        when(fidelidade.ehOMesmoCliente(anyLong(), any(), any())).thenReturn(true);
+        // `exigirDonoDoSaldo` e void e, no duble, nao faz nada -- o dono passou (item 2 da secao 4).
+        // A conferencia de verdade, com o freio, esta em OpalpiteDOnomeTEMtetoTest.
         when(fidelidade.resgatePossivel(anyLong(), any(), any())).thenReturn(new BigDecimal("10.00"));
         when(pedidos.findById(anyLong())).thenAnswer(i -> Optional.of(salvo()));
 

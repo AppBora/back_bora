@@ -1,6 +1,6 @@
 package br.com.bora.dto;
 
-/** Cadastro self-service de uma nova loja (público). O plano é o único: R$ 299/mês por loja. */
+/** Cadastro self-service de uma nova loja (público). O plano é o único: R$ 199/mês por loja (PLANOS_SAAS.md). */
 public record SignupRequest(
         String nomeLoja,
         String documento,

@@ -61,8 +61,18 @@ class AvancarComEntidadeSujaIT {
 
     private Long pedidoId;
 
+    // JdbcTemplate e nao EntityManager: os testes desta classe rodam FORA de transacao
+    // (NOT_SUPPORTED, para haver disputa de verdade entre as threads), e ali o
+    // EntityManager recusa executeUpdate. Ver LojaDeTeste.
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbcDaFixture;
+
     @BeforeEach
     void semear() {
+        // A LOJA TEM DE EXISTIR: desde a V82 (item 6 da secao 4) as tabelas com `loja_id`
+        // tem chave estrangeira para `loja`. Antes disto o banco aceitava filho sem mae, e
+        // era desse buraco que esta fixture vivia -- o mesmo buraco que a V82 fechou em
+        // producao. Ver LojaDeTeste.
+        LojaDeTeste.garantir(jdbcDaFixture, LOJA, LOJA + 1);
         pedidos.deleteAll();
         Pedido p = new Pedido();
         p.lojaId = LOJA;

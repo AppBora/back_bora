@@ -53,6 +53,40 @@ public class EntregadorService {
         repo.delete(buscar(id));
     }
 
+    /**
+     * Qual CADASTRO de motoboy este pedido esta apontando? (item 3 da secao 4)
+     *
+     * <p>Aceita as duas formas, de proposito:</p>
+     * <ul>
+     *   <li><b>id</b> -- o que a tela de Entregas manda desde 20/11/2026. Id de outra loja e
+     *       recusado (404), nunca aceito em silencio;</li>
+     *   <li><b>nome</b> -- o que a tela mandava antes, e o que qualquer chamada antiga ainda manda.
+     *       Casa pelo nome normalizado (sem caixa, sem espaco nas pontas), a MESMA normalizacao que
+     *       as consultas do acerto usam. Se o nome nao casar com EXATAMENTE UM cadastro, devolve
+     *       null: o pedido fica com o texto e sem id, que e o comportamento de antes. Chutar entre
+     *       dois cadastros de mesmo nome moveria a taxa de um motoboy para outro.</li>
+     * </ul>
+     *
+     * @return o cadastro, ou {@code null} quando nao ha nome nem id (apagar o motoboy do pedido) ou
+     *         quando o nome nao casa com um unico cadastro
+     */
+    public Entregador resolver(Long id, String nome) {
+        if (id != null) return buscar(id);
+        String procurado = normalizar(nome);
+        if (procurado == null) return null;
+        List<Entregador> casam = repo.findByLojaIdOrderByNomeAsc(ctx.lojaId()).stream()
+                .filter(e -> procurado.equals(normalizar(e.nome)))
+                .toList();
+        return casam.size() == 1 ? casam.get(0) : null;
+    }
+
+    /** `lower(trim(...))`, a mesma chave que o acerto usa no banco. */
+    private static String normalizar(String nome) {
+        if (nome == null) return null;
+        String limpo = nome.trim().toLowerCase();
+        return limpo.isEmpty() ? null : limpo;
+    }
+
     private Entregador buscar(Long id) {
         return repo.findByIdAndLojaId(id, ctx.lojaId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Entregador não encontrado"));

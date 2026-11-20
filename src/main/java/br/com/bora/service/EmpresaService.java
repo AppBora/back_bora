@@ -23,9 +23,13 @@ public class EmpresaService {
 
     /** Só dígitos — "53.953.786/0001-28" e "53953786000128" são o mesmo CNPJ. */
     public static String normalizar(String documento) {
-        if (documento == null) return null;
-        String d = documento.replaceAll("\\D", "");
-        return d.isBlank() ? null : d;
+        // Delega para DocumentoFiscal.normalizar, que guarda LETRA alem de numero. Isto nao
+        // mexe em nada que ja existe: para documento so-de-digitos, que e o caso de todas as
+        // lojas de hoje, o resultado e identico caractere a caractere. O que muda e o dia em
+        // que entrar um CNPJ alfanumerico (regra vigente desde julho/2026): o replaceAll de
+        // nao-digito que estava aqui o mutilava em silencio, e duas empresas diferentes
+        // podiam cair na mesma chave por causa disso.
+        return DocumentoFiscal.normalizar(documento);
     }
 
     /** Razão social por id — o painel da plataforma agrupa as lojas pelo cliente dono delas. */

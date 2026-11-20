@@ -45,6 +45,8 @@ public class PlataformaController {
     private final br.com.bora.service.EnderecoDaLojaService enderecos;
     /** A fila de eventos do ERP: so para ler o estado e invalidar o cache da chave. */
     private final br.com.bora.service.PublicadorDeEventos eventos;
+    /** A retencao da fila (item 8 da secao 4): o tamanho dela, e quem apaga o que envelheceu. */
+    private final br.com.bora.service.RetencaoDaFila retencao;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PlataformaController.class);
 
@@ -65,8 +67,10 @@ public class PlataformaController {
                                 br.com.bora.service.LimpezaDeTestesService limpeza,
                                 br.com.bora.service.EnderecoDaLojaService enderecos,
                                 br.com.bora.service.PublicadorDeEventos eventos,
+                                br.com.bora.service.RetencaoDaFila retencao,
                                 @org.springframework.beans.factory.annotation.Value("${asaas.taxa-percentual:0}") String splitPadrao) {
         this.eventos = eventos;
+        this.retencao = retencao;
         this.enderecos = enderecos;
         this.limpeza = limpeza;
         this.splitPadrao = splitPadrao;
@@ -707,10 +711,14 @@ public class PlataformaController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "E-mail e senha (mín. 8) do admin são obrigatórios");
         }
         String email = req.adminEmail().trim().toLowerCase();
+        // CONFERIDO ANTES de qualquer gravacao, e nao junto com o setDocumento la embaixo: o
+        // `paraDocumento` da linha seguinte CRIA a empresa. Recusar depois dele deixaria uma empresa
+        // orfa com documento invalido no banco a cada tentativa errada.
+        String documento = br.com.bora.service.DocumentoFiscal.exigirValido(req.documento());
 
         // Mesmo CNPJ = mesma empresa. É o que permite a rede: as unidades seguintes do cliente
         // entram na empresa dele em vez de virar cliente separado.
-        br.com.bora.entity.Empresa empresa = empresas.paraDocumento(req.documento(), req.nomeLoja());
+        br.com.bora.entity.Empresa empresa = empresas.paraDocumento(documento, req.nomeLoja());
 
         // Dono de rede cadastra a 2ª unidade com o MESMO e-mail: em vez de recusar, vinculamos a
         // loja nova à conta que já existe — assim ele opera todas com um login só, pelo seletor
@@ -730,7 +738,7 @@ public class PlataformaController {
 
         Loja loja = new Loja();
         loja.setNome(req.nomeLoja());
-        loja.setDocumento(req.documento());
+        loja.setDocumento(documento);
         // Endereco e opcional na criacao: quem cadastra varias unidades de uma vez costuma ter o
         // nome antes do CEP. Vindo errado, para aqui — antes de a loja existir pela metade.
         if (req.endereco() != null) enderecos.aplicar(loja, req.endereco());
@@ -1013,7 +1021,86 @@ public class PlataformaController {
     @GetMapping("/config/outbox")
     public Map<String, Object> estadoDoOutbox() {
         ctx.requireAdminBora();
-        return eventos.estado();
+        Map<String, Object> m = new java.util.LinkedHashMap<>(eventos.estado());
+        // O TAMANHO da fila (item 8 da secao 4). O pior do item nao era a falta do DELETE -- era que
+        // o crescimento nao aparecia em lugar nenhum: a fila enche a cada venda e ninguem consome.
+        m.put("retencao", retencao.estado());
+        return m;
+    }
+
+    /**
+     * Define a RETENCAO da fila. Corpo: <code>{ "dias": n|null, "diasPendentes": n|null }</code>.
+     *
+     * <p>Duas chaves separadas de proposito, e nao um numero so: "apagar o que ja foi entregue" e
+     * "jogar fora o que ninguem leu" nao sao a mesma decisao. Hoje nada consome a fila, entao
+     * {@code diasPendentes} e a chave que apaga dado de producao para sempre -- ela existe porque o
+     * dono pediu o mecanismo, e nasce desligada.</p>
+     *
+     * <p>Nulo ou 0 em qualquer uma DESLIGA aquela limpeza. Sai no log como AUDITORIA.</p>
+     */
+    @PutMapping("/config/outbox/retencao")
+    public Map<String, Object> definirRetencaoDoOutbox(@RequestBody Map<String, Object> body) {
+        ctx.requireAdminBora();
+        Integer dias = diasDeRetencao(body, "dias");
+        Integer diasPendentes = diasDeRetencao(body, "diasPendentes");
+        gravarChave(br.com.bora.service.RetencaoDaFila.CHAVE_DIAS, dias);
+        gravarChave(br.com.bora.service.RetencaoDaFila.CHAVE_DIAS_PENDENTES, diasPendentes);
+        log.warn("AUDITORIA plataforma: usuario {} definiu a retencao da fila de eventos em {} dia(s) "
+                + "para evento publicado e {} dia(s) para evento NAO publicado. Nulo = nao apaga.",
+                ctx.atual().userId(), dias, diasPendentes);
+        return retencao.estado();
+    }
+
+    /** Roda a limpeza agora, sem esperar a madrugada. Devolve o que foi apagado. */
+    @PostMapping("/config/outbox/retencao/limpar")
+    public Map<String, Object> limparFilaAgora() {
+        ctx.requireAdminBora();
+        Map<String, Object> r = retencao.limpar();
+        log.warn("AUDITORIA plataforma: usuario {} rodou a limpeza da fila a mao: {}",
+                ctx.atual().userId(), r);
+        return r;
+    }
+
+    /**
+     * O numero de dias do corpo: nulo, ou um inteiro positivo. Texto e numero negativo sao 400.
+     *
+     * <p><b>Nao trata valor invalido como zero</b>, pelo mesmo motivo do {@code exigirBooleano}
+     * logo abaixo: numero errado virando "0 dias" apagaria a fila inteira respondendo 200. O
+     * {@code RetencaoDaFila} tem a mesma guarda do outro lado, para o caso de alguem escrever direto
+     * no banco.</p>
+     */
+    private Integer diasDeRetencao(Map<String, Object> body, String campo) {
+        Object v = body == null ? null : body.get(campo);
+        if (v == null || (v instanceof String texto && texto.isBlank())) return null;
+        int dias;
+        try {
+            dias = v instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(v).trim());
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Informe '" + campo + "' como numero de dias, ou null para nao apagar nada.");
+        }
+        if (dias < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "O numero de dias de retencao nao pode ser negativo.");
+        }
+        return dias == 0 ? null : dias;
+    }
+
+    /** Grava (ou apaga) uma chave de config_plataforma. */
+    private void gravarChave(String chave, Integer valor) {
+        if (valor == null) {
+            configs.findById(chave).ifPresent(configs::delete);
+            return;
+        }
+        br.com.bora.entity.ConfigPlataforma c = configs.findById(chave)
+                .orElseGet(() -> {
+                    br.com.bora.entity.ConfigPlataforma nova = new br.com.bora.entity.ConfigPlataforma();
+                    nova.setChave(chave);
+                    return nova;
+                });
+        c.setValor(String.valueOf(valor));
+        c.setAtualizadoEm(java.time.OffsetDateTime.now());
+        configs.save(c);
     }
 
     /**

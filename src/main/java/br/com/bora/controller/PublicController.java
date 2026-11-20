@@ -828,10 +828,13 @@ public class PublicController {
             if (Boolean.TRUE.equals(body.get("usarCashback")) || "true".equals(str(body.get("usarCashback")))) {
                 // O saldo e de quem o acumulou. Telefone de cliente nao e segredo, entao exigimos que o
                 // nome informado no checkout bata com o do cadastro antes de gastar o cashback dele.
-                if (!fidelidade.ehOMesmoCliente(lojaId, clienteId, nome)) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "Para usar o cashback, informe o mesmo nome do seu cadastro.");
-                }
+                //
+                // ITEM 2 DA SECAO 4: agora COM FREIO. Aqui nao havia teto nenhum de tentativa, e
+                // primeiro nome e um espaco de algumas dezenas de palpites -- dava para martelar
+                // "joao", "maria", "jose"... neste mesmo endpoint ate acertar. O freio e o mesmo
+                // placar da consulta de saldo (chave loja+telefone), senao quem estourasse numa ponta
+                // seguiria chutando na outra. Ver FidelidadeService.exigirDonoDoSaldo.
+                fidelidade.exigirDonoDoSaldo(lojaId, clienteId, telefone, nome);
                 resgate = fidelidade.resgatePossivel(lojaId, clienteId, total);
                 if (resgate.signum() > 0) {
                     total = total.subtract(resgate);

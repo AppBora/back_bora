@@ -137,6 +137,10 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
            "from Pedido p where p.lojaId = :lojaId " +
            "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
            "and p.entregador is not null and trim(p.entregador) <> '' " +
+           // SO O LEGADO. Entrega com cadastro (entregador_id preenchido) e agrupada por id na
+           // `previaAcertoPorCadastro`; sem esta linha ela apareceria NAS DUAS e o mesmo dinheiro
+           // sairia em duas linhas da tela -- fechar as duas pagaria o motoboy em dobro.
+           "and p.entregadorId is null " +
            // Item 6.3: PIX gerado e nunca pago, marcado como entregue, entrava no acerto como venda
            // normal -- o `total` dele ia para "outras formas", como se o dinheiro tivesse entrado por
            // cartao. A conta com o motoboy fechava errada. E a MESMA regra do faturamento ("PIX que
@@ -149,12 +153,53 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
                                 @Param("inicio") OffsetDateTime inicio,
                                 @Param("fim") OffsetDateTime fim);
 
+    /**
+     * O MESMO que {@link #previaAcerto}, agrupado pelo CADASTRO do motoboy. (item 3 da secao 4)
+     *
+     * <p>Por que isto existe: agrupar por texto fazia renomear o motoboy no meio do periodo dividir
+     * as corridas dele em DUAS linhas -- as de antes com o nome velho, as de depois com o novo. Quem
+     * fecha o acerto paga uma e nao a outra, e a que ficou para tras nao aparece como pendencia em
+     * lugar nenhum: ela virou "outro entregador". Agrupando por id, trocar o nome nao mexe na conta.</p>
+     *
+     * <p>Devolve o id na primeira posicao e o nome gravado no pedido na segunda. O nome que a tela
+     * mostra e o do CADASTRO, resolvido no servico -- o do pedido e retrato do dia da entrega e pode
+     * estar velho, que e justamente o caso que este agrupamento conserta.</p>
+     *
+     * <p>Os filtros sao identicos aos da `previaAcerto`, incluindo o do PIX nao pago (item 6.3).</p>
+     */
+    @Query("select p.entregadorId, min(p.entregador), count(p), coalesce(sum(p.taxaEntrega), 0), " +
+           "coalesce(sum(case when upper(coalesce(p.formaPagamento, '')) like '%DINHEIRO%' then p.valorTotal else 0 end), 0), " +
+           "coalesce(sum(p.valorTotal), 0) " +
+           "from Pedido p where p.lojaId = :lojaId " +
+           "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
+           "and p.entregadorId is not null " +
+           "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) " +
+           "and p.entregueEm >= :inicio and p.entregueEm < :fim " +
+           "group by p.entregadorId order by min(p.entregador)")
+    List<Object[]> previaAcertoPorCadastro(@Param("lojaId") Long lojaId,
+                                           @Param("inicio") OffsetDateTime inicio,
+                                           @Param("fim") OffsetDateTime fim);
+
+    /** As entregas de um CADASTRO de motoboy, base do "fazer acerto" novo. Espelha os filtros acima. */
+    @Query("select p from Pedido p where p.lojaId = :lojaId " +
+           "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
+           "and p.entregadorId = :entregadorId " +
+           "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) " +
+           "and p.entregueEm >= :inicio and p.entregueEm < :fim")
+    List<Pedido> entregasParaAcertoPorCadastro(@Param("lojaId") Long lojaId,
+                                               @Param("entregadorId") Long entregadorId,
+                                               @Param("inicio") OffsetDateTime inicio,
+                                               @Param("fim") OffsetDateTime fim);
+
     /** Entregas de um entregador (não canceladas/acertadas) na janela — base do "fazer acerto". */
     // O nome do entregador e texto livre digitado a cada pedido: "Joao", "joao " e "JOAO" eram tres
     // entregadores diferentes, e o acerto de um nao achava as entregas do outro.
     @Query("select p from Pedido p where p.lojaId = :lojaId " +
            "and p.status = br.com.bora.entity.StatusPedido.ENTREGUE and p.acertoId is null " +
            "and lower(trim(p.entregador)) = lower(trim(:entregador)) " +
+           // Mesma razao da previa: a linha de texto so leva as entregas SEM cadastro. Sem isto,
+           // fechar a linha legada levaria tambem as entregas que a linha por cadastro mostra.
+           "and p.entregadorId is null " +
            // Mesma regra da previa (item 6.3): o que nao aparece na previa nao pode ser amarrado ao
            // acerto, senao a previa mostra um valor e o acerto paga outro.
            "and (p.aguardandoPagamento is null or p.aguardandoPagamento = false) " +

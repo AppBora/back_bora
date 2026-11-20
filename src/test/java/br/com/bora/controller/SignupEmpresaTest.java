@@ -37,6 +37,11 @@ import static org.mockito.Mockito.*;
  */
 class SignupEmpresaTest {
 
+    // O CNPJ "inedito" deste teste era 11.222.333/0001-99, que tem digito verificador ERRADO.
+    // Passava porque nada conferia documento; desde 20/11/2026 o cadastro confere (item 4 da secao
+    // 4), e um numero inventado e recusado com 400 antes de chegar a regra que este teste mede.
+    // 11.222.333/0001-81 e o mesmo CNPJ com os dois digitos certos.
+
     private static final String CNPJ_DA_VITIMA = "53.953.786/0001-28";
 
     private LojaRepository lojas;
@@ -156,9 +161,9 @@ class SignupEmpresaTest {
     @Test
     void cnpjInedito_segueCriandoNormalmente() {
         when(usuarios.findByEmail(anyString())).thenReturn(Optional.empty());
-        when(empresasRepo.findByCnpj("11222333000199")).thenReturn(Optional.empty());
+        when(empresasRepo.findByCnpj("11222333000181")).thenReturn(Optional.empty());
 
-        Map<String, Object> r = controller.cadastrar(new SignupRequest("Pizzaria Nova", "11.222.333/0001-99",
+        Map<String, Object> r = controller.cadastrar(new SignupRequest("Pizzaria Nova", "11.222.333/0001-81",
                 "Dona", "dona@nova.local", "senha-de-oito", true), origem());
 
         assertEquals(500L, r.get("lojaId"));
@@ -168,7 +173,7 @@ class SignupEmpresaTest {
     @Test
     void semAceitarOsTermos_naoCriaConta() {
         ResponseStatusException e = assertThrows(ResponseStatusException.class, () ->
-                controller.cadastrar(new SignupRequest("Loja nova", "11.222.333/0001-99",
+                controller.cadastrar(new SignupRequest("Loja nova", "11.222.333/0001-81",
                         "Dona", "dona@nova.local", "senha-de-oito", false), origem()));
 
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
@@ -178,10 +183,10 @@ class SignupEmpresaTest {
     @Test
     void aceiteFicaRegistradoComDataEVersao() {
         when(usuarios.findByEmail(anyString())).thenReturn(Optional.empty());
-        when(empresasRepo.findByCnpj("11222333000199")).thenReturn(Optional.empty());
+        when(empresasRepo.findByCnpj("11222333000181")).thenReturn(Optional.empty());
         var captor = org.mockito.ArgumentCaptor.forClass(Loja.class);
 
-        controller.cadastrar(new SignupRequest("Pizzaria Nova", "11.222.333/0001-99",
+        controller.cadastrar(new SignupRequest("Pizzaria Nova", "11.222.333/0001-81",
                 "Dona", "dona@nova.local", "senha-de-oito", true), origem());
 
         verify(lojas, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
@@ -194,7 +199,7 @@ class SignupEmpresaTest {
     @Test
     void senhaCurtaEhRecusadaAntesDeQualquerCoisa() {
         ResponseStatusException e = assertThrows(ResponseStatusException.class, () ->
-                controller.cadastrar(new SignupRequest("Loja", "11.222.333/0001-99",
+                controller.cadastrar(new SignupRequest("Loja", "11.222.333/0001-81",
                         "Alguem", "alguem@teste.local", "1234567", true), origem()));
 
         assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());

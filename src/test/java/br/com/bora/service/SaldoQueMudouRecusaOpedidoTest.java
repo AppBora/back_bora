@@ -51,7 +51,7 @@ class SaldoQueMudouRecusaOpedidoTest {
         clientes = mock(ClienteRepository.class);
         ConfiguracaoLojaRepository configs = mock(ConfiguracaoLojaRepository.class);
         when(configs.findByLojaId(LOJA)).thenReturn(Optional.empty());
-        fidelidade = new FidelidadeService(clientes, configs);
+        fidelidade = new FidelidadeService(clientes, configs, new br.com.bora.security.FreioDeTentativas());
     }
 
     /** O cliente EXISTE e o saldo não cobre: a disputa de verdade, que recusa o pedido. */

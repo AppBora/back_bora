@@ -49,7 +49,7 @@ class OcardapioNaoEscreveNoCadastroTest {
             return c;
         });
         fidelidade = new FidelidadeService(clientes,
-                mock(br.com.bora.repository.ConfiguracaoLojaRepository.class));
+                mock(br.com.bora.repository.ConfiguracaoLojaRepository.class), new br.com.bora.security.FreioDeTentativas());
     }
 
     private Cliente jaCadastrado(String nome, String endereco) {

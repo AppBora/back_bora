@@ -4,6 +4,7 @@ import br.com.bora.entity.Cliente;
 import br.com.bora.entity.Pedido;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -64,6 +65,15 @@ class OcontadorDeSumidosDaOmesmoNumeroIT {
     private OffsetDateTime hoje0() {
         return OffsetDateTime.now(java.time.ZoneId.of("America/Sao_Paulo"))
                 .withHour(0).withMinute(0).withSecond(0).withNano(0);
+    }
+
+    @BeforeEach
+    @Transactional
+    void semearALoja() {
+        // A LOJA TEM DE EXISTIR: desde a V82 (item 6 da secao 4) as tabelas com `loja_id` tem
+        // chave estrangeira para `loja`. Antes disto o banco aceitava filho sem mae, e era desse
+        // buraco que esta fixture vivia -- o mesmo que a V82 fechou em producao. Ver LojaDeTeste.
+        LojaDeTeste.garantir(em, LOJA, LOJA + 1);   // o teste de isolamento usa LOJA + 1
     }
 
     @AfterEach

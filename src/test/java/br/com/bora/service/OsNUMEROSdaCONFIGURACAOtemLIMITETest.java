@@ -243,4 +243,91 @@ class OsNUMEROSdaCONFIGURACAOtemLIMITETest {
         assertEquals(!Plano.UNICO.permiteRemoverMarca(), gravado.mostrarMarcaBora,
                 "quem decide tirar a marca e o plano, nao o corpo da requisicao");
     }
+
+    // ============================================================ o tempo de preparo (item 5)
+
+    private ConfiguracaoLoja comTempos(Integer preparo, Integer entrega) {
+        ConfiguracaoLoja d = new ConfiguracaoLoja();
+        d.tempoPreparoMin = preparo;
+        d.tempoEntregaMin = entrega;
+        return d;
+    }
+
+    @Test
+    void oTEMPOdePREPAROdaLOJAehGRAVADO() {
+        // A premissa do item 5: antes disto o tempo prometido estava cravado no app.js e nenhuma
+        // loja escolhia nada. Sem este teste, todos os de baixo passariam com um campo que nao grava.
+        ConfiguracaoLojaService s = comoPapel("ADMINISTRADOR_LOJA");
+
+        ConfiguracaoLoja gravado = s.atualizar(comTempos(45, 20));
+
+        assertEquals(45, gravado.tempoPreparoMin, "a pizzaria de forno de 45 min nao consegue dizer isso");
+        assertEquals(20, gravado.tempoEntregaMin);
+    }
+
+    @Test
+    void oTEMPOdePREPAROforaDAfaixaEHrecusado() {
+        ConfiguracaoLojaService s = comoPapel("ADMINISTRADOR_LOJA");
+
+        // 241 min: o que houve foi erro de digitacao, e aceitar calado faz o alerta nunca mais acender.
+        assertEquals(HttpStatus.BAD_REQUEST.value(),
+                status(assertThrows(ResponseStatusException.class, () -> s.atualizar(comTempos(241, null)))));
+        assertEquals(HttpStatus.BAD_REQUEST.value(),
+                status(assertThrows(ResponseStatusException.class, () -> s.atualizar(comTempos(-5, null)))));
+        verify(repo, never()).save(any(ConfiguracaoLoja.class));
+    }
+
+    @Test
+    void asFRONTEIRASdosDOIStemposPASSAM() {
+        ConfiguracaoLojaService s = comoPapel("ADMINISTRADOR_LOJA");
+
+        assertEquals(240, s.atualizar(comTempos(240, 180)).tempoPreparoMin, "o teto e inclusivo");
+        assertEquals(180, s.atualizar(comTempos(240, 180)).tempoEntregaMin);
+        assertEquals(1, s.atualizar(comTempos(1, null)).tempoPreparoMin);
+    }
+
+    @Test
+    void oZEROdoPREPAROvoltaAOautomatico_eNAOvira_SLA_zero() {
+        // As duas coisas num teste porque sao a mesma linha, e as duas doem:
+        //
+        //  - gravar ZERO faria todo pedido nascer atrasado (o item 5 ao contrario);
+        //  - ignorar o zero (tratar como campo vazio) deixaria o lojista PRESO no valor que ele
+        //    digitou uma vez: este PUT ignora campo nulo de proposito, e a tela manda null para
+        //    campo vazio, entao o zero e o unico jeito de desfazer.
+        ConfiguracaoLojaService s = comoPapel("ADMINISTRADOR_LOJA");
+        ConfiguracaoLoja existente = new ConfiguracaoLoja();
+        existente.lojaId = LOJA;
+        existente.tempoPreparoMin = 45;
+        when(repo.findByLojaId(LOJA)).thenReturn(Optional.of(existente));
+
+        ConfiguracaoLoja gravado = s.atualizar(comTempos(0, null));
+
+        assertNull(gravado.tempoPreparoMin,
+                "o zero nao voltou ao automatico: o lojista nao tem como desfazer os 45 minutos");
+    }
+
+    @Test
+    void oTEMPOdeENTREGAzeroEHlegitimo() {
+        // A loja que so vende no balcao, ou que usa so marketplace com entrega deles, nao tem rua
+        // nenhuma para contar. Aqui zero NAO e "volta ao automatico": zero e nulo dao o mesmo
+        // resultado na tela (nenhum minuto somado), entao nao ha ambiguidade a resolver.
+        ConfiguracaoLojaService s = comoPapel("ADMINISTRADOR_LOJA");
+
+        assertEquals(0, s.atualizar(comTempos(30, 0)).tempoEntregaMin);
+    }
+
+    @Test
+    void oCAMPOomitidoNAOapagaOtempoQUEaLOJAtinha() {
+        ConfiguracaoLojaService s = comoPapel("ADMINISTRADOR_LOJA");
+        ConfiguracaoLoja existente = new ConfiguracaoLoja();
+        existente.lojaId = LOJA;
+        existente.tempoPreparoMin = 45;
+        existente.tempoEntregaMin = 20;
+        when(repo.findByLojaId(LOJA)).thenReturn(Optional.of(existente));
+
+        ConfiguracaoLoja gravado = s.atualizar(comCashback("5"));   // salvando outra coisa da tela
+
+        assertEquals(45, gravado.tempoPreparoMin, "salvar o cashback apagou o tempo de preparo");
+        assertEquals(20, gravado.tempoEntregaMin);
+    }
 }

@@ -50,7 +50,8 @@ class OacertoNaoContaOqueNaoEntrouTest {
         pedidos = mock(PedidoRepository.class);
         AuthContext ctx = mock(AuthContext.class);
         when(ctx.lojaId()).thenReturn(LOJA);
-        service = new AcertoEntregadorService(pedidos, mock(AcertoEntregadorRepository.class), ctx);
+        service = new AcertoEntregadorService(pedidos, mock(AcertoEntregadorRepository.class), ctx,
+                mock(br.com.bora.repository.EntregadorRepository.class));
         when(pedidos.previaAcerto(eq(LOJA), any(), any())).thenReturn(List.of());
         when(pedidos.entregasSemMotoboy(eq(LOJA), any(), any())).thenReturn(List.of());
     }

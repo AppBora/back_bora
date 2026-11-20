@@ -58,7 +58,8 @@ class AchaveDaVendaCHEGAaoServicoTest {
     @BeforeEach
     void montar() {
         umaVezSo = mock(PedidoIdempotenteService.class);
-        controller = new PedidoController(mock(PedidoService.class), umaVezSo);
+        controller = new PedidoController(mock(PedidoService.class), umaVezSo,
+                mock(br.com.bora.service.EntregadorService.class));
         Pedido p = new Pedido();
         p.id = 500L;
         // `any()` nos dois: misturar matcher com um null cru e InvalidUseOfMatchers, e aqui o caso

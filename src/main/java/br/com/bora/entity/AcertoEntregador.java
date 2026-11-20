@@ -18,7 +18,10 @@ public class AcertoEntregador {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     public Long id;
     public Long lojaId;
+    /** O nome do motoboy no dia do acerto. Fica no recibo impresso; nao muda se o cadastro mudar. */
     public String entregador;
+    /** O cadastro (V80). Serve a relatorio: acerto fechado e fato consumado, nenhuma conta e refeita. */
+    @Column(name = "entregador_id") public Long entregadorId;
     @Column(name = "periodo_inicio") public LocalDate periodoInicio;
     @Column(name = "periodo_fim")    public LocalDate periodoFim;
     @Column(name = "qtde_entregas")  public Integer qtdeEntregas = 0;

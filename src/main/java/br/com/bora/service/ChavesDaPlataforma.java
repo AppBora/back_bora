@@ -36,7 +36,12 @@ public final class ChavesDaPlataforma {
             // "true"/"false": liga a gravação da fila de eventos do ERP (outbox). É a chave que
             // desliga, SEM DEPLOY, uma gravação que fica no caminho de toda venda. Precisa poder
             // ser LIDA na tela: quem vai desligar às pressas tem de ver em que estado ela está.
-            "outbox.habilitado"
+            "outbox.habilitado",
+            // Numeros de dias da retencao da fila (item 8 da secao 4). Nao sao segredo: sao decisao
+            // de operacao, e PRECISAM aparecer na tela -- quem decide ligar a limpeza do que ninguem
+            // leu tem de ver em que estado ela esta antes de mexer.
+            "outbox.retencao.dias",
+            "outbox.retencao.dias-pendentes"
     );
 
     /** O que a tela recebe no lugar do valor quando ele não pode sair. */

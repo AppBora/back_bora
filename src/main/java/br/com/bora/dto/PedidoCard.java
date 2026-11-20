@@ -39,6 +39,13 @@ public record PedidoCard(
         /** ENTREGA ou RETIRADA. Sem isto a tela de Entregas oferece "Despachar" para quem vem buscar. */
         String tipoEntrega,
         String entregador,
+        /**
+         * O cadastro do motoboy deste pedido (V80), para a tela de Entregas marcar o nome certo na
+         * lista mesmo depois de o motoboy ser renomeado. Sem ele, a lista era casada por TEXTO: um
+         * motoboy renomeado aparecia como "ninguem escolhido" nos pedidos antigos, e o risco era o
+         * lojista escolher outro em cima.
+         */
+        Long entregadorId,
         /** PIX gerado e ainda não pago. O card precisa disto: a cozinha não deve preparar venda que
          *  não aconteceu, e o fechamento de caixa não pode contá-la como faturamento. A tela usava o
          *  TEXTO da forma de pagamento para adivinhar — contrato frágil que a V39 queria eliminar. */

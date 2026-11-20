@@ -44,8 +44,15 @@ class ListaDeProdutosNaoCarregaFotoIT {
 
     @Autowired private ProdutoRepository produtos;
 
+    @Autowired private jakarta.persistence.EntityManager em;
+
     @BeforeEach
     void limpar() {
+        // A LOJA TEM DE EXISTIR: desde a V82 (item 6 da secao 4) as tabelas com `loja_id`
+        // tem chave estrangeira para `loja`. Antes disto o banco aceitava filho sem mae, e
+        // era desse buraco que esta fixture vivia -- o mesmo buraco que a V82 fechou em
+        // producao. Ver LojaDeTeste.
+        LojaDeTeste.garantir(em, LOJA, LOJA + 1);   // o teste de isolamento usa LOJA + 1
         produtos.deleteAll(produtos.findByLojaIdOrderByNomeAsc(LOJA));
     }
 

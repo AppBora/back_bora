@@ -28,11 +28,16 @@ public class AcertoEntregadorService {
     private final PedidoRepository pedidos;
     private final AcertoEntregadorRepository acertos;
     private final AuthContext ctx;
+    /** Para a previa mostrar o nome ATUAL do motoboy, e nao o que estava gravado no pedido. */
+    private final br.com.bora.repository.EntregadorRepository entregadores;
 
-    public AcertoEntregadorService(PedidoRepository pedidos, AcertoEntregadorRepository acertos, AuthContext ctx) {
+    public AcertoEntregadorService(PedidoRepository pedidos, AcertoEntregadorRepository acertos,
+                                   AuthContext ctx,
+                                   br.com.bora.repository.EntregadorRepository entregadores) {
         this.pedidos = pedidos;
         this.acertos = acertos;
         this.ctx = ctx;
+        this.entregadores = entregadores;
     }
 
     /**
@@ -51,6 +56,32 @@ public class AcertoEntregadorService {
         OffsetDateTime fimEx = fim.plusDays(1).atStartOfDay(ZONE).toOffsetDateTime();
 
         List<AcertoLinha> linhas = new ArrayList<>();
+
+        // 1. POR CADASTRO (item 3 da secao 4). Renomear o motoboy no meio do periodo dividia as
+        // corridas dele em duas linhas: as de antes com o nome velho, as de depois com o novo. Quem
+        // fechava o acerto pagava uma e nao a outra, e a que ficava para tras nao aparecia como
+        // pendencia -- ela virava "outro entregador". Agrupado por id, trocar o nome nao mexe na conta.
+        //
+        // O NOME EXIBIDO E O DO CADASTRO, nao o gravado no pedido: o do pedido e o retrato do dia da
+        // entrega e pode estar velho -- e e justamente o nome velho que fazia o lojista achar que
+        // eram duas pessoas. Se o cadastro tiver sido apagado, cai no nome gravado (a FK da V80 e
+        // ON DELETE SET NULL, mas uma previa aberta em outra aba pode ter o id em maos).
+        for (Object[] r : pedidos.previaAcertoPorCadastro(ctx.lojaId(), ini, fimEx)) {
+            Long entregadorId = ((Number) r[0]).longValue();
+            String nomeNoPedido = (String) r[1];
+            long qtd = ((Number) r[2]).longValue();
+            BigDecimal taxas = big(r[3]);
+            BigDecimal dinheiro = big(r[4]);
+            BigDecimal total = big(r[5]);
+            String nome = entregadores.findByIdAndLojaId(entregadorId, ctx.lojaId())
+                    .map(e -> e.nome).filter(x -> x != null && !x.isBlank()).orElse(nomeNoPedido);
+            linhas.add(new AcertoLinha(nome, qtd, taxas, dinheiro, total.subtract(dinheiro), total,
+                    taxas, entregadorId));
+        }
+
+        // 2. O LEGADO, por TEXTO: entrega gravada antes da V80, ou nome que nao casou com um unico
+        // cadastro. A consulta exclui quem tem cadastro, senao o mesmo dinheiro sairia nas duas
+        // linhas e fechar as duas pagaria o motoboy em dobro.
         for (Object[] r : pedidos.previaAcerto(ctx.lojaId(), ini, fimEx)) {
             String entregador = (String) r[0];
             long qtd = ((Number) r[1]).longValue();
@@ -58,8 +89,13 @@ public class AcertoEntregadorService {
             BigDecimal dinheiro = big(r[3]);
             BigDecimal total = big(r[4]);
             BigDecimal outras = total.subtract(dinheiro);
-            linhas.add(new AcertoLinha(entregador, qtd, taxas, dinheiro, outras, total, taxas));
+            linhas.add(new AcertoLinha(entregador, qtd, taxas, dinheiro, outras, total, taxas, null));
         }
+
+        // As duas listas vem ordenadas por nome cada uma; juntas, nao. Ordena aqui para a tela nao
+        // mostrar o motoboy com cadastro em cima e o legado embaixo, sem explicacao.
+        linhas.sort(java.util.Comparator.comparing(
+                l -> l.entregador() == null ? "" : l.entregador().toLowerCase()));
 
         // Item 6.4: entrega concluida SEM motoboy escolhido nao cabe em nenhuma linha por entregador,
         // e por isso desaparecia de todo acerto. Entra como uma linha propria, com o nome que diz o
@@ -72,7 +108,10 @@ public class AcertoEntregadorService {
             if (qtd == 0) continue;
             BigDecimal taxas = big(r[1]);
             BigDecimal total = big(r[2]);
-            linhas.add(new AcertoLinha(SEM_MOTOBOY, qtd, taxas, BigDecimal.ZERO, total, total, taxas));
+            // Sem cadastro, por definicao: e a linha das entregas que terminaram sem ninguem
+            // escolhido. Fica por ULTIMO na tela, depois da ordenacao acima.
+            linhas.add(new AcertoLinha(SEM_MOTOBOY, qtd, taxas, BigDecimal.ZERO, total, total,
+                    taxas, null));
         }
         return linhas;
     }
@@ -81,16 +120,33 @@ public class AcertoEntregadorService {
     @Transactional
     public AcertoEntregador fazer(FazerAcertoRequest req) {
         ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
-        if (req.entregador() == null || req.entregador().isBlank()) {
+        boolean porCadastro = req.entregadorId() != null;
+        if (!porCadastro && (req.entregador() == null || req.entregador().isBlank())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Entregador é obrigatório");
         }
         validarPeriodo(req.inicio(), req.fim());
         Long lojaId = ctx.lojaId();
-        String entregador = req.entregador().trim();
         OffsetDateTime ini = req.inicio().atStartOfDay(ZONE).toOffsetDateTime();
         OffsetDateTime fimEx = req.fim().plusDays(1).atStartOfDay(ZONE).toOffsetDateTime();
 
-        List<Pedido> peds = pedidos.entregasParaAcerto(lojaId, entregador, ini, fimEx);
+        // QUEM MANDA E O ID, QUANDO ELE VEM. (item 3 da secao 4)
+        //
+        // O cadastro e lido da LOJA de quem esta logado: id de outra loja vira 404 aqui, nao uma
+        // soma de entregas de outra pessoa. E o nome gravado no acerto passa a ser o do cadastro --
+        // o recibo impresso tem de dizer o nome de agora, nao o texto que a tela mandou junto.
+        br.com.bora.entity.Entregador cadastro = null;
+        if (porCadastro) {
+            cadastro = entregadores.findByIdAndLojaId(req.entregadorId(), lojaId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "Entregador não encontrado nesta loja"));
+        }
+        String entregador = cadastro != null && cadastro.nome != null && !cadastro.nome.isBlank()
+                ? cadastro.nome.trim()
+                : req.entregador() == null ? "" : req.entregador().trim();
+
+        List<Pedido> peds = porCadastro
+                ? pedidos.entregasParaAcertoPorCadastro(lojaId, req.entregadorId(), ini, fimEx)
+                : pedidos.entregasParaAcerto(lojaId, entregador, ini, fimEx);
         if (peds.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Nenhuma entrega em aberto para " + entregador + " neste período");
@@ -127,6 +183,7 @@ public class AcertoEntregadorService {
         AcertoEntregador a = new AcertoEntregador();
         a.lojaId = lojaId;
         a.entregador = entregador;
+        a.entregadorId = req.entregadorId();
         a.periodoInicio = req.inicio();
         a.periodoFim = req.fim();
         a.qtdeEntregas = (int) qtd;

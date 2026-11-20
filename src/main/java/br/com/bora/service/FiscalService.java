@@ -47,12 +47,15 @@ public class FiscalService {
                 .map(br.com.bora.entity.ConfigPlataforma::getValor)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.CONFLICT, "Token da API fiscal não configurado"));
-        if (loja.documento == null || loja.documento.replaceAll("\\D", "").length() != 14) {
+        // ehCnpj em vez de "conta 14 digitos": o anterior aceitava 14 digitos quaisquer e
+        // mutilava CNPJ alfanumerico (regra vigente desde julho/2026) tirando as letras dele --
+        // a nota sairia com um emitente que nao existe. Ver DocumentoFiscal.
+        if (!br.com.bora.service.DocumentoFiscal.ehCnpj(loja.documento)) {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.CONFLICT, "Loja sem CNPJ cadastrado para emissão");
         }
         java.util.Map<String, Object> nota = new java.util.LinkedHashMap<>();
-        nota.put("cnpj_emitente", loja.documento.replaceAll("\\D", ""));
+        nota.put("cnpj_emitente", br.com.bora.service.DocumentoFiscal.normalizar(loja.documento));
         nota.put("data_emissao", java.time.OffsetDateTime.now().toString());
         nota.put("presenca_comprador", 1);
         nota.put("modalidade_frete", 9);

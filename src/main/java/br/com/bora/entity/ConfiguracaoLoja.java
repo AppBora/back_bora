@@ -6,6 +6,20 @@ package br.com.bora.entity; import jakarta.persistence.*; import lombok.*; @Enti
  /** Custo fixo mensal da loja (aluguel, folha, energia). Rateado pelos dias do periodo. */
  @Column(name="custo_fixo_mensal") public java.math.BigDecimal custoFixoMensal;
  /**
+  * Minutos que a COZINHA leva. NULO = a tela cai na tabela por canal do `app.js` (item 5 da secao 4).
+  *
+  * <p>Estava cravado no JavaScript: a pizzaria de forno de 45 min via TODO pedido marcado
+  * "Atrasado", e um alerta que acende sempre deixa de ser alerta.</p>
+  */
+ @Column(name="tempo_preparo_min") public Integer tempoPreparoMin;
+ /**
+  * Minutos de RUA, somados ao preparo apenas quando o pedido e entrega. NULO = padrao do `app.js`.
+  *
+  * <p>Separado do preparo de proposito: juntos num campo so, o pedido de RETIRADA -- que nao tem rua
+  * -- herdaria o tempo da entrega e voltaria a marcar atraso onde nao ha.</p>
+  */
+ @Column(name="tempo_entrega_min") public Integer tempoEntregaMin;
+ /**
   * O nome REAL da loja (de `loja.nome`), so para leitura. Nao e coluna desta tabela.
   *
   * <p>Existe por causa de uma rede de seguranca do painel que estava morta. Quando o lojista APAGA

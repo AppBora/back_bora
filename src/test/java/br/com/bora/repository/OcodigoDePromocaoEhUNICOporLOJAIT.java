@@ -71,8 +71,15 @@ class OcodigoDePromocaoEhUNICOporLOJAIT {
      * ao fim. O {@code @BeforeEach} fica como cinto de seguranca, para o caso de alguem rodar isto
      * com a transacao desligada.</p>
      */
+    @Autowired private jakarta.persistence.EntityManager em;
+
     @BeforeEach
     void limpar() {
+        // A LOJA TEM DE EXISTIR: desde a V82 (item 6 da secao 4) as tabelas com `loja_id`
+        // tem chave estrangeira para `loja`. Antes disto o banco aceitava filho sem mae, e
+        // era desse buraco que esta fixture vivia -- o mesmo buraco que a V82 fechou em
+        // producao. Ver LojaDeTeste.
+        LojaDeTeste.garantir(em, LOJA, OUTRA_LOJA);
         jdbc.update("delete from promocao where loja_id in (?, ?)", LOJA, OUTRA_LOJA);
         jdbc.update("drop table if exists promocao_copia_do_teste");
     }

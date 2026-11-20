@@ -2,6 +2,7 @@ package br.com.bora.repository;
 
 import br.com.bora.entity.ConfiguracaoLoja;
 import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -59,6 +60,14 @@ class UmaConfiguracaoPorLojaIT {
 
     @Autowired private EntityManager em;
     @Autowired private ConfiguracaoLojaRepository repo;
+
+    @BeforeEach
+    void semearALoja() {
+        // A LOJA TEM DE EXISTIR: desde a V82 (item 6 da secao 4) as tabelas com `loja_id` tem
+        // chave estrangeira para `loja`. Antes disto o banco aceitava filho sem mae, e era desse
+        // buraco que esta fixture vivia -- o mesmo que a V82 fechou em producao. Ver LojaDeTeste.
+        LojaDeTeste.garantir(em, LOJA, LOJA + 1);   // o teste da "outra loja" usa LOJA + 1
+    }
 
     private ConfiguracaoLoja config(Long lojaId, String nome) {
         ConfiguracaoLoja c = new ConfiguracaoLoja();

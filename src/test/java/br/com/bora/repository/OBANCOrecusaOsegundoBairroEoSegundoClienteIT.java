@@ -52,6 +52,11 @@ class OBANCOrecusaOsegundoBairroEoSegundoClienteIT {
 
     @BeforeEach
     void limpar() {
+        // A LOJA TEM DE EXISTIR: desde a V82 (item 6 da secao 4) as tabelas com `loja_id`
+        // tem chave estrangeira para `loja`. Antes disto o banco aceitava filho sem mae, e
+        // era desse buraco que esta fixture vivia -- o mesmo buraco que a V82 fechou em
+        // producao. Ver LojaDeTeste.
+        LojaDeTeste.garantir(em, LOJA, OUTRA_LOJA);
         em.createNativeQuery("delete from taxa_entrega where loja_id in (?1, ?2)")
                 .setParameter(1, LOJA).setParameter(2, OUTRA_LOJA).executeUpdate();
         em.createNativeQuery("delete from cliente where loja_id in (?1, ?2)")

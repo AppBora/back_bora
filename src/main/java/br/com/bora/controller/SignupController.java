@@ -168,7 +168,19 @@ public class SignupController {
         }
         Loja loja = new Loja();
         loja.setNome(req.nomeLoja().trim());
-        loja.setDocumento(req.documento());
+        // ITEM 4 DA SECAO 4: o documento passa a ser CONFERIDO (digito verificador), e gravado
+        // normalizado. Antes entrava qualquer texto. Nao e detalhe de formulario:
+        //
+        //  - "mesmo CNPJ = mesma empresa" e a regra que monta a rede multi-lojas. Com lixo passando,
+        //    dois cadastros com 00000000000000 viravam a MESMA empresa -- duas lojas de clientes
+        //    diferentes dentro de um cliente so, uma a um clique da outra;
+        //  - este documento vai para a FATURA (AssinaturaService.documentoDaCobranca -> Asaas) e para
+        //    a NOTA FISCAL (FiscalService.cnpj_emitente). Errado aqui = cobranca que nao nasce,
+        //    descoberta no dia do vencimento.
+        //
+        // Em branco continua passando: varias das lojas de hoje nao tem documento no cadastro, e
+        // exigir o campo e decisao de produto, nao conserto de defeito.
+        loja.setDocumento(br.com.bora.service.DocumentoFiscal.exigirValido(req.documento()));
         loja.setPlano(Plano.UNICO); // plano único: R$ 199/mês por loja (preço de lançamento)
         loja.empresaId = empresas.paraDocumento(req.documento(), req.nomeLoja()).getId();
         loja.acessoAte = java.time.OffsetDateTime.now().plusDays(7); // os 7 dias gratis do site

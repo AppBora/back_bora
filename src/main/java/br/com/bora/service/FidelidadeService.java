@@ -36,9 +36,40 @@ public class FidelidadeService {
     private final ClienteRepository clientes;
     private final ConfiguracaoLojaRepository configs;
 
-    public FidelidadeService(ClienteRepository clientes, ConfiguracaoLojaRepository configs) {
+    /**
+     * O TETO DE PALPITES no nome do cliente. (item 2 da secao 4 da varredura)
+     *
+     * <h3>O que estava aberto, e nao era o que o item dizia</h3>
+     * <p>O item foi escrito como "o cashback e protegido por telefone + primeiro nome, e telefone nao
+     * e segredo". Verdade, mas incompleta: o que tornava isso explorável de fato e que <b>o palpite do
+     * nome nao tinha limite nenhum</b>. Com o telefone na mao -- que esta no grupo do bairro, no
+     * comprovante e na agenda de muita gente -- dava para tentar "joao", "maria", "jose"... sem teto,
+     * nos dois caminhos (a consulta de saldo e o proprio checkout), ate acertar. Primeiro nome e um
+     * espaco de algumas dezenas de palpites: sem freio, nao e segredo nenhum.</p>
+     *
+     * <h3>A CHAVE E O TELEFONE, nao o endereco de origem</h3>
+     * <p>Diferente do login (que usa {@code chave(email, origem)}), aqui a chave e so loja+telefone.
+     * Com a origem dentro da chave, trocar de rede ou de celular zeraria o placar e o freio nao
+     * freiaria -- e o que esta sendo atacado e um telefone especifico, nao uma origem.</p>
+     *
+     * <p><b>O preco disso, dito na cara:</b> quem souber o telefone de alguem consegue deixar o
+     * cashback DELE travado por 15 minutos errando o nome de proposito. Troquei "o vizinho consegue
+     * gastar o seu saldo" por "o vizinho consegue te atrapalhar por 15 minutos", e o nome certo
+     * zera o placar na hora ({@code acertou}). A troca e boa nessa direcao e ruim na inversa.</p>
+     */
+    private final br.com.bora.security.FreioDeTentativas freioDoNome;
+
+    public FidelidadeService(ClienteRepository clientes, ConfiguracaoLojaRepository configs,
+                             br.com.bora.security.FreioDeTentativas freioDoNome) {
         this.clientes = clientes;
         this.configs = configs;
+        this.freioDoNome = freioDoNome;
+    }
+
+    /** Loja + telefone: o que esta sendo chutado. Ver o javadoc do campo {@code freioDoNome}. */
+    private static String chaveDoFreio(Long lojaId, String telefoneNormalizado) {
+        return br.com.bora.security.FreioDeTentativas.chave(
+                "cashback:" + lojaId, telefoneNormalizado);
     }
 
     /** Percentual de cashback da loja, em %. Zero desliga o recurso. */
@@ -137,10 +168,46 @@ public class FidelidadeService {
     public BigDecimal saldoPeloTelefone(Long lojaId, String telefone, String nomeInformado) {
         String tel = normalizar(telefone);
         if (tel == null) return BigDecimal.ZERO;
-        return clientes.findFirstByLojaIdAndTelefone(lojaId, tel)
-                .filter(c -> nomeConfere(c.nome, nomeInformado))
-                .map(c -> c.cashback == null ? BigDecimal.ZERO : c.cashback)
-                .orElse(BigDecimal.ZERO);
+        String chave = chaveDoFreio(lojaId, tel);
+        freioDoNome.conferir(chave);   // 429 depois de 5 palpites errados em 15 min
+        Cliente c = clientes.findFirstByLojaIdAndTelefone(lojaId, tel).orElse(null);
+        // Telefone sem cadastro NAO conta palpite: nao existe saldo para adivinhar, e contar aqui
+        // daria para travar o freio de telefones ao acaso.
+        if (c == null) return BigDecimal.ZERO;
+        if (!nomeConfere(c.nome, nomeInformado)) {
+            freioDoNome.errou(chave);
+            // A resposta continua sendo zero, a MESMA de telefone sem cadastro: a tela nao pode dizer
+            // "existe cadastro, voce errou o nome" -- isso confirmaria o telefone para quem chuta.
+            return BigDecimal.ZERO;
+        }
+        freioDoNome.acertou(chave);    // o dono nao fica preso ao placar de quem chutou o nome dele
+        return c.cashback == null ? BigDecimal.ZERO : c.cashback;
+    }
+
+    /**
+     * Exige, COM FREIO, que quem esta gastando o cashback seja o dono do saldo.
+     *
+     * <p>E o mesmo placar da consulta de saldo (a chave e loja+telefone), de proposito: sem isso,
+     * quem estourasse o teto numa ponta continuaria chutando na outra. O caminho do checkout era
+     * justamente o que nao tinha freio nenhum.</p>
+     *
+     * @throws ResponseStatusException 429 quando os palpites estouraram, 400 quando o nome nao bate
+     */
+    public void exigirDonoDoSaldo(Long lojaId, Long clienteId, String telefone, String nomeInformado) {
+        String tel = normalizar(telefone);
+        String chave = tel == null ? null : chaveDoFreio(lojaId, tel);
+        if (chave != null) freioDoNome.conferir(chave);
+        if (ehOMesmoCliente(lojaId, clienteId, nomeInformado)) {
+            if (chave != null) freioDoNome.acertou(chave);
+            return;
+        }
+        if (chave != null) freioDoNome.errou(chave);
+        // Sem o telefone no log: e dado pessoal de cliente final (LGPD), e a loja + o cliente bastam
+        // para investigar. Em WARN porque isto e tentativa de gastar saldo de outra pessoa.
+        log.warn("Cashback loja {}: nome informado nao confere com o do cadastro do cliente {} -- "
+                + "o resgate foi recusado.", lojaId, clienteId);
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Para usar o cashback, informe o mesmo nome do seu cadastro.");
     }
 
     /** O saldo e deste cliente mesmo? Confere o nome informado no checkout contra o do cadastro. */

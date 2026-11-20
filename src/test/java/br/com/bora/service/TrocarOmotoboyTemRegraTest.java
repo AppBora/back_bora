@@ -161,13 +161,20 @@ class TrocarOmotoboyTemRegraTest {
         String fonte = assertDoesNotThrow(() -> java.nio.file.Files.readString(
                 java.nio.file.Path.of("src/main/java/br/com/bora/service/PedidoService.java"),
                 java.nio.charset.StandardCharsets.UTF_8));
-        int i = fonte.indexOf("public Pedido definirEntregador(");
-        assertTrue(i > 0);
+        // A SOBRECARGA DE TRES ARGUMENTOS, e nao a primeira que aparece: desde a V80 (item 3 da
+        // secao 4) existe tambem uma de dois, que SO DELEGA -- procurar "definirEntregador(" sem
+        // mais nada acha a delegadora, que nao tem log nenhum, e este teste passava a medir o
+        // metodo errado. Foi exatamente o que aconteceu em 20/11/2026, e este teste pegou.
+        int i = fonte.indexOf("public Pedido definirEntregador(Long id, Long entregadorId, String entregador)");
+        assertTrue(i > 0, "a sobrecarga que grava de verdade mudou de assinatura");
         String metodo = fonte.substring(i, fonte.indexOf("\n    }", i));
 
         assertTrue(metodo.contains("AUDITORIA"), "a troca tem que ir para o log de auditoria");
         assertTrue(metodo.contains("String anterior = p.entregador"),
                 "o log tem que dizer de QUEM para quem, senao nao da para auditar");
+        assertTrue(metodo.contains("Long anteriorId = p.entregadorId"),
+                "sem o cadastro ANTERIOR no log, auditar uma troca entre dois motoboys de mesmo "
+                + "nome fica impossivel -- e e justamente o caso que o item 3 trata");
         assertTrue(metodo.contains("userId()"), "e quem fez");
     }
 }

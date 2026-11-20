@@ -78,6 +78,40 @@ public class ConfiguracaoLojaService {
             c.custoFixoMensal = dados.custoFixoMensal;
         }
 
+        // Tempo de preparo e de entrega (item 5 da secao 4). Nulo = nao mexe; e nulo no banco quer
+        // dizer "usa o padrao de hoje", entao quem nunca abriu esta tela continua como estava.
+        //
+        // AS FAIXAS, e por que elas existem: o campo alimenta o alerta de atraso da tela da cozinha.
+        // Zero no preparo marcaria todo pedido como atrasado no instante em que ele entra -- o
+        // mesmo defeito, ao contrario. E 240 minutos (4 h) ja e mais do que qualquer cozinha de
+        // delivery leva: acima disso o que houve foi erro de digitacao, e aceitar calado faz o
+        // alerta nunca mais acender.
+        if (dados.tempoPreparoMin != null) {
+            if (dados.tempoPreparoMin < 0 || dados.tempoPreparoMin > 240) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "O tempo de preparo deve ficar entre 1 e 240 minutos (ou 0 para automatico).");
+            }
+            // ZERO VOLTA AO AUTOMATICO, e este e o unico jeito de desfazer.
+            //
+            // Este PUT ignora campo nulo de proposito ("so sobrescreve o que veio preenchido"), e a
+            // tela manda null para campo vazio -- ou seja, limpar o campo na tela NAO limparia o
+            // banco, e o lojista que preenchesse 45 uma vez ficaria preso nos 45 para sempre. Com o
+            // zero virando NULL aqui, "0 = automatico" na tela e verdade de ponta a ponta.
+            //
+            // Zero tambem nao poderia ser gravado como zero: SLA de zero minuto marca todo pedido
+            // como atrasado no instante em que ele entra -- o mesmo defeito do item 5, invertido.
+            c.tempoPreparoMin = dados.tempoPreparoMin == 0 ? null : dados.tempoPreparoMin;
+        }
+        // Entrega aceita ZERO: a loja que so vende no balcao, ou que usa so marketplace com entrega
+        // deles, nao tem rua nenhuma para contar.
+        if (dados.tempoEntregaMin != null) {
+            if (dados.tempoEntregaMin < 0 || dados.tempoEntregaMin > 180) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "O tempo de entrega deve ficar entre 0 e 180 minutos.");
+            }
+            c.tempoEntregaMin = dados.tempoEntregaMin;
+        }
+
         // Cashback: 0 desliga. Teto de 50% para um erro de digitação não virar prejuízo.
         if (dados.cashbackPercentual != null) {
             if (dados.cashbackPercentual.signum() < 0

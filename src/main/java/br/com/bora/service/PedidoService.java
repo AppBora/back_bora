@@ -224,6 +224,7 @@ public class PedidoService {
                     p.bairroEntrega,
                     p.tipoEntrega,
                     p.entregador,
+                    p.entregadorId,
                     p.pagamentoPendente(),
                     itensPorPedido.getOrDefault(p.id, List.of())));
         }
@@ -738,7 +739,28 @@ public class PedidoService {
      * <p>E fica <b>no log de auditoria</b>, sempre: era o unico campo de dinheiro que mudava sem
      * deixar rastro.</p>
      */
+    /**
+     * Texto solto, sem cadastro atras. Continua valendo para chamada antiga da API.
+     *
+     * <p>O pedido fica com {@code entregadorId} nulo e o acerto dele agrupa pelo TEXTO, exatamente
+     * como antes da V80 -- inclusive com o defeito do item 3 (renomear divide a conta). Quem passa
+     * pela tela sempre tem id; isto aqui e a porta de tras, mantida para nao quebrar integracao.</p>
+     */
     public Pedido definirEntregador(Long id, String entregador) {
+        return definirEntregador(id, null, entregador);
+    }
+
+    /**
+     * O mesmo, com o CADASTRO do motoboy. (item 3 da secao 4, 20/11/2026)
+     *
+     * <p>Grava as duas coisas: o {@code entregadorId}, que e a chave que o acerto agrupa, e o
+     * {@code entregador} (texto), que fica como retrato do nome no dia da entrega -- o cartao, a
+     * comanda e o recibo leem dali sem JOIN, e o historico nao muda quando o cadastro muda.</p>
+     *
+     * <p>Quem resolve nome/id para cadastro e o {@code EntregadorService.resolver}, que e quem tem a
+     * tabela; aqui so se grava o que ele devolveu.</p>
+     */
+    public Pedido definirEntregador(Long id, Long entregadorId, String entregador) {
         Pedido p = buscarDaLoja(id);
         if (p.acertoId != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -749,12 +771,17 @@ public class PedidoService {
             ctx.requirePapel("GERENTE", "ADMINISTRADOR_LOJA");
         }
         String anterior = p.entregador;
+        Long anteriorId = p.entregadorId;
         p.entregador = (entregador == null || entregador.isBlank()) ? null : entregador.trim();
+        // O ID ACOMPANHA O TEXTO, sempre. Apagar o motoboy (texto vazio) tem de apagar o id tambem:
+        // um id que sobrevive ao nome apagado deixa a entrega contando no acerto de alguem que a tela
+        // mostra como "ninguem escolhido".
+        p.entregadorId = p.entregador == null ? null : entregadorId;
         p.atualizadoEm = OffsetDateTime.now();
         AUDITORIA.info("AUDITORIA entrega: usuario {} mudou o entregador do pedido {} da loja {} de "
-                        + "\"{}\" para \"{}\" (status {})",
+                        + "\"{}\" (cadastro {}) para \"{}\" (cadastro {}) (status {})",
                 ctx.atual() == null ? null : ctx.atual().userId(), p.id, p.lojaId,
-                anterior, p.entregador, p.status);
+                anterior, anteriorId, p.entregador, p.entregadorId, p.status);
         return repo.save(p);
     }
 
