@@ -1,0 +1,29 @@
+-- Trocar a senha passa a DERRUBAR o token que ja estava por aí.  (item 1 da secao 4, 20/11/2026)
+--
+-- O DEFEITO, medido: o token carrega `email`, `papel`, `lojaId` e validade -- e NENHUMA marca da
+-- senha. Ele vale 24 h. Logo, um token vazado continuava valendo por ate um dia DEPOIS de a senha
+-- ser trocada, e trocar a senha era exatamente o que a pessoa fazia ao desconfiar do vazamento.
+-- O unico jeito de cortar de verdade era desativar o usuario, o que nem sempre e o que se quer.
+--
+-- Esta coluna e a marca que faltava. O token nasce com o valor dela; o filtro compara o valor do
+-- token com o do banco em cada requisicao e recusa quando diferem. Trocar a senha soma 1 aqui, e
+-- todo token emitido antes vira invalido no mesmo instante.
+--
+-- POR QUE UM CONTADOR E NAO UMA DATA: data tem granularidade, e token emitido no MESMO SEGUNDO da
+-- troca escaparia da comparacao. Contador nao tem esse meio-termo: ou o numero bate, ou nao bate.
+--
+-- POR QUE `NOT NULL DEFAULT 1`, e nao nulo:
+--
+--   O filtro recusa quando o valor do token difere do valor do banco. Se a coluna pudesse ser nula,
+--   "nulo no banco" teria de ser tratado como "aceita qualquer coisa" -- e aí a coluna nao
+--   protegeria ninguem ate alguem trocar a senha pela primeira vez. Com DEFAULT 1 toda linha que
+--   JA EXISTE comeca valendo 1, e a comparacao funciona desde a primeira requisicao.
+--
+-- ADITIVA DE PROPOSITO: so acrescenta coluna com valor padrao. O `deploy-api.sh` confere isso no
+-- passo 2.5 e a versao anterior da aplicacao sobe contra este schema sem ver esta coluna -- medido
+-- em 19/11/2026 com a v170 contra um banco em V77.
+--
+-- O QUE ESTA MIGRACAO FAZ COM QUEM ESTA LOGADO AGORA: nada, por si. O que derruba todo mundo e o
+-- deploy do codigo: os tokens emitidos ANTES dele nao tem a marca nenhuma, e sem marca o filtro
+-- recusa. O dono decidiu isso de olhos abertos em 20/11/2026.
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS versao_senha INTEGER NOT NULL DEFAULT 1;

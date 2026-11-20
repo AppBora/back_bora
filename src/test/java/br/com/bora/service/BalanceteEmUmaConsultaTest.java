@@ -61,7 +61,8 @@ class BalanceteEmUmaConsultaTest {
         when(lojas.findAll()).thenReturn(List.of(loja(LOJA_A, "Zirá"), loja(LOJA_B, "Sorveteria")));
 
         rede = new RedeService(mock(UsuarioLojaRepository.class), mock(UsuarioRepository.class), lojas,
-                pedidos, mock(JwtService.class), ctx, mock(EmpresaService.class));
+                pedidos, mock(JwtService.class), ctx, mock(EmpresaService.class),
+                mock(br.com.bora.service.PlanoService.class));
     }
 
     private Loja loja(Long id, String nome) {

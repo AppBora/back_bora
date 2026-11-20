@@ -95,6 +95,10 @@ public class JwtService {
                 .claim("email", u.getEmail())
                 .claim("papel", u.getPapel().name())
                 .claim("lojaId", lojaId)
+                // A VERSAO DA SENHA VIAJA NO TOKEN (20/11/2026). O filtro a compara com a do
+                // banco em cada requisicao: trocar a senha soma 1 la e mata este token aqui.
+                // Sem ela, token vazado valia as 24 h inteiras DEPOIS da troca de senha.
+                .claim("vs", u.getVersaoSenha() == null ? 1 : u.getVersaoSenha())
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expMs))
                 .signWith(key)

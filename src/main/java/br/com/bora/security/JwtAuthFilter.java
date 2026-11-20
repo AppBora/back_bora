@@ -66,6 +66,32 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 String papel = ativo && usuario.getPapel() != null ? usuario.getPapel().name() : null;
                 if (papel == null) ativo = false;   // sem papel não se opera nada
 
+                // A SENHA TROCADA MATA O TOKEN (20/11/2026, item 1 da secao 4 da varredura).
+                //
+                // O DEFEITO: o token levava email, papel, lojaId e validade -- e nenhuma marca da
+                // senha. Ele vale 24 h. Entao um token vazado continuava valendo por ate um dia
+                // DEPOIS de a senha ser trocada, e trocar a senha e precisamente o que a pessoa faz
+                // ao desconfiar do vazamento. Cortar de verdade exigia DESATIVAR o usuario.
+                //
+                // O desenho e o MESMO do papel, logo acima, e pelo mesmo motivo: quem decide e o
+                // BANCO, nao o que o token afirma. O token traz a versao com que nasceu; se a senha
+                // mudou depois, o numero do banco subiu e este token morreu.
+                //
+                // Custa ZERO consulta a mais: o registro ja esta carregado nesta requisicao.
+                //
+                // TOKEN SEM A MARCA E RECUSADO, e isto e a parte que o dono aprovou de olhos
+                // abertos em 20/11/2026: todo token emitido ANTES deste deploy nao tem a claim
+                // `vs`, cai aqui, e por isso o deploy desloga todo mundo UMA vez. Aceitar token sem
+                // marca seria deixar o defeito aberto por 24 h exatamente para os tokens que ja
+                // estao por aí -- que sao os unicos que poderiam ter vazado antes do conserto.
+                if (ativo) {
+                    Number vsDoToken = c.get("vs", Number.class);
+                    int vsDoBanco = usuario.getVersaoSenha() == null ? 1 : usuario.getVersaoSenha();
+                    if (vsDoToken == null || vsDoToken.intValue() != vsDoBanco) {
+                        ativo = false;
+                    }
+                }
+
                 Number loja = c.get("lojaId", Number.class);
                 // Suspensão/arquivamento pela plataforma vale a partir do request seguinte: o lojaId
                 // viaja assinado no token, então sem esta checagem o token já emitido continuaria

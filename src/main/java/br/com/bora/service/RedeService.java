@@ -37,10 +37,13 @@ public class RedeService {
     private final JwtService jwt;
     private final AuthContext ctx;
     private final EmpresaService empresas;
+    private final PlanoService planos;
 
     public RedeService(UsuarioLojaRepository vinculos, UsuarioRepository usuarios, LojaRepository lojas,
-                       PedidoRepository pedidos, JwtService jwt, AuthContext ctx, EmpresaService empresas) {
+                       PedidoRepository pedidos, JwtService jwt, AuthContext ctx, EmpresaService empresas,
+                       PlanoService planos) {
         this.empresas = empresas;
+        this.planos = planos;
         this.vinculos = vinculos;
         this.usuarios = usuarios;
         this.lojas = lojas;
@@ -259,6 +262,18 @@ public class RedeService {
         if (vinculos.existsByUsuarioIdAndLojaId(usuarioId, lojaId)) {
             return Map.of("usuarioId", usuarioId, "lojaId", lojaId, "criado", false);
         }
+        // O TETO DO PLANO VALE POR AQUI TAMBEM (20/11/2026).
+        //
+        // O UsuarioService chama checarLimiteUsuarios ao CRIAR usuario, em dois pontos. Mas
+        // vincular da acesso a uma loja sem passar por nenhum deles: a loja com os 15 usuarios
+        // ativos do plano recebia o 16o pela rede. O teto existia e furava por este caminho.
+        //
+        // O lojaId e o da loja QUE RECEBE, nao o ctx.lojaId(): quem fica acima do teto e ela.
+        //
+        // A ORDEM IMPORTA. A checagem vem DEPOIS do retorno de vinculo ja existente, logo
+        // acima. Se viesse antes, uma loja no teto nao conseguiria nem reconfirmar um vinculo
+        // que ela JA tem -- e esse pedido e idempotente, nao acrescenta ninguem.
+        planos.checarLimiteUsuarios(lojaId);
         UsuarioLoja v = new UsuarioLoja();
         v.setUsuarioId(usuarioId);
         v.setLojaId(lojaId);
