@@ -55,6 +55,7 @@ class OdesempenhoCobraOqueALOJApagaTest {
     private PedidoRepository pedidos;
     private ConfiguracaoLojaRepository configs;
     private AuthContext ctx;
+    private PedidoItemRepository itensRepo;
     private DesempenhoService service;
     private Loja loja;
 
@@ -74,7 +75,8 @@ class OdesempenhoCobraOqueALOJApagaTest {
         when(configs.findByLojaId(LOJA)).thenReturn(Optional.empty());
         when(pedidos.somaReceita(anyLong(), any(), any())).thenReturn(new BigDecimal("1000.00"));
         when(pedidos.contaPedidosValidos(anyLong(), any(), any())).thenReturn(10L);
-        service = new DesempenhoService(lojas, pedidos, mock(PedidoItemRepository.class), configs,
+        itensRepo = mock(PedidoItemRepository.class);
+        service = new DesempenhoService(lojas, pedidos, itensRepo, configs,
                 mock(UsuarioLojaRepository.class), ctx);
     }
 
@@ -204,5 +206,89 @@ class OdesempenhoCobraOqueALOJApagaTest {
         // custo = cmv 0 + entrega 0 + cashback 5 + imposto 0 + custoFixo 0 + mensalidade 9,93
         reais("14.93", m.get("custoTotal"), "o custo total nao fechou com as parcelas");
         reais("985.07", m.get("lucro"), "o lucro da tela em que o dono decide preco esta errado");
+    }
+    // ================================================== 3) o CMV que sai menor sem avisar
+    //
+    // O `custosIncompletos` deste servico olhava SOMENTE a aliquota de imposto e o custo fixo. Item
+    // vendido sem custo cadastrado entrava no CMV como R$ 0,00 -- o que e aceitavel, nao ha nada
+    // melhor a fazer com nulo -- mas passava CALADO: CMV menor que o real, margem MAIOR que a real,
+    // e nada na tela dizendo isso.
+    //
+    // Medido na varredura de 18/11/2026: a loja 18 nao tem custo em NENHUM dos 44 produtos dela. O
+    // RelatorioService ja contava isso desde 26/10; este servico, que alimenta o painel da rede, nao.
+    // Reconferido por mim em 19/11 e consertado no mesmo dia.
+
+    /** Um item vendido, com ou sem custo cadastrado. */
+    private br.com.bora.entity.PedidoItem item(Long pedidoId, String custoUnitario) {
+        br.com.bora.entity.PedidoItem it = new br.com.bora.entity.PedidoItem();
+        it.setLojaId(LOJA);
+        it.setPedidoId(pedidoId);
+        it.setQuantidade(1);
+        it.setSubtotal(new BigDecimal("100.00"));
+        it.setCustoUnitario(custoUnitario == null ? null : new BigDecimal(custoUnitario));
+        return it;
+    }
+
+    private Map<String, Object> comItens(Pedido pedido, br.com.bora.entity.PedidoItem... itens) {
+        when(itensRepo.findByLojaIdAndPedidoIdIn(eq(LOJA), any())).thenReturn(List.of(itens));
+        return daLoja(pedido);
+    }
+
+    /** A PREMISSA: com custo em todos os itens, nada e marcado como incompleto. */
+    @Test
+    void aPREMISSAcomCUSTOemTODOSitensNADAehINCOMPLETO() {
+        configCompleta();
+        Pedido v = venda(null, null, null);
+        Map<String, Object> linha = comItens(v, item(v.id, "40.00"));
+
+        assertEquals(false, linha.get("custosIncompletos"),
+                "com aliquota, custo fixo e custo em todo item, o numero e lucro e nao margem");
+        assertEquals(0, linha.get("itensSemCusto"));
+    }
+
+    /** O QUE IMPORTA: item sem custo marca o numero como incompleto. */
+    @Test
+    void itemSEMcustoMARCAoNUMEROcomoINCOMPLETO() {
+        configCompleta();
+        Pedido v = venda(null, null, null);
+        Map<String, Object> linha = comItens(v, item(v.id, "40.00"), item(v.id, null));
+
+        assertEquals(true, linha.get("custosIncompletos"),
+                "item vendido sem custo cadastrado entra no CMV como ZERO: o CMV sai menor do que e "
+                        + "e a margem MAIOR do que e. A tela tem de dizer isso -- era o unico dos "
+                        + "tres casos que passava calado.");
+        assertEquals(1, linha.get("itensSemCusto"),
+                "a tela precisa do TAMANHO do buraco, nao so do aviso de que existe");
+    }
+
+    /** E conta todos, nao so o primeiro. */
+    @Test
+    void aCONTAGEMdizQUANTOSitensEstaoSEMcusto() {
+        configCompleta();
+        Pedido v = venda(null, null, null);
+        Map<String, Object> linha = comItens(v, item(v.id, null), item(v.id, "40.00"), item(v.id, null));
+
+        assertEquals(2, linha.get("itensSemCusto"));
+    }
+
+    /** O CONTROLE: os dois motivos antigos continuam marcando. */
+    @Test
+    void oCONTROLEaliquotaAUSENTEcontinuaMARCANDO() {
+        // sem configCompleta(): a loja fica sem aliquota e sem custo fixo
+        Pedido v = venda(null, null, null);
+        Map<String, Object> linha = comItens(v, item(v.id, "40.00"));
+
+        assertEquals(true, linha.get("custosIncompletos"),
+                "sem aliquota de imposto o numero segue sendo margem, e nao lucro");
+        assertEquals(0, linha.get("itensSemCusto"), "e nao ha item sem custo neste caso");
+    }
+
+    /** A loja com aliquota e custo fixo preenchidos, para isolar o motivo do item. */
+    private void configCompleta() {
+        ConfiguracaoLoja cfg = new ConfiguracaoLoja();
+        cfg.lojaId = LOJA;
+        cfg.aliquotaImposto = new BigDecimal("6.00");
+        cfg.custoFixoMensal = new BigDecimal("3000.00");
+        when(configs.findByLojaId(LOJA)).thenReturn(Optional.of(cfg));
     }
 }

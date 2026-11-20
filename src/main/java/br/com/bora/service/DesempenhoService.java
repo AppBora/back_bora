@@ -149,9 +149,22 @@ public class DesempenhoService {
 
         List<Long> ids = vendas.stream().map(p -> p.id).toList();
         BigDecimal cmv = BigDecimal.ZERO;
+        // ITEM SEM CUSTO TAMBEM E CUSTO INCOMPLETO -- conserto de 19/11/2026.
+        //
+        // O `zero(...)` trata custo NULO como R$ 0,00, porque nao ha nada melhor a fazer com ele no
+        // meio de uma soma. O problema nunca foi o zero: foi o SILENCIO. O `custosIncompletos` deste
+        // servico olhava somente a aliquota de imposto e o custo fixo, entao a loja cujos produtos
+        // nao tem custo cadastrado recebia CMV menor do que o real, margem MAIOR do que a real, e
+        // nada na tela dizia isso.
+        //
+        // Medido na varredura de 18/11: a loja 18 nao tem custo em NENHUM dos 44 produtos dela. O
+        // `RelatorioService` ja contava isso (`itensSemCusto`, achado pelo QA em 26/10); este
+        // servico, que alimenta o painel da rede, nao.
+        int itensSemCusto = 0;
         if (!ids.isEmpty()) {
             for (PedidoItem it : itens.findByLojaIdAndPedidoIdIn(l.id, ids)) {
                 int q = it.getQuantidade() == null ? 1 : it.getQuantidade();
+                if (it.getCustoUnitario() == null) itensSemCusto++;
                 cmv = cmv.add(zero(it.getCustoUnitario()).multiply(BigDecimal.valueOf(q)));
             }
         }
@@ -205,8 +218,12 @@ public class DesempenhoService {
         m.put("custoTotal", custoTotal);
         m.put("lucro", lucro);
         m.put("margemPct", pct(lucro, faturamento));
-        // Sem alíquota ou sem custo fixo, o número é margem e não lucro. A tela precisa dizer isso.
-        m.put("custosIncompletos", aliquota == null || fixoMes == null);
+        // Sem alíquota, sem custo fixo OU com item vendido sem custo cadastrado, o número é margem
+        // e não lucro. A tela precisa dizer isso. O terceiro caso entrou em 19/11/2026: ele é o mais
+        // comum dos três e era o único que passava calado.
+        m.put("custosIncompletos", aliquota == null || fixoMes == null || itensSemCusto > 0);
+        // Quantos, para a tela poder dizer o tamanho do buraco em vez de só avisar que existe.
+        m.put("itensSemCusto", itensSemCusto);
         // Loja sem venda no período aparece com "prejuízo" só por causa do rateio de mensalidade e
         // custo fixo. É verdade contábil, mas numa lista longa engana — a tela separa esses casos.
         m.put("semMovimento", qtd == 0 && faturamento.signum() == 0);
