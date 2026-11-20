@@ -14,8 +14,24 @@ public interface PromocaoRepository extends JpaRepository<Promocao, Long> {
     long countByLojaIdAndOrigemAndInicioAfter(Long lojaId, String origem, OffsetDateTime depois);
     List<Promocao> findByAtivaTrueAndFimBefore(OffsetDateTime momento);
 
-    /** O codigo que o cliente digita no checkout. A busca ignora caixa, como a do cupom. */
-    Optional<Promocao> findByLojaIdAndCodigoIgnoreCase(Long lojaId, String codigo);
+    /**
+     * O codigo que o cliente digita no checkout. A busca ignora caixa, como a do cupom.
+     *
+     * <h2>Por que LISTA e nao Optional</h2>
+     * <p>Este metodo devolvia {@code Optional}. Com DUAS linhas de mesmo codigo na mesma loja, o
+     * Spring Data lanca {@code IncorrectResultSizeDataAccessException} e o cupom do cardapio
+     * publico responde <b>500</b>. Nao era hipotese: medido no dump de producao em 19/11/2026, a
+     * <b>loja 18 tinha 4 linhas</b> com o codigo {@code BORA15L18}, e o cupom dela estava quebrado.</p>
+     *
+     * <p>A V77 renomeia as duplicadas e cria o indice unico, entao o caso nao deve mais nascer. Mas
+     * o caminho publico <b>nao pode depender disso</b>: uma linha a mais no banco, por qualquer
+     * caminho, voltaria a derrubar o checkout. Lista nunca estoura, e quem escolhe e
+     * {@code DescontoService.resolver} — pela regra, nao pelo acaso da ordenacao.</p>
+     *
+     * <p><b>Nao reintroduzir a versao Optional.</b> Ela nao e "mais limpa": ela transforma dado
+     * duplicado em erro 500 no caminho em que o cliente esta pagando.</p>
+     */
+    List<Promocao> findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(Long lojaId, String codigo);
 
     /**
      * Soma um uso, mas so enquanto houver vaga no teto.

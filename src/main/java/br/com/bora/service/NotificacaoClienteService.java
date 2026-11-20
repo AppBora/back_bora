@@ -39,7 +39,12 @@ public class NotificacaoClienteService {
         // Pedido de marketplace (iFood, 99…): quem avisa o cliente é o app do marketplace, e o telefone
         // que vem no pedido é a CENTRAL dele (no iFood, 0800 + localizador), não o celular da pessoa.
         // Mandar WhatsApp ali não chega a ninguém — visto no 1º pedido real do iFood (19/09).
-        if (p.canalExterno != null && !p.canalExterno.isBlank()) return;
+        //
+        // ERA `p.canalExterno != null && !p.canalExterno.isBlank()`, E ISSO ESTAVA ERRADO (19/11/2026).
+        // O pedido do cardápio pago por PIX recebe `canalExterno = "PIX_ASAAS"` só para guardar o id da
+        // cobrança — e caía aqui. Resultado: o cliente que pagou por PIX NUNCA recebia o aviso, mesmo
+        // com o Módulo IA pago a R$ 99/mês. A regra agora é uma só: `Pedido.ehDeMarketplace()`.
+        if (p.ehDeMarketplace()) return;
         try {
             Loja loja = lojas.findById(p.lojaId).orElse(null);
             if (loja == null || !Boolean.TRUE.equals(loja.moduloIa)) return; // add-on não contratado

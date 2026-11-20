@@ -241,10 +241,20 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
      *
      * <p>Usa {@code max(id)} e nao {@code criadoEm} porque o id e sequencial e nao empata.</p>
      */
+    // O PEDIDO PAGO POR PIX TAMBEM E REPETIVEL (conserto de 19/11/2026).
+    //
+    // Era so `p.canalExterno is null`. O pedido do cardapio pago por PIX recebe
+    // `canalExterno = 'PIX_ASAAS'` para guardar o id da cobranca, e caia fora: o cliente que pagou
+    // por PIX perdia o botao de repetir o pedido. E o mesmo defeito que tirava o WhatsApp dele.
+    //
+    // O literal 'PIX_ASAAS' esta aqui porque JPQL nao chama metodo Java -- `Pedido.ehDeMarketplace()`
+    // e a regra, e este e o unico lugar que a repete. Para os dois nao divergirem em silencio, o
+    // teste `OclienteQuePAGAporPIXnaoEHmarketplaceTest.oLITERALdaCONSULTAbateComAconstante` quebra se alguem mudar
+    // um sem mudar o outro.
     @Query("select p.clienteId, max(p.id) from Pedido p "
          + "where p.lojaId = :lojaId and p.clienteId is not null "
          + "and p.status <> br.com.bora.entity.StatusPedido.CANCELADO "
-         + "and p.canalExterno is null "
+         + "and (p.canalExterno is null or p.canalExterno = 'PIX_ASAAS') "
          + "group by p.clienteId")
     List<Object[]> ultimoPedidoRepetivelPorCliente(@Param("lojaId") Long lojaId);
     long countByLojaIdAndCriadoEmAfter(Long lojaId, OffsetDateTime inicio); // RN09 — limite de pedidos/mês

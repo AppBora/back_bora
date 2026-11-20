@@ -123,9 +123,9 @@ public class DesempenhoService {
      */
     private static boolean geraCashback(Pedido p) {
         if (p.clienteId == null) return false;
-        boolean deMarketplace = p.canalExterno != null && !p.canalExterno.isBlank()
-                && !"PIX_ASAAS".equals(p.canalExterno);
-        if (!deMarketplace) return true;
+        // Esta regra estava escrita aqui e, numa versao ERRADA, no NotificacaoClienteService. Agora
+        // mora em `Pedido.ehDeMarketplace()`, uma vez so. Este lugar era o que estava CERTO.
+        if (!p.ehDeMarketplace()) return true;
         return PedidoService.telefoneDePessoa(p.clienteTelefone) != null;
     }
 

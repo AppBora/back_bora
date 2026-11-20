@@ -256,4 +256,32 @@ public interface IntegracaoCanalRepository extends JpaRepository<IntegracaoCanal
     int contarPedidoRecebido(@org.springframework.data.repository.query.Param("id") Long id,
                              @org.springframework.data.repository.query.Param("lojaId") Long lojaId,
                              @org.springframework.data.repository.query.Param("agora") OffsetDateTime agora);
+
+    /**
+     * As integracoes que estao em ERRO, para o painel da PLATAFORMA — item 3.11 da varredura de
+     * 18/11/2026.
+     *
+     * <h2>O defeito que isto fecha</h2>
+     * <p>O {@code marcarErro} ja derruba a integracao de CONECTADO para ERRO depois do limite de
+     * falhas seguidas, e isso funciona. <b>Mas ninguem olhava.</b> O ERRO so aparecia abrindo a tela
+     * de Integracoes <i>daquela loja</i> — e a plataforma tem 8 lojas. O resultado e o padrao que
+     * esta varredura achou duas vezes: <b>integracao morta falando em silencio</b>.</p>
+     *
+     * <p>Medido em 18/11/2026: o Open Delivery da loja 1 respondia HTTP <b>403 "User is forbidden"</b>
+     * cinco vezes por hora, a cada 30 s, desde dias antes. Era a loja de TESTE — ruido, nao cliente.
+     * Mas em 13/11 o mesmo padrao era o iFood da Pizzaria dizendo CONECTADO com <b>token vencido ha
+     * 18 dias</b>, sem nunca ter buscado um pedido. Esse era cliente pagante.</p>
+     *
+     * <h2>Por que PROJECAO e nao a entidade</h2>
+     * <p>{@code IntegracaoCanal} carrega {@code clientSecret}, {@code accessToken} e
+     * {@code refreshToken}. Devolver a entidade num endpoint vazaria segredo de cliente — e existe
+     * teste que proibe isso ({@code OsegredoDaPlataformaNaoSaiNaRespostaTest}). Aqui saem apenas
+     * loja, canal, status, contagem de falhas, a hora do ultimo polling e o texto do ultimo erro,
+     * que e mensagem do canal e nao credencial.</p>
+     */
+    @org.springframework.data.jpa.repository.Query("select i.lojaId, i.canal, i.status, "
+            + "i.falhasSeguidas, i.ultimoPollingEm, i.ultimoErro, i.ativo "
+            + "from IntegracaoCanal i where i.status = 'ERRO' or i.falhasSeguidas >= :limite "
+            + "order by i.falhasSeguidas desc, i.lojaId")
+    java.util.List<Object[]> emErro(@org.springframework.data.repository.query.Param("limite") int limite);
 }

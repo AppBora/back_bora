@@ -59,7 +59,8 @@ public class ConfiguracaoLojaService {
 
         // Disponível em todos os planos — só sobrescreve o que veio preenchido (não apaga ao omitir)
         if (dados.nomeExibicao != null) c.nomeExibicao = dados.nomeExibicao;
-        if (dados.logoUrl != null)      c.logoUrl = dados.logoUrl;
+        // Validados na GRAVACAO: ver EnderecoDeImagem (a outra metade do conserto do XSS).
+        if (dados.logoUrl != null)      c.logoUrl = EnderecoDeImagem.exigirValido(dados.logoUrl, "o logo da loja");
         if (dados.corPrimaria != null)  c.corPrimaria = dados.corPrimaria;
         if (dados.nomeSistema != null)  c.nomeSistema = dados.nomeSistema;
         // Custos que entram no cálculo de lucro. Zero é valor legítimo (isento / sem custo fixo),
@@ -89,7 +90,7 @@ public class ConfiguracaoLojaService {
 
         // Liberados conforme o plano
         if (plano.permiteCoresSecundarias() && dados.corSecundaria != null) c.corSecundaria = dados.corSecundaria;
-        if (plano.permiteBanner() && dados.bannerUrl != null)               c.bannerUrl = dados.bannerUrl;
+        if (plano.permiteBanner() && dados.bannerUrl != null)               c.bannerUrl = EnderecoDeImagem.exigirValido(dados.bannerUrl, "o banner da loja");
         if (plano.permiteSubdominio() && dados.subdominio != null)          c.subdominio = dados.subdominio;
 
         // Marca Bora só pode ser removida no Enterprise (futuro)

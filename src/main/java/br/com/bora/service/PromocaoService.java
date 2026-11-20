@@ -93,16 +93,36 @@ public class PromocaoService {
         if (repo.countByLojaIdAndOrigemAndInicioAfter(lojaId, "AUTO", inicioHoje) >= 1) return null;
 
         OffsetDateTime agora = OffsetDateTime.now(ZONE);
-        Promocao p = new Promocao();
+        String codigo = "BORA15L" + lojaId;
+
+        // REAPROVEITA A LINHA, NAO INSERE OUTRA -- e este e o conserto (19/11/2026).
+        //
+        // O defeito: aqui havia um `new Promocao()` com o comentario "codigo unico por loja". Nada
+        // garantia isso. O `SaudeVendasScheduler` desliga a promocao 3 h depois, mas a LINHA fica; no
+        // dia seguinte as duas guardas acima liberam (nao ha promocao ATIVA, e a contagem de AUTO e
+        // so de HOJE) e nascia uma segunda linha com o mesmo codigo. Depois uma terceira, uma quarta.
+        //
+        // O que isso causava: `DescontoService.resolver` buscava com um metodo que devolvia
+        // `Optional`, e duas linhas viram `IncorrectResultSizeDataAccessException` -- **500 no cupom
+        // do cardapio publico**. Medido no dump de producao: a loja 18 (Zira, cliente pagante) tinha
+        // **4 linhas** de `BORA15L18`, e o cupom dela estava quebrado.
+        //
+        // Por que reaproveitar em vez de gerar codigo novo por dia: o codigo e o que o lojista
+        // divulga. Trocar `BORA15L18` por um codigo diferente a cada dia conserta o 500 e estraga o
+        // produto. Uma linha por loja, para sempre, mantem o codigo estavel E torna o indice unico
+        // da V77 trivialmente satisfeito.
+        Promocao p = repo.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(lojaId, codigo).stream()
+                .findFirst()
+                .orElseGet(Promocao::new);
         p.setLojaId(lojaId);
         p.setTipo("RELAMPAGO");
         p.setDescricao("Cupom relâmpago automático — 15% de desconto por 3 horas");
-        p.setCodigo("BORA15L" + lojaId); // código único por loja
+        p.setCodigo(codigo);
         p.setPercentualDesconto(new BigDecimal("15.00"));
         p.setInicio(agora);
         p.setFim(agora.plusHours(3));
         p.setLimiteUsos(20);
-        p.setUsos(0);
+        p.setUsos(0);          // janela nova, teto novo: 20 usos a partir de agora
         p.setAtiva(true);
         p.setOrigem("AUTO");
         Promocao salva = repo.save(p);

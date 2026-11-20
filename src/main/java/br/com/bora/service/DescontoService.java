@@ -75,8 +75,13 @@ public class DescontoService {
             return Optional.of(new Desconto(c.codigo, c.tipo, c.valor, c.desconto(total), null));
         }
 
-        return promocoes.findByLojaIdAndCodigoIgnoreCase(lojaId, cod)
-                .filter(pr -> valeAgora(pr, OffsetDateTime.now()))
+        // DUAS linhas de mesmo codigo nao podem derrubar o checkout. Ver o javadoc do repositorio:
+        // a busca devolve LISTA (ja ordenada da mais recente para a mais antiga) e quem escolhe e a
+        // regra `valeAgora`, nao o acaso. Se nenhuma vale, nao ha desconto -- e nao ha erro.
+        OffsetDateTime agora = OffsetDateTime.now();
+        return promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(lojaId, cod).stream()
+                .filter(pr -> valeAgora(pr, agora))
+                .findFirst()
                 .map(pr -> new Desconto(pr.getCodigo(), "PERCENTUAL", pr.getPercentualDesconto(),
                         abatimentoDaPromocao(pr, total), pr.getId()));
     }

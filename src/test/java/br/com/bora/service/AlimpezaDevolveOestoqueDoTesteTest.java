@@ -78,7 +78,7 @@ class AlimpezaDevolveOestoqueDoTesteTest {
         when(ctx.atual()).thenReturn(new BoraPrincipal(1L, null, "ADMINISTRADOR_BORA", "dono@bora.com"));
         when(estorno.devolverSoOestoque(any())).thenReturn(1);
         service = new LimpezaDeTestesService(lojas, pedidos, itens, logs, clientes, acertos, produtos,
-                estorno, ctx);
+                estorno, org.mockito.Mockito.mock(br.com.bora.service.PublicadorDeEventos.class), ctx);
     }
 
     private Pedido pedido(long id, StatusPedido status) {

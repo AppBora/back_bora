@@ -1017,6 +1017,26 @@ public class PlataformaController {
     }
 
     /**
+     * As integracoes MORTAS de todas as lojas, num lugar so — item 3.11 da varredura de 18/11/2026.
+     *
+     * <p>O rebaixamento para ERRO depois de tres falhas seguidas ja existia e funcionava. O que
+     * faltava era <b>alguem olhar</b>: o ERRO so aparecia abrindo a tela de Integracoes de cada
+     * loja, uma por uma. Foi assim que o iFood da Pizzaria passou <b>18 dias</b> dizendo CONECTADO
+     * com token vencido, sem buscar um pedido.</p>
+     *
+     * <p>Lista vazia e a resposta saudavel, e a tela diz isso com palavra — nao com silencio.</p>
+     */
+    @GetMapping("/config/integracoes-mortas")
+    public Map<String, Object> integracoesMortas() {
+        ctx.requireAdminBora();
+        var lista = integracoes.mortasNaPlataforma();
+        Map<String, Object> r = new java.util.LinkedHashMap<>();
+        r.put("quantas", lista.size());
+        r.put("integracoes", lista);
+        return r;
+    }
+
+    /**
      * Liga/desliga a gravacao da fila de eventos. Corpo: <code>{ "habilitado": true|false }</code>.
      *
      * <p>Grava a chave e <b>invalida o cache na hora</b>: a proxima venda ja ve o valor novo, sem

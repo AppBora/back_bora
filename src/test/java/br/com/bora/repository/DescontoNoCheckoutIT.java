@@ -65,16 +65,16 @@ class DescontoNoCheckoutIT {
     void oClienteAchaOCodigoDigitandoEmQualquerCaixa() {
         relampago(20);
 
-        assertTrue(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA, "bora15").isPresent());
-        assertTrue(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA, "BoRa15").isPresent());
-        assertTrue(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA, "BORA15").isPresent());
+        assertFalse(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(LOJA, "bora15").isEmpty());
+        assertFalse(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(LOJA, "BoRa15").isEmpty());
+        assertFalse(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(LOJA, "BORA15").isEmpty());
     }
 
     @Test
     void aPromocaoDeOutraLojaNaoApareceNesta() {
         relampago(20);
 
-        assertTrue(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA + 1, "BORA15").isEmpty());
+        assertTrue(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(LOJA + 1, "BORA15").isEmpty());
     }
 
     @Test

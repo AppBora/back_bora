@@ -79,7 +79,7 @@ class LimpezaDeTestesTest {
         estorno = mock(EstornoDaVendaService.class);
         when(pedidos.findByLojaIdOrderByCriadoEmDesc(LOJA)).thenReturn(List.of());
         service = new LimpezaDeTestesService(lojas, pedidos, itens, logs, clientes, acertos, produtos,
-                estorno, ctx);
+                estorno, org.mockito.Mockito.mock(br.com.bora.service.PublicadorDeEventos.class), ctx);
     }
 
     // ---------------------------------------------------------------- quem pode

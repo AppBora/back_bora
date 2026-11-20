@@ -60,6 +60,8 @@ public class ProdutoService {
         // caminhos de venda faziam `preco == null ? ZERO` -- ou seja, vendiam de graca.
         // ZERO continua passando de proposito: ver PrecoDoCardapio.
         PrecoDoCardapio.exigirValido(p.preco, p.nome);
+        // A outra metade do conserto do XSS: o endereco da foto nao entra cru no banco.
+        p.imagemUrl = EnderecoDeImagem.exigirValido(p.imagemUrl, "a foto do produto");
         p.lojaId = ctx.lojaId();
         p.id = null;
         p.codigoExterno = codigoLimpo(p.codigoExterno);
@@ -86,7 +88,8 @@ public class ProdutoService {
         // Isso faz o apagamento ser IMPOSSIVEL, em vez de depender de o formulario mandar o numero
         // certo. Ver MexerNoEstoqueRequest.
         p.estoqueMinimo = dados.estoqueMinimo;
-        if (dados.imagemUrl != null) p.imagemUrl = dados.imagemUrl.isBlank() ? null : dados.imagemUrl;
+        // Validado na GRAVACAO: ver EnderecoDeImagem. O `exigirValido` ja devolve null para vazio.
+        if (dados.imagemUrl != null) p.imagemUrl = EnderecoDeImagem.exigirValido(dados.imagemUrl, "a foto do produto");
         if (dados.ativo != null) p.ativo = dados.ativo;
         p.codigoExterno = codigoLimpo(dados.codigoExterno);
         recusarCodigoRepetido(p.lojaId, p.codigoExterno, p.id);

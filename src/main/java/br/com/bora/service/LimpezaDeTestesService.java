@@ -70,12 +70,15 @@ public class LimpezaDeTestesService {
     private final AcertoEntregadorRepository acertos;
     private final ProdutoRepository produtos;
     private final EstornoDaVendaService estorno;
+    /** A fila de eventos (A2). Ver o comentario em `limpar`: apagar pedido TEM de virar evento. */
+    private final PublicadorDeEventos eventos;
     private final AuthContext ctx;
 
     public LimpezaDeTestesService(LojaRepository lojas, PedidoRepository pedidos, PedidoItemRepository itens,
                                   LogStatusRepository logs, ClienteRepository clientes,
                                   AcertoEntregadorRepository acertos, ProdutoRepository produtos,
-                                  EstornoDaVendaService estorno, AuthContext ctx) {
+                                  EstornoDaVendaService estorno, PublicadorDeEventos eventos,
+                                  AuthContext ctx) {
         this.lojas = lojas;
         this.pedidos = pedidos;
         this.itens = itens;
@@ -84,6 +87,7 @@ public class LimpezaDeTestesService {
         this.acertos = acertos;
         this.produtos = produtos;
         this.estorno = estorno;
+        this.eventos = eventos;
         this.ctx = ctx;
     }
 
@@ -147,9 +151,23 @@ public class LimpezaDeTestesService {
         // Pedido ja CANCELADO fica de fora: o cancelamento dele ja devolveu o que havia para
         // devolver. Devolver de novo somaria estoque que nunca saiu -- e estoque inventado e
         // silencioso, o lojista nunca descobre de onde veio.
+        // E O EVENTO DE CANCELAMENTO SAI AQUI, na mesma transacao do apagamento (19/11/2026).
+        //
+        // O DEFEITO: este servico tinha ZERO chamadas a `eventos.dePedido`, enquanto o
+        // `PedidoService` tem seis. Com a fila LIGADA (desde 18/11), limpar uma loja deixava na fila
+        // um `PedidoRecebido` de pedido que nao existe mais, **sem desfecho**. Quem consumir a fila
+        // depois monta um pedido fantasma que nunca fecha.
+        //
+        // O proprio `PedidoService.excluir` gasta um comentario inteiro explicando por que isso nao
+        // pode acontecer -- e este caminho, que apaga pedido em LOTE, era o que nao fazia.
+        //
+        // Pedido JA cancelado fica de fora, pela mesma razao do estoque: o cancelamento dele ja
+        // emitiu o `PedidoCancelado` quando aconteceu. Emitir de novo nao e idempotente do ponto de
+        // vista do consumidor -- seria um segundo cancelamento, com outro `evento_id`.
         int itensDevolvidos = 0;
         int pedidosDevolvidos = 0;
         int canceladosDeFora = 0;
+        int eventosEmitidos = 0;
         for (br.com.bora.entity.Pedido pedidoDeTeste : pedidos.findByLojaIdOrderByCriadoEmDesc(lojaId)) {
             if (pedidoDeTeste.status == br.com.bora.entity.StatusPedido.CANCELADO) {
                 canceladosDeFora++;
@@ -160,6 +178,12 @@ public class LimpezaDeTestesService {
                 itensDevolvidos += devolvidos;
                 pedidosDevolvidos++;
             }
+            eventos.dePedido("PedidoCancelado", pedidoDeTeste, java.util.Map.of(
+                    "fase", pedidoDeTeste.status == null ? "" : pedidoDeTeste.status.name(),
+                    "solicitante", "PLATAFORMA",
+                    "motivo", "limpeza de dados de teste da loja",
+                    "exclusao", true));
+            eventosEmitidos++;
         }
 
         // Ordem importa: filho antes do pai. O pedido é o pai de item e de histórico, e o acerto
@@ -186,10 +210,11 @@ public class LimpezaDeTestesService {
                         + "{} pedidos, {} itens, {} linhas de historico, {} acertos; clientes zerados: {}. "
                         + "Estoque devolvido em {} item(ns) de {} pedido(s); {} pedido(s) ja cancelado(s) "
                         + "ficaram de fora porque o cancelamento deles ja devolveu. "
+                        + "Eventos PedidoCancelado emitidos na fila: {}. "
                         + "Cardapio, integracoes, assinatura e usuarios NAO foram tocados.",
                 ctx.atual().userId(), ctx.atual().email(), lojaId, nome,
                 qtdPedidos, qtdItens, qtdLogs, qtdAcertos, clientesZerados,
-                itensDevolvidos, pedidosDevolvidos, canceladosDeFora);
+                itensDevolvidos, pedidosDevolvidos, canceladosDeFora, eventosEmitidos);
 
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("loja", nome);
@@ -201,6 +226,8 @@ public class LimpezaDeTestesService {
         r.put("estoqueDevolvidoEmItens", itensDevolvidos);
         r.put("estoqueDevolvidoEmPedidos", pedidosDevolvidos);
         r.put("pedidosJaCanceladosSemDevolucao", canceladosDeFora);
+        // A tela mostra isto: apagar pedido virou evento na fila, e quantos.
+        r.put("eventosDeCancelamentoEmitidos", eventosEmitidos);
         r.put("produtosQueFicaram", produtosDaLoja(lojaId));
         return r;
     }

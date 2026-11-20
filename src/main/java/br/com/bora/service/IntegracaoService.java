@@ -453,4 +453,36 @@ public class IntegracaoService {
                         "Conferir código só vale para a 99Food."));
         return client.validarCodigoDeEntrega(i, idExterno, codigo);
     }
+
+    /**
+     * As integracoes mortas de TODAS as lojas, para o painel da plataforma.
+     *
+     * <h2>O defeito que isto fecha — item 3.11 da varredura de 18/11/2026</h2>
+     * <p>O rebaixamento para ERRO depois de {@link br.com.bora.entity.IntegracaoCanal#FALHAS_PARA_REBAIXAR}
+     * falhas seguidas ja funcionava. <b>O que faltava era alguem olhar.</b> O ERRO so aparecia
+     * abrindo a tela de Integracoes daquela loja, uma por uma, e a plataforma tem 8 lojas.</p>
+     *
+     * <p>Medido em 18/11: o Open Delivery da loja 1 respondia <b>403 "User is forbidden"</b> cinco
+     * vezes por hora, a cada 30 s. Era a loja de teste — ruido. Mas o MESMO padrao, em 13/11, era o
+     * iFood da Pizzaria dizendo CONECTADO com token vencido ha <b>18 dias</b>, sem nunca ter buscado
+     * um pedido. Cliente pagante, dias de pedido perdido, e nada avisava.</p>
+     *
+     * <p><b>Nao devolve segredo:</b> a consulta projeta campos escolhidos a dedo. Ver o javadoc de
+     * {@code IntegracaoCanalRepository.emErro}.</p>
+     */
+    public java.util.List<java.util.Map<String, Object>> mortasNaPlataforma() {
+        return repo.emErro(br.com.bora.entity.IntegracaoCanal.FALHAS_PARA_REBAIXAR).stream()
+                .map(l -> {
+                    java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("lojaId", l[0]);
+                    m.put("canal", l[1]);
+                    m.put("status", l[2]);
+                    m.put("falhasSeguidas", l[3]);
+                    m.put("ultimoPollingEm", l[4] == null ? null : l[4].toString());
+                    m.put("ultimoErro", l[5]);
+                    m.put("ativo", l[6]);
+                    return m;
+                })
+                .toList();
+    }
 }

@@ -59,7 +59,7 @@ class PromocaoDaDescontoDeVerdadeTest {
         p.setLimiteUsos(limite);
         p.setUsos(usos);
         p.setAtiva(true);
-        when(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA, "BORA15")).thenReturn(Optional.of(p));
+        when(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(LOJA, "BORA15")).thenReturn(java.util.List.of(p));
         when(cupons.findByLojaIdAndCodigoIgnoreCase(anyLong(), eq("BORA15"))).thenReturn(Optional.empty());
         return p;
     }
@@ -175,7 +175,7 @@ class PromocaoDaDescontoDeVerdadeTest {
         // falhava no build da imagem depois das 21h — o mesmo defeito que o Cupom.valido() tinha.
         c.validade = LocalDate.now(java.time.ZoneId.of("America/Sao_Paulo")).minusDays(1);
         when(cupons.findByLojaIdAndCodigoIgnoreCase(LOJA, "DEZ")).thenReturn(Optional.of(c));
-        when(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA, "DEZ")).thenReturn(Optional.empty());
+        when(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(LOJA, "DEZ")).thenReturn(java.util.List.of());
 
         assertTrue(svc.resolver(LOJA, "DEZ", new BigDecimal("50.00")).isEmpty());
     }
@@ -183,7 +183,7 @@ class PromocaoDaDescontoDeVerdadeTest {
     @Test
     void codigoQueNaoExisteEmNenhumaDasDuasTabelas() {
         when(cupons.findByLojaIdAndCodigoIgnoreCase(LOJA, "NADA")).thenReturn(Optional.empty());
-        when(promocoes.findByLojaIdAndCodigoIgnoreCase(LOJA, "NADA")).thenReturn(Optional.empty());
+        when(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(LOJA, "NADA")).thenReturn(java.util.List.of());
 
         assertTrue(svc.resolver(LOJA, "NADA", new BigDecimal("50.00")).isEmpty());
     }
