@@ -84,9 +84,26 @@ dizer "3/5 Postgres 16 em localhost:$PORTA"
 # `*IT`. Mudar aqui sem mudar lá faz todos falharem por conexao, e o motivo nao teria nada a ver
 # com o que eles testam.
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+# max_connections=300 (medido em 19/11/2026)
+#
+# Cada classe de IT com @SpringBootTest levanta o proprio contexto Spring, e cada contexto abre o
+# proprio pool do Hikari. Com 30 classes, o padrao do Postgres (100 conexoes) acaba no meio da
+# rodada e as ultimas classes morrem com:
+#
+#     FATAL: sorry, too many clients already   (SQL State 53300)
+#
+# E e um erro que ENGANA: ele aparece como "Error creating bean 'flywayInitializer'", a mesma linha
+# que um bean quebrado de verdade produz. Passei por isso ao acrescentar tres classes novas -- o
+# primeiro palpite foi defeito meu no codigo, e nao era.
+#
+# Subir o limite e certo AQUI porque este banco e descartavel e vive num container: nao e producao,
+# nao ha concorrencia real, e o custo de uma conexao parada e irrisorio. O conserto alternativo
+# (pool de 2 conexoes por contexto) exigiria tocar as 30 classes para resolver um problema que e do
+# banco de teste, nao delas.
 docker run -d --name "$CONTAINER" \
   -e POSTGRES_DB=bora -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=teste \
-  -p "$PORTA:5432" postgres:16 >/dev/null || {
+  -p "$PORTA:5432" postgres:16 \
+  -c max_connections=300 >/dev/null || {
     echo "ABORTADO: o container nao subiu." >&2; exit 1; }
 
 PRONTO=0

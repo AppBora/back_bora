@@ -844,4 +844,141 @@ class PedidoDoCardapioTest {
         assertNull(c.getAllValues().get(0).chaveIdempotencia);
     }
 
+    // ==============================================================================================
+    // O CUPOM E O CASHBACK ABATEM DE VERDADE NO TOTAL GRAVADO
+    //
+    // ESTA LACUNA FOI MEDIDA, NAO SUPOSTA (19/11/2026). Eu troquei, no PublicController, as duas
+    // linhas que abatem:
+    //
+    //     total = total.subtract(descontoAplicado);   ->   total = total.add(ZERO);
+    //     total = total.subtract(resgate);            ->   total = total.add(ZERO);
+    //
+    // e rodei a suite inteira: **1.624 testes, 0 falhas**. Ou seja, o cardapio podia cobrar o preco
+    // CHEIO com cupom aplicado -- no canal que mais vende -- e nada ficava vermelho. O arquivo tinha
+    // teste de cupom INVALIDO e de cashback ZERO, que e o caminho em que nada e abatido; faltava
+    // justamente o caminho em que o abatimento acontece.
+    //
+    // Os quatro testes abaixo matam aquele mutante. Confirmado: com o mutante aplicado, caem.
+    // ==============================================================================================
+
+    /** Um cupom de verdade, de 10%, achado pelo codigo que o cliente digita. */
+    private void cupomDe(String percentual) {
+        br.com.bora.entity.Cupom c = new br.com.bora.entity.Cupom();
+        c.id = 7L;
+        c.lojaId = 1L;
+        c.codigo = "BORA10";
+        c.tipo = "PERCENTUAL";
+        c.valor = new BigDecimal(percentual);
+        c.ativo = true;
+        when(cupons.findByLojaIdAndCodigoIgnoreCase(1L, "BORA10")).thenReturn(Optional.of(c));
+    }
+
+    @Test
+    void oCUPOMabateDEverdadeNOtotalGRAVADO() {
+        cupomDe("10");
+
+        controller.pedirOnline(1L, corpo("cupom", "BORA10"), null, requisicao());
+
+        assertEquals(0, new BigDecimal("36.00").compareTo(salvo().valorTotal),
+                "2 x R$ 20 = R$ 40, menos 10% = R$ 36,00. Se vier 40, o desconto nao foi abatido do "
+                        + "total GRAVADO -- e o cliente paga cheio com o cupom aplicado na tela.");
+    }
+
+    @Test
+    void oCASHBACKabateDEverdadeNOtotalGRAVADO() {
+        when(fidelidade.ehOMesmoCliente(anyLong(), any(), any())).thenReturn(true);
+        when(fidelidade.resgatePossivel(anyLong(), any(), any())).thenReturn(new BigDecimal("5.00"));
+
+        controller.pedirOnline(1L, corpo("usarCashback", true), null, requisicao());
+
+        Pedido p = salvo();
+        assertEquals(0, new BigDecimal("35.00").compareTo(p.valorTotal),
+                "R$ 40 menos R$ 5 de cashback = R$ 35,00");
+        assertEquals(0, new BigDecimal("5.00").compareTo(p.cashbackUsado),
+                "o cashback usado tem de ficar em campo PROPRIO: o texto da observacao nao serve "
+                        + "para conta, e sem o campo o saldo nunca era debitado");
+    }
+
+    @Test
+    void oCUPOMeOCASHBACKjuntosABATEMosDOIS() {
+        cupomDe("10");
+        when(fidelidade.ehOMesmoCliente(anyLong(), any(), any())).thenReturn(true);
+        // O resgate e calculado sobre o total JA com o cupom (R$ 36), e e isso que o servico recebe.
+        when(fidelidade.resgatePossivel(anyLong(), any(), any())).thenReturn(new BigDecimal("6.00"));
+
+        controller.pedirOnline(1L, corpo("cupom", "BORA10", "usarCashback", true), null, requisicao());
+
+        assertEquals(0, new BigDecimal("30.00").compareTo(salvo().valorTotal),
+                "R$ 40 - R$ 4 (cupom) - R$ 6 (cashback) = R$ 30,00. Este caso pega o abatimento que "
+                        + "acontece UMA vez quando deveria acontecer duas.");
+    }
+
+    /**
+     * E o CONTROLE que impede o conserto de virar outro defeito: o cupom nao pode zerar o pedido.
+     *
+     * <p>Sem esta guarda, um cupom de 100% gravaria uma venda de R$ 0,00 -- e o cardapio publico
+     * aceita codigo de quem nao tem login.</p>
+     */
+    @Test
+    void oCUPOMnaoPODEzerarOpedido() {
+        cupomDe("100");
+
+        var e = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.pedirOnline(1L, corpo("cupom", "BORA10"), null, requisicao()));
+
+        assertEquals(400, e.getStatusCode().value());
+        assertTrue(String.valueOf(e.getReason()).toLowerCase().contains("zerar"));
+    }
+
+    // ==============================================================================================
+    // O CHECKOUT CONTA O USO DA PROMOCAO
+    //
+    // TAMBEM MEDIDO, NAO SUPOSTO (19/11/2026): eu removi as DUAS chamadas a
+    // `descontos.contabilizarUso` do PublicController e rodei a suite inteira -- **1.633 testes,
+    // 0 falhas**. O metodo do servico tinha teste; a CHAMADA no checkout nao tinha nenhuma.
+    //
+    // Por que isso e dinheiro: o botao do Dashboard promete ao lojista "ate 20 usos". Sem a
+    // contagem, o teto nao existe -- o mesmo cupom de 15% vale para quantos pedidos vierem, e o
+    // lojista descobre pelo faturamento.
+    // ==============================================================================================
+
+    @Test
+    void oCHECKOUTcontaOUSOdaPROMOCAO() {
+        // uma PROMOCAO (nao cupom): e dela que o teto de usos e a contagem sao
+        br.com.bora.entity.Promocao promo = new br.com.bora.entity.Promocao();
+        promo.setId(42L);
+        promo.setLojaId(1L);
+        promo.setTipo("RELAMPAGO");
+        promo.setCodigo("BORA15L1");
+        promo.setPercentualDesconto(new BigDecimal("15.00"));
+        promo.setInicio(java.time.OffsetDateTime.now().minusMinutes(5));
+        promo.setFim(java.time.OffsetDateTime.now().plusHours(3));
+        promo.setLimiteUsos(20);
+        promo.setUsos(0);
+        promo.setAtiva(true);
+        when(cupons.findByLojaIdAndCodigoIgnoreCase(1L, "BORA15L1")).thenReturn(Optional.empty());
+        when(promocoes.findByLojaIdAndCodigoIgnoreCaseOrderByInicioDesc(1L, "BORA15L1"))
+                .thenReturn(List.of(promo));
+        when(promocoes.somarUmUso(42L)).thenReturn(1);
+
+        controller.pedirOnline(1L, corpo("cupom", "BORA15L1"), null, requisicao());
+
+        assertEquals(0, new BigDecimal("34.00").compareTo(salvo().valorTotal),
+                "R$ 40 menos 15% = R$ 34,00");
+        verify(promocoes, org.mockito.Mockito.description(
+                "o uso da promocao NAO foi contado no checkout. Sem isso o teto de 20 usos que o "
+                        + "botao do Dashboard promete ao lojista nao existe, e o mesmo cupom vale "
+                        + "para quantos pedidos vierem.")).somarUmUso(42L);
+    }
+
+    /** CONTROLE: cupom comum nao tem teto de usos, e nao pode ir contar promocao que nao existe. */
+    @Test
+    void oCONTROLEcupomCOMUMnaoCONTAusoDEpromocao() {
+        cupomDe("10");
+
+        controller.pedirOnline(1L, corpo("cupom", "BORA10"), null, requisicao());
+
+        verify(promocoes, never()).somarUmUso(anyLong());
+    }
+
 }

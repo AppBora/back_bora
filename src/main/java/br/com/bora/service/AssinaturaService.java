@@ -200,7 +200,63 @@ public class AssinaturaService {
 
         a.setStatus(StatusAssinatura.PENDENTE);
         a.setAtualizadoEm(OffsetDateTime.now());
-        return repo.save(a);
+        Assinatura salva = repo.save(a);
+        garantirAcessoAteAPrimeiraFatura(lojaId, nextDue);
+        return salva;
+    }
+
+    /**
+     * Quem ASSINOU não pode perder o acesso antes de a fatura dele vencer.
+     *
+     * <h2>O defeito que isto fecha — item da varredura de 18/11/2026, reconferido por mim em 19/11</h2>
+     *
+     * <p>São duas contagens de sete dias, de origens diferentes, e ninguém as juntava:</p>
+     * <ul>
+     *   <li>o cadastro grava {@code loja.acessoAte = agora + 7} (a cortesia do site), contando da
+     *       data do <b>cadastro</b>;</li>
+     *   <li>o {@code assinar} cria a primeira fatura vencendo em {@code hoje + 7}, contando do
+     *       <b>clique</b> — e <b>não mexia em {@code acessoAte}</b>.</li>
+     * </ul>
+     *
+     * <p>Quem se cadastra no dia 1 e assina no dia 5 fica com acesso até o dia 8 e fatura só no dia
+     * 12. Com o corte por falta de pagamento ligado, ele <b>perde o sistema por quatro dias</b> —
+     * sem estar devendo nada, porque a fatura ainda não venceu. O corte cai exatamente sobre quem
+     * tentou pagar, que é o pior lugar possível para um defeito de cobrança.</p>
+     *
+     * <h2>As duas regras que este método respeita</h2>
+     * <p><b>Nunca encurta</b>, e <b>nunca toca em acesso aberto por decisão humana</b>
+     * ({@code PAGAMENTO_MANUAL} ou {@code LIBERACAO}) — são as mesmas duas guardas do
+     * {@link #prazoSemEncurtar}, criadas depois do acidente da Zirá. Aqui eu só <b>estendo</b>, e só
+     * quando o prazo atual termina antes da fatura.</p>
+     */
+    private void garantirAcessoAteAPrimeiraFatura(Long lojaId, String vencimentoIso) {
+        Loja loja = lojas.findById(lojaId).orElse(null);
+        if (loja == null) return;
+
+        // Sem data de fim ja e acesso sem limite: nao ha o que estender.
+        if (loja.acessoAte == null) return;
+
+        MotivoDoAcesso porque = loja.acessoMotivo;
+        if (porque == MotivoDoAcesso.PAGAMENTO_MANUAL || porque == MotivoDoAcesso.LIBERACAO) {
+            log.info("Loja {}: assinou, e o acesso dela segue por {} (ate {}) -- nao mexo.",
+                    lojaId, porque, loja.acessoAte);
+            return;
+        }
+
+        // O fim do DIA do vencimento, no fuso da operacao. Fatura que vence no dia 12 tem de deixar
+        // o lojista trabalhar o dia 12 inteiro -- cortar as 00:00 daquele dia seria cortar no dia do
+        // vencimento. E ZONE, nao o fuso do container: ver o comentario do `nextDue`.
+        OffsetDateTime ateOFimDoVencimento = LocalDate.parse(vencimentoIso)
+                .plusDays(1).atStartOfDay(ZONE).toOffsetDateTime().minusSeconds(1);
+
+        if (!loja.acessoAte.isBefore(ateOFimDoVencimento)) return;   // ja cobre: nao encurta
+
+        OffsetDateTime antes = loja.acessoAte;
+        prazoDeAcesso(lojaId, ateOFimDoVencimento, MotivoDoAcesso.ASSINATURA);
+        AUDITORIA.info("AUDITORIA assinatura: loja {} assinou e o acesso foi estendido de {} para {} "
+                        + "-- a primeira fatura vence em {} e quem assinou nao pode perder o acesso "
+                        + "antes disso.",
+                lojaId, antes, ateOFimDoVencimento, vencimentoIso);
     }
 
     /**
